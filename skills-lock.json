@@ -1,0 +1,47 @@
+{
+  "version": 1,
+  "skills": {
+    "apache-spark-data-processing": {
+      "source": "manutej/luxor-claude-marketplace",
+      "sourceType": "github",
+      "skillPath": "plugins/luxor-data-engineering/skills/apache-spark-data-processing/SKILL.md",
+      "computedHash": "8760d4f61a9d4c9c30a6d3b4b4ab3ce2f68d7118a9ed3a5bea961e254036ee78"
+    },
+    "deep-learning-pytorch": {
+      "source": "mindrally/skills",
+      "sourceType": "github",
+      "skillPath": "deep-learning-pytorch/SKILL.md",
+      "computedHash": "c0bbc23461e1640cfcf1236ed453e3be5b5ff6e334b74c2bbb05b1b7de79691c"
+    },
+    "docker-compose": {
+      "source": "oimiragieo/agent-studio",
+      "sourceType": "github",
+      "skillPath": ".claude/skills/docker-compose/SKILL.md",
+      "computedHash": "c23a0cbe19c3ed9e05648ce92f0a7721142f2f7133ef1611e6f2939162202595"
+    },
+    "kafka": {
+      "source": "alphaonedev/openclaw-graph",
+      "sourceType": "github",
+      "skillPath": "skills/data-engineering/kafka/SKILL.md",
+      "computedHash": "105f6ba0148d31b82aec036d4daedba7b23795e620f876a8c626792950ac413d"
+    },
+    "mongodb": {
+      "source": "bagelhole/devops-security-agent-skills",
+      "sourceType": "github",
+      "skillPath": "infrastructure/databases/mongodb/SKILL.md",
+      "computedHash": "4c4dc4df0031c79d3639ac17b23862098a66871fed1abb2312b484914d0520ff"
+    },
+    "pytest": {
+      "source": "gentleman-programming/gentleman-skills",
+      "sourceType": "github",
+      "skillPath": "curated/pytest/SKILL.md",
+      "computedHash": "8bf87b55ecc72cd9790eb985ba0d8e804d0c0a9be58b2ae02c963bbb6b5abc56"
+    },
+    "streamlit": {
+      "source": "silvainfm/claude-skills",
+      "sourceType": "github",
+      "skillPath": "streamlit/SKILL.md",
+      "computedHash": "88231eee825eca0d7493100312eb11d3ddb118777495688f56a9207597964cb0"
+    }
+  }
+}

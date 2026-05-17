@@ -1,0 +1,7 @@
+# src/producer/requirements.txt
+# Pinned versions from Section 4.2 of the project plan.
+# Only include what the producer service needs — keep image minimal.
+
+kafka-python==2.0.2
+requests==2.31.0
+python-dotenv==1.0.1

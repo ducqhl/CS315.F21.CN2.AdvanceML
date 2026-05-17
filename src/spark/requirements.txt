@@ -1,0 +1,21 @@
+# src/spark/requirements.txt
+# Dependencies for the Spark Structured Streaming job (Speed Layer).
+#
+# Install inside the Spark container or a local virtual environment:
+#   pip install -r src/spark/requirements.txt
+#
+# The Kafka + MongoDB JARs are resolved at spark-submit time via --packages:
+#   org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.1
+#   org.mongodb.spark:mongo-spark-connector_2.12:10.2.1
+
+# Stream processing
+pyspark==3.5.1
+
+# MongoDB driver — used directly in mongo_writer.py (not via Spark connector)
+pymongo==4.6.3
+
+# Kafka Python client — used to produce alerts in streaming_job.py
+kafka-python==2.0.2
+
+# Environment variable loading
+python-dotenv==1.0.1

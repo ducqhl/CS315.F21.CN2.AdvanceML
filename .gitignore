@@ -1,0 +1,61 @@
+# .gitignore — Crypto Big Data Project
+
+# ── Secrets & local config ────────────────────────────────────────────────────
+.env
+
+# ── Large / sensitive datasets ────────────────────────────────────────────────
+data/g-research/
+
+# ── Trained model weights ─────────────────────────────────────────────────────
+*.pt
+*.pth
+src/ml/model/
+
+# ── Python cache ──────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyc
+
+# ── Python packaging ──────────────────────────────────────────────────────────
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# ── Virtual environments ──────────────────────────────────────────────────────
+.venv/
+venv/
+env/
+ENV/
+
+# ── Jupyter notebooks checkpoints ────────────────────────────────────────────
+.ipynb_checkpoints/
+
+# ── Spark ─────────────────────────────────────────────────────────────────────
+spark-warehouse/
+derby.log
+metastore_db/
+
+# ── Docker volumes / generated data ──────────────────────────────────────────
+data/mongo_backup/
+
+# ── macOS ─────────────────────────────────────────────────────────────────────
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# ── IDEs ─────────────────────────────────────────────────────────────────────
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# ── pytest cache ──────────────────────────────────────────────────────────────
+.pytest_cache/
+.coverage
+htmlcov/
+
+# ── mypy / type checking ──────────────────────────────────────────────────────
+.mypy_cache/
