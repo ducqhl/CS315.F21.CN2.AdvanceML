@@ -1,9 +1,9 @@
 """
-preprocess.py — Data preprocessing pipeline for the BTC LSTM model.
+preprocess.py — Data preprocessing pipeline for the BTC / DOGE LSTM model.
 
-Loads data/sample/bitcoin.csv, normalises the close-price column with
+Loads data/sample/{coin}.csv, normalises the close-price column with
 MinMaxScaler, creates overlapping 60-step input sequences, and splits
-the data chronologically (70 / 15 / 15) into train / val / test sets.
+the data chronologically (80 / 10 / 10) into train / val / test sets.
 
 Public API
 ----------
@@ -11,8 +11,11 @@ load_and_preprocess(csv_path, seq_len, train_ratio, val_ratio)
     -> X_train, y_train, X_val, y_val, X_test, y_test (numpy arrays)
     -> scaler (MinMaxScaler, already fitted)
 
-The fitted scaler is also saved to  src/ml/model/scaler.pkl  so that
+The fitted scaler is also saved to  src/ml/model/scaler_{coin}.pkl  so that
 inference.py can inverse-transform predictions without re-fitting.
+
+Set LSTM_COIN env var to "bitcoin" (default) or "dogecoin" to control which
+dataset is loaded when running standalone.
 """
 
 from __future__ import annotations
@@ -30,14 +33,19 @@ logger = logging.getLogger(__name__)
 
 # ── Paths ──────────────────────────────────────────────────────────────────────
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
-_DEFAULT_CSV = _PROJECT_ROOT / "data" / "sample" / "bitcoin.csv"
-_SCALER_PATH = Path(__file__).resolve().parent / "model" / "scaler.pkl"
+_MODEL_DIR = Path(__file__).resolve().parent / "model"
+
+# Coin to preprocess — default bitcoin, override with LSTM_COIN env var
+COIN = os.getenv("LSTM_COIN", "bitcoin")
+
+_DEFAULT_CSV = _PROJECT_ROOT / "data" / "sample" / f"{COIN}.csv"
+_SCALER_PATH = _MODEL_DIR / f"scaler_{COIN}.pkl"
 
 # ── Constants ──────────────────────────────────────────────────────────────────
 SEQ_LEN = 60         # Number of past days used as input
-TRAIN_RATIO = 0.70
-VAL_RATIO = 0.15
-# TEST_RATIO is implicit: 1 - TRAIN_RATIO - VAL_RATIO = 0.15
+TRAIN_RATIO = 0.80
+VAL_RATIO = 0.10
+# TEST_RATIO is implicit: 1 - TRAIN_RATIO - VAL_RATIO = 0.10
 
 
 def _load_csv(csv_path: str | Path) -> pd.DataFrame:
@@ -100,6 +108,7 @@ def load_and_preprocess(
     train_ratio: float = TRAIN_RATIO,
     val_ratio: float = VAL_RATIO,
     save_scaler: bool = True,
+    scaler_path: Path | None = None,
 ) -> tuple[
     np.ndarray, np.ndarray,
     np.ndarray, np.ndarray,
@@ -108,6 +117,15 @@ def load_and_preprocess(
 ]:
     """
     Full preprocessing pipeline.
+
+    Parameters
+    ----------
+    csv_path    : path to coin CSV (bitcoin.csv or dogecoin.csv)
+    seq_len     : look-back window (default 60)
+    train_ratio : fraction for training (default 0.80)
+    val_ratio   : fraction for validation (default 0.10)
+    save_scaler : whether to persist scaler to disk
+    scaler_path : override scaler save path (defaults to _SCALER_PATH)
 
     Returns
     -------
@@ -138,10 +156,11 @@ def load_and_preprocess(
 
     # ── Persist scaler ───────────────────────────────────────────────────────
     if save_scaler:
-        _SCALER_PATH.parent.mkdir(parents=True, exist_ok=True)
-        with open(_SCALER_PATH, "wb") as f:
+        save_path = Path(scaler_path) if scaler_path else _SCALER_PATH
+        save_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(save_path, "wb") as f:
             pickle.dump(scaler, f)
-        logger.info("Scaler saved to %s", _SCALER_PATH)
+        logger.info("Scaler saved to %s", save_path)
 
     return X_train, y_train, X_val, y_val, X_test, y_test, scaler
 

@@ -28,12 +28,15 @@ _DEFAULT_URI = "mongodb://admin:password123@localhost:27017/crypto_db?authSource
 
 @st.cache_resource
 def get_mongo_client():
-    """Return a cached MongoClient.  Uses MONGO_URI env var; falls back to
-    the local default so the dashboard works outside Docker during development."""
+    """Return a cached MongoClient.  Uses MONGO_URI from st.secrets, then env var,
+    then local default so the dashboard works outside Docker during development."""
     import pymongo
 
-    uri = os.environ.get("MONGO_URI", _DEFAULT_URI)
-    client = pymongo.MongoClient(uri, serverSelectionTimeoutMS=5000)
+    try:
+        _uri = st.secrets["MONGO_URI"]
+    except (FileNotFoundError, KeyError):
+        _uri = os.environ.get("MONGO_URI", _DEFAULT_URI)
+    client = pymongo.MongoClient(_uri, serverSelectionTimeoutMS=5000)
     return client
 
 
@@ -46,7 +49,7 @@ def get_db():
 st.sidebar.title("Crypto Big Data")
 st.sidebar.markdown("Lambda Architecture: Kafka + Spark + MongoDB")
 
-AVAILABLE_COINS = ["BTC", "ETH", "DOGE"]
+AVAILABLE_COINS = ["BTC", "DOGE"]
 selected_coin = st.sidebar.selectbox(
     "Select coin",
     AVAILABLE_COINS,
@@ -82,7 +85,7 @@ Use the **sidebar** to navigate between pages:
 | Real-time Prices | Live prices from CoinGecko via Kafka, auto-refreshed every 30 s |
 | Technical Analysis | Candlestick chart with SMA-20, SMA-50, RSI, and Volume |
 | LSTM Predictions | Price forecast from trained LSTM model (Sprint 5) |
-| Coin Correlation | Pearson correlation heatmap across BTC, ETH, DOGE |
+| Coin Correlation | Pearson correlation heatmap across BTC, DOGE |
 """
 )
 

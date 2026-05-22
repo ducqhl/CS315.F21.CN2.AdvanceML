@@ -1,19 +1,21 @@
 """
-train_lstm.py — Training script for the BTC LSTM price-prediction model.
+train_lstm.py — Training script for the BTC / DOGE LSTM price-prediction model.
 
 Usage
 -----
-    python src/ml/train_lstm.py [--epochs N] [--batch-size B] [--dry-run]
+    python src/ml/train_lstm.py [--coin bitcoin|dogecoin] [--epochs N]
+                                [--batch-size B] [--dry-run]
 
 Steps
 -----
-1. Load & preprocess sequences from  data/sample/bitcoin.csv  (via preprocess.py)
+1. Load & preprocess sequences from  data/sample/{coin}.csv  (via preprocess.py)
 2. Build PyTorch TensorDataset / DataLoader  (shuffle=False — time series)
 3. Train for EPOCHS epochs with Adam + MSELoss
-4. Track validation loss each epoch; save best weights to  src/ml/model/lstm_btc.pt
+4. Track validation loss each epoch; save best weights to
+   src/ml/model/lstm_{coin}_v1.pt
 5. Evaluate on test set; inverse-transform predictions back to USD prices
 6. Print RMSE, MAE, and directional accuracy
-7. Save metrics JSON to  src/ml/model/metrics.json
+7. Save metrics JSON to  src/ml/model/metrics_{coin}.json
 """
 
 from __future__ import annotations
@@ -41,16 +43,27 @@ logger = logging.getLogger(__name__)
 
 # ── Paths ──────────────────────────────────────────────────────────────────────
 _HERE = Path(__file__).resolve().parent
-MODEL_PATH = _HERE / "model" / "lstm_btc.pt"
-METRICS_PATH = _HERE / "model" / "metrics.json"
-_DEFAULT_CSV = _HERE.parent.parent / "data" / "sample" / "bitcoin.csv"
+_MODEL_DIR = _HERE / "model"
+_DATA_DIR = _HERE.parent.parent / "data" / "sample"
 
 # ── Hyper-parameters ───────────────────────────────────────────────────────────
 EPOCHS = 50
-BATCH_SIZE = 32
+BATCH_SIZE = 64
 LEARNING_RATE = 1e-3
 WEIGHT_DECAY = 1e-5
 PATIENCE = 10        # early-stopping patience
+
+
+def _model_path(coin: str) -> Path:
+    return _MODEL_DIR / f"lstm_{coin}_v1.pt"
+
+
+def _metrics_path(coin: str) -> Path:
+    return _MODEL_DIR / f"metrics_{coin}.json"
+
+
+def _scaler_path(coin: str) -> Path:
+    return _MODEL_DIR / f"scaler_{coin}.pkl"
 
 
 # ── Evaluation helpers ─────────────────────────────────────────────────────────
@@ -86,7 +99,8 @@ def compute_metrics(
 # ── Training loop ──────────────────────────────────────────────────────────────
 
 def train(
-    csv_path: Path = _DEFAULT_CSV,
+    coin: str = "bitcoin",
+    csv_path: Path | None = None,
     epochs: int = EPOCHS,
     batch_size: int = BATCH_SIZE,
     dry_run: bool = False,
@@ -96,7 +110,8 @@ def train(
 
     Parameters
     ----------
-    csv_path  : path to the BTC CSV file.
+    coin      : coin id — "bitcoin" or "dogecoin"
+    csv_path  : override CSV path (defaults to data/sample/{coin}.csv)
     epochs    : maximum training epochs.
     batch_size: DataLoader batch size.
     dry_run   : if True, run only 2 epochs and skip saving (for CI/testing).
@@ -109,13 +124,21 @@ def train(
         epochs = 2
         logger.info("Dry-run mode — 2 epochs only, model not saved.")
 
-    device = torch.device("cpu")   # CPU is sufficient for 3 k rows
+    if csv_path is None:
+        csv_path = _DATA_DIR / f"{coin}.csv"
+
+    model_path = _model_path(coin)
+    metrics_path = _metrics_path(coin)
+    scaler_path = _scaler_path(coin)
+
+    device = torch.device("cpu")   # CPU is sufficient for 3k rows
 
     # ── 1. Data ───────────────────────────────────────────────────────────────
     logger.info("Loading and preprocessing data from %s ...", csv_path)
     X_train, y_train, X_val, y_val, X_test, y_test, scaler = load_and_preprocess(
         csv_path=csv_path,
         save_scaler=(not dry_run),
+        scaler_path=scaler_path,
     )
 
     def _to_tensors(X, y):
@@ -151,7 +174,7 @@ def train(
     )
 
     # ── 3. Training loop ──────────────────────────────────────────────────────
-    MODEL_PATH.parent.mkdir(parents=True, exist_ok=True)
+    model_path.parent.mkdir(parents=True, exist_ok=True)
 
     best_val_loss = float("inf")
     epochs_no_improve = 0
@@ -188,7 +211,7 @@ def train(
         # — Checkpoint —
         if val_loss < best_val_loss and not dry_run:
             best_val_loss = val_loss
-            torch.save(model.state_dict(), MODEL_PATH)
+            torch.save(model.state_dict(), model_path)
             epochs_no_improve = 0
         elif not dry_run:
             epochs_no_improve += 1
@@ -208,8 +231,8 @@ def train(
 
     # ── 4. Test evaluation ────────────────────────────────────────────────────
     # Load best checkpoint for evaluation (skip in dry-run)
-    if not dry_run and MODEL_PATH.exists():
-        model.load_state_dict(torch.load(MODEL_PATH, map_location=device))
+    if not dry_run and model_path.exists():
+        model.load_state_dict(torch.load(model_path, map_location=device))
 
     model.eval()
     all_preds, all_true = [], []
@@ -224,7 +247,7 @@ def train(
 
     metrics = compute_metrics(y_true_norm, y_pred_norm, scaler)
 
-    logger.info("── Test Metrics ──────────────────────────────────────────")
+    logger.info("── Test Metrics (%s) ─────────────────────────────────────", coin)
     logger.info("  RMSE:                 $%.2f", metrics["rmse"])
     logger.info("  MAE:                  $%.2f", metrics["mae"])
     logger.info("  Directional accuracy: %.1f%%", metrics["directional_accuracy_pct"])
@@ -233,10 +256,11 @@ def train(
     if not dry_run:
         metrics["epochs_trained"] = epoch
         metrics["best_val_loss"] = float(best_val_loss)
-        with open(METRICS_PATH, "w") as f:
+        metrics["coin"] = coin
+        with open(metrics_path, "w") as f:
             json.dump(metrics, f, indent=2)
-        logger.info("Metrics saved to %s", METRICS_PATH)
-        logger.info("Model weights saved to %s", MODEL_PATH)
+        logger.info("Metrics saved to %s", metrics_path)
+        logger.info("Model weights saved to %s", model_path)
 
     return metrics
 
@@ -244,7 +268,12 @@ def train(
 # ── CLI entry-point ────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Train BTC LSTM model")
+    parser = argparse.ArgumentParser(description="Train BTC / DOGE LSTM model")
+    parser.add_argument(
+        "--coin", type=str, default="bitcoin",
+        choices=["bitcoin", "dogecoin"],
+        help="CoinGecko coin id to train on (default: bitcoin)",
+    )
     parser.add_argument("--epochs", type=int, default=EPOCHS, help="Max training epochs")
     parser.add_argument("--batch-size", type=int, default=BATCH_SIZE)
     parser.add_argument(
@@ -254,7 +283,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     train(
-        csv_path=_DEFAULT_CSV,
+        coin=args.coin,
         epochs=args.epochs,
         batch_size=args.batch_size,
         dry_run=args.dry_run,

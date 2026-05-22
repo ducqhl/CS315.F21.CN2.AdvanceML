@@ -1,11 +1,15 @@
 """
-inference.py — Load trained LSTM, generate 7-day BTC price forecast,
+inference.py — Load trained LSTM, generate 7-day BTC / DOGE price forecast,
                and write predictions to MongoDB  predictions  collection.
+
+Usage
+-----
+    python src/ml/inference.py [--coin bitcoin|dogecoin]
 
 Data source priority
 --------------------
-1. MongoDB  historical_sma  collection — last 60 days of  avg_close  for BTC.
-2. CSV fallback — data/sample/bitcoin.csv  last 60 rows (when MongoDB is empty
+1. MongoDB  historical_sma  collection — last 60 days of  avg_close  for coin.
+2. CSV fallback — data/sample/{coin}.csv  last 60 rows (when MongoDB is empty
    or unreachable).
 
 Prediction strategy
@@ -16,7 +20,7 @@ for the next step so we produce HORIZON = 7 forward-looking daily prices.
 MongoDB document written per prediction
 ----------------------------------------
 {
-    "coin":             "BTC",
+    "coin":             "BTC" | "DOGE",
     "predicted_price":  float,
     "prediction_date":  datetime (future date, UTC),
     "confidence":       0.8,           # placeholder — LSTM output is a point estimate
@@ -29,6 +33,7 @@ Upsert key: (coin, prediction_date)
 
 from __future__ import annotations
 
+import argparse
 import logging
 import os
 import pickle
@@ -49,25 +54,52 @@ logging.basicConfig(
 
 # ── Paths ──────────────────────────────────────────────────────────────────────
 _HERE = Path(__file__).resolve().parent
-MODEL_PATH = _HERE / "model" / "lstm_btc.pt"
-SCALER_PATH = _HERE / "model" / "scaler.pkl"
-_CSV_FALLBACK = _HERE.parent.parent / "data" / "sample" / "bitcoin.csv"
+_MODEL_DIR = _HERE / "model"
+_DATA_DIR = _HERE.parent.parent / "data" / "sample"
 
 # ── Constants ──────────────────────────────────────────────────────────────────
 SEQ_LEN = 60
 HORIZON = 7
-COIN = "BTC"
 MODEL_VERSION = "lstm_v1"
 CONFIDENCE = 0.8
 
 _DEFAULT_URI = "mongodb://admin:password123@localhost:27017/crypto_db?authSource=admin"
+_DEFAULT_DB = "crypto_db"
+
+# Coin id → symbol map
+_COIN_SYMBOL_MAP = {
+    "bitcoin":  "BTC",
+    "dogecoin": "DOGE",
+}
+
+
+def _db_name_from_uri(uri: str) -> str:
+    """Extract the database name from the MongoDB URI; fall back to _DEFAULT_DB."""
+    try:
+        from pymongo.uri_parser import parse_uri
+        db = parse_uri(uri).get("database")
+        return db if db else _DEFAULT_DB
+    except Exception:
+        return _DEFAULT_DB
+
+
+def _model_path(coin: str) -> Path:
+    return _MODEL_DIR / f"lstm_{coin}_v1.pt"
+
+
+def _scaler_path(coin: str) -> Path:
+    return _MODEL_DIR / f"scaler_{coin}.pkl"
 
 
 # ── Data loading ───────────────────────────────────────────────────────────────
 
-def _load_last_n_from_mongo(n: int = SEQ_LEN, mongo_uri: str | None = None) -> np.ndarray | None:
+def _load_last_n_from_mongo(
+    coin_symbol: str,
+    n: int = SEQ_LEN,
+    mongo_uri: str | None = None,
+) -> np.ndarray | None:
     """
-    Query  historical_sma  for the last *n* avg_close values for BTC.
+    Query  historical_sma  for the last *n* avg_close values for *coin_symbol*.
     Returns a 1-D numpy array sorted chronologically, or None on failure.
     """
     uri = mongo_uri or os.environ.get("MONGO_URI", _DEFAULT_URI)
@@ -76,7 +108,7 @@ def _load_last_n_from_mongo(n: int = SEQ_LEN, mongo_uri: str | None = None) -> n
         client = pymongo.MongoClient(uri, serverSelectionTimeoutMS=3000)
         db = client["crypto_db"]
         cursor = db.historical_sma.find(
-            {"symbol": COIN},
+            {"symbol": coin_symbol},
             sort=[("date", -1)],
             limit=n,
             projection={"_id": 0, "avg_close": 1},
@@ -85,8 +117,8 @@ def _load_last_n_from_mongo(n: int = SEQ_LEN, mongo_uri: str | None = None) -> n
         client.close()
         if len(docs) < n:
             logger.warning(
-                "Only %d docs found in historical_sma (need %d); using CSV fallback.",
-                len(docs), n,
+                "Only %d docs found in historical_sma for %s (need %d); using CSV fallback.",
+                len(docs), coin_symbol, n,
             )
             return None
         # Reverse so chronological order (oldest first)
@@ -98,13 +130,14 @@ def _load_last_n_from_mongo(n: int = SEQ_LEN, mongo_uri: str | None = None) -> n
         return None
 
 
-def _load_last_n_from_csv(n: int = SEQ_LEN) -> np.ndarray:
-    """Return the last *n* close prices from the BTC sample CSV."""
+def _load_last_n_from_csv(coin: str, n: int = SEQ_LEN) -> np.ndarray:
+    """Return the last *n* close prices from the coin sample CSV."""
     import pandas as pd
-    df = pd.read_csv(_CSV_FALLBACK)
+    csv_path = _DATA_DIR / f"{coin}.csv"
+    df = pd.read_csv(csv_path)
     col = "price" if "price" in df.columns else "close"
     prices = df[col].dropna().values[-n:]
-    logger.info("Loaded %d close prices from CSV fallback.", len(prices))
+    logger.info("Loaded %d close prices from CSV fallback (%s).", len(prices), csv_path)
     return prices.astype(np.float32)
 
 
@@ -157,6 +190,7 @@ def _iterative_predict(
 
 def _write_predictions(
     predictions_usd: np.ndarray,
+    coin_symbol: str,
     mongo_uri: str | None = None,
 ) -> list[dict]:
     """
@@ -168,16 +202,19 @@ def _write_predictions(
     import pymongo
 
     client = pymongo.MongoClient(uri, serverSelectionTimeoutMS=5000)
-    db = client["crypto_db"]
+    db = client[_db_name_from_uri(uri)]
     collection = db["predictions"]
 
     now_utc = datetime.now(timezone.utc)
     docs_written: list[dict] = []
 
     for offset, price in enumerate(predictions_usd, start=1):
-        prediction_date = now_utc.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=offset)
+        prediction_date = (
+            now_utc.replace(hour=0, minute=0, second=0, microsecond=0)
+            + timedelta(days=offset)
+        )
         doc = {
-            "coin": COIN,
+            "coin": coin_symbol,
             "predicted_price": float(price),
             "prediction_date": prediction_date,
             "confidence": CONFIDENCE,
@@ -192,7 +229,7 @@ def _write_predictions(
         docs_written.append(doc)
         logger.info(
             "Upserted prediction: %s  date=%s  price=$%.2f",
-            COIN, prediction_date.date(), price,
+            coin_symbol, prediction_date.date(), price,
         )
 
     client.close()
@@ -201,50 +238,66 @@ def _write_predictions(
 
 # ── Main entry-point ───────────────────────────────────────────────────────────
 
-def run_inference(mongo_uri: str | None = None) -> list[dict]:
+def run_inference(coin: str = "bitcoin", mongo_uri: str | None = None) -> list[dict]:
     """
     Full inference pipeline: load model → build seed → forecast → write to MongoDB.
 
+    Parameters
+    ----------
+    coin      : CoinGecko coin id — "bitcoin" or "dogecoin"
+    mongo_uri : optional MongoDB URI override
+
     Returns list of prediction documents.
     """
+    coin_symbol = _COIN_SYMBOL_MAP.get(coin, coin.upper())
+    model_path = _model_path(coin)
+    scaler_path = _scaler_path(coin)
+
     # ── 1. Load model ──────────────────────────────────────────────────────────
-    if not MODEL_PATH.exists():
+    if not model_path.exists():
         raise FileNotFoundError(
-            f"Trained model not found at {MODEL_PATH}. "
-            "Run  python src/ml/train_lstm.py  first."
+            f"Trained model not found at {model_path}. "
+            f"Run  python src/ml/train_lstm.py --coin {coin}  first."
         )
-    if not SCALER_PATH.exists():
+    if not scaler_path.exists():
         raise FileNotFoundError(
-            f"Scaler not found at {SCALER_PATH}. "
-            "Run  python src/ml/train_lstm.py  first."
+            f"Scaler not found at {scaler_path}. "
+            f"Run  python src/ml/train_lstm.py --coin {coin}  first."
         )
 
     model = LSTMModel(input_size=1, hidden_size=128, num_layers=2, dropout=0.2, output_size=1)
-    model.load_state_dict(torch.load(MODEL_PATH, map_location="cpu"))
+    model.load_state_dict(torch.load(model_path, map_location="cpu"))
     model.eval()
-    logger.info("Loaded model from %s", MODEL_PATH)
+    logger.info("Loaded model from %s", model_path)
 
-    with open(SCALER_PATH, "rb") as f:
-        import pickle
+    with open(scaler_path, "rb") as f:
         scaler = pickle.load(f)
-    logger.info("Loaded scaler from %s", SCALER_PATH)
+    logger.info("Loaded scaler from %s", scaler_path)
 
     # ── 2. Seed data ───────────────────────────────────────────────────────────
-    seed = _load_last_n_from_mongo(n=SEQ_LEN, mongo_uri=mongo_uri)
+    seed = _load_last_n_from_mongo(coin_symbol, n=SEQ_LEN, mongo_uri=mongo_uri)
     if seed is None:
-        seed = _load_last_n_from_csv(n=SEQ_LEN)
+        seed = _load_last_n_from_csv(coin, n=SEQ_LEN)
 
     # ── 3. Forecast ────────────────────────────────────────────────────────────
     predictions_usd = _iterative_predict(model, seed, scaler, horizon=HORIZON)
-    logger.info("7-day forecast (USD): %s", [f"${p:.2f}" for p in predictions_usd])
+    logger.info("7-day forecast for %s (USD): %s", coin_symbol, [f"${p:.2f}" for p in predictions_usd])
 
     # ── 4. Write to MongoDB ────────────────────────────────────────────────────
-    docs = _write_predictions(predictions_usd, mongo_uri=mongo_uri)
+    docs = _write_predictions(predictions_usd, coin_symbol=coin_symbol, mongo_uri=mongo_uri)
     return docs
 
 
 if __name__ == "__main__":
-    docs = run_inference()
-    print(f"\nWrote {len(docs)} predictions to MongoDB predictions collection.")
+    parser = argparse.ArgumentParser(description="Run LSTM inference for BTC or DOGE")
+    parser.add_argument(
+        "--coin", type=str, default="bitcoin",
+        choices=["bitcoin", "dogecoin"],
+        help="CoinGecko coin id (default: bitcoin)",
+    )
+    args = parser.parse_args()
+
+    docs = run_inference(coin=args.coin)
+    print(f"\nWrote {len(docs)} predictions for {args.coin} to MongoDB predictions collection.")
     for d in docs:
         print(f"  {d['prediction_date'].date()}  ${d['predicted_price']:,.2f}")

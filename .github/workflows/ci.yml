@@ -1,0 +1,177 @@
+name: CI — Acceptance Verification
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main]
+  # E2E job also runs on manual trigger or schedule
+  workflow_dispatch:
+  schedule:
+    - cron: "0 4 * * *"   # nightly at 04:00 UTC
+
+jobs:
+  verify:
+    name: Verify acceptance criteria
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      # ── Install dependencies ─────────────────────────────────────────────────
+      - name: Install producer deps
+        run: pip install -r src/producer/requirements.txt
+
+      - name: Install ML deps
+        run: pip install torch numpy scikit-learn pandas
+
+      - name: Install test & dashboard deps
+        run: |
+          pip install pytest pytest-cov \
+                      pymongo streamlit plotly \
+                      pyspark==3.5.5
+
+      # ── Static acceptance checks ─────────────────────────────────────────────
+      - name: Static checks — pycoingecko SDK used
+        run: grep -q "from pycoingecko import" src/producer/crypto_producer.py
+
+      - name: Static checks — only BTC + DOGE (2 coins)
+        run: |
+          python - <<'EOF'
+          import sys; sys.path.insert(0, "src/producer")
+          import crypto_producer as cp
+          assert len(cp.COINS) == 2, f"Expected 2 coins, got {len(cp.COINS)}: {cp.COINS}"
+          assert set(cp.COINS) == {"bitcoin", "dogecoin"}, f"Wrong coins: {cp.COINS}"
+          print("OK: COINS =", cp.COINS)
+          EOF
+
+      - name: Static checks — linger_ms=100
+        run: grep -q "linger_ms=100" src/producer/crypto_producer.py
+
+      - name: Static checks — POLL_INTERVAL default 600s
+        run: grep -q '"600"' src/producer/crypto_producer.py
+
+      - name: Static checks — OHLC field 'open' in schema
+        run: grep -q '"open"' src/producer/crypto_producer.py
+
+      - name: Static checks — Spark CRYPTO_SCHEMA has 'open' StructField
+        run: grep -q 'StructField.*"open"' src/spark/streaming_job.py
+
+      - name: Static checks — TRAIN_RATIO=0.80
+        run: grep -q "TRAIN_RATIO = 0.80" src/ml/preprocess.py
+
+      - name: Static checks — BATCH_SIZE=64
+        run: grep -q "BATCH_SIZE = 64" src/ml/train_lstm.py
+
+      - name: Static checks — versioned model filename template
+        run: grep -q "lstm_{coin}_v1.pt" src/ml/train_lstm.py
+
+      - name: Static checks — pycoingecko in requirements.txt
+        run: grep -q "pycoingecko" src/producer/requirements.txt
+
+      - name: Static checks — README.md exists and > 50 lines
+        run: |
+          test -f README.md
+          lines=$(wc -l < README.md)
+          echo "README.md has $lines lines"
+          test "$lines" -gt 50
+
+      # ── Python syntax ────────────────────────────────────────────────────────
+      - name: Syntax — py_compile all changed modules
+        run: |
+          for f in src/producer/crypto_producer.py \
+                   src/spark/streaming_job.py \
+                   src/spark/batch_job.py \
+                   src/ml/preprocess.py \
+                   src/ml/train_lstm.py \
+                   src/ml/inference.py \
+                   src/dashboard/app.py; do
+            python -m py_compile "$f" && echo "OK: $f"
+          done
+
+      # ── LSTM dry-run ─────────────────────────────────────────────────────────
+      - name: LSTM dry-run — bitcoin
+        run: python src/ml/train_lstm.py --dry-run --coin bitcoin
+
+      - name: LSTM dry-run — dogecoin
+        run: python src/ml/train_lstm.py --dry-run --coin dogecoin
+
+      # ── Full test suite ──────────────────────────────────────────────────────
+      - name: pytest (all tests)
+        run: |
+          python -m pytest tests/ -v --tb=short \
+            --cov=src --cov-report=term-missing \
+            -q 2>&1 | tee pytest_output.txt
+          # Fail if any tests failed
+          grep -qv "failed" pytest_output.txt || (grep "failed" pytest_output.txt && exit 1)
+
+      - name: Assert test count ≥ 130
+        run: |
+          count=$(grep -oE "[0-9]+ passed" pytest_output.txt | grep -oE "[0-9]+")
+          echo "Tests passed: $count"
+          test "$count" -ge 130
+
+      # ── Artifacts ────────────────────────────────────────────────────────────
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pytest-results
+          path: pytest_output.txt
+
+  # ── E2E job (Docker required, nightly + manual trigger) ────────────────────
+  e2e:
+    name: E2E pipeline tests
+    runs-on: ubuntu-latest
+    # Only run on schedule/manual dispatch, not on every push (slow)
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    needs: verify   # only run e2e if unit tests pass first
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install all E2E dependencies
+        run: |
+          pip install \
+            "testcontainers[kafka,mongodb]" \
+            pytest pytest-cov \
+            kafka-python pymongo \
+            pyspark==3.5.5 \
+            torch numpy scikit-learn pandas \
+            python-dotenv pycoingecko
+
+      # Layer 1 — Producer → Kafka
+      - name: E2E Layer 1 — Producer → Kafka
+        run: python -m pytest tests/e2e/test_producer_kafka.py -v --tb=short -m e2e
+        timeout-minutes: 10
+
+      # Layer 2 — Spark Batch → MongoDB
+      - name: E2E Layer 2 — Spark Batch → MongoDB
+        run: python -m pytest tests/e2e/test_batch_mongo.py -v --tb=short -m e2e
+        timeout-minutes: 15
+
+      # Layer 3 — ML Pipeline → MongoDB
+      - name: E2E Layer 3 — ML Pipeline → MongoDB
+        run: python -m pytest tests/e2e/test_ml_mongo.py -v --tb=short -m e2e
+        timeout-minutes: 10
+
+      - name: Upload E2E results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-results
+          path: "*.log"

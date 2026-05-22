@@ -22,8 +22,6 @@ from app import get_db
 
 logger = logging.getLogger(__name__)
 
-st.set_page_config(page_title="Real-time Prices", layout="wide")
-
 # Auto-refresh every 30 seconds (30 000 ms).
 st_autorefresh(interval=30_000, key="realtime_refresh")
 

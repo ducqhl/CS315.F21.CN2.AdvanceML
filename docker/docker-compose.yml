@@ -178,6 +178,40 @@ services:
       retries: 3
       start_period: 30s
 
+  # ── FastAPI Backend ────────────────────────────────────────────────────────────
+  api:
+    build:
+      context: ../src/api
+      dockerfile: Dockerfile
+    container_name: crypto-api
+    restart: unless-stopped
+    depends_on:
+      mongodb:
+        condition: service_healthy
+    ports:
+      - "8000:8000"
+    environment:
+      MONGO_URI: mongodb://admin:password123@mongodb:27017/crypto_db?authSource=admin
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health')\" || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
+  # ── React Frontend ─────────────────────────────────────────────────────────────
+  frontend:
+    build:
+      context: ../src/frontend
+      dockerfile: Dockerfile
+    container_name: crypto-frontend
+    restart: unless-stopped
+    depends_on:
+      api:
+        condition: service_healthy
+    ports:
+      - "3000:80"
+
 volumes:
   mongodb_data:
     driver: local

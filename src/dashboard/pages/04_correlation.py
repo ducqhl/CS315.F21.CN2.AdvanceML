@@ -1,8 +1,8 @@
 """
 04_correlation.py — Coin correlation heatmap page.
 
-Queries coin_correlation collection (3 pairs: BTC-ETH, BTC-DOGE, ETH-DOGE).
-Builds a 3×3 symmetric Pearson correlation matrix (diagonal = 1.0).
+Queries coin_correlation collection (1 pair: BTC-DOGE).
+Builds a 2×2 symmetric Pearson correlation matrix (diagonal = 1.0).
 Renders as px.imshow heatmap with plotly_dark template.
 """
 
@@ -21,10 +21,8 @@ from utils import build_corr_matrix  # pure helper, no Streamlit dep
 
 logger = logging.getLogger(__name__)
 
-st.set_page_config(page_title="Coin Correlation", layout="wide")
-
 st.title("Coin Correlation Matrix")
-st.caption("Data source: coin_correlation (Batch Layer — G-Research dataset)")
+st.caption("Data source: coin_correlation (Batch Layer — BTC / DOGE pair)")
 
 
 # ── Data loader ───────────────────────────────────────────────────────────────
@@ -66,7 +64,7 @@ fig = px.imshow(
     zmax=1,
     color_continuous_scale="RdBu_r",
     text_auto=".3f",
-    title="Pearson Correlation — BTC / ETH / DOGE",
+    title="Pearson Correlation — BTC / DOGE",
     template="plotly_dark",
     aspect="auto",
 )

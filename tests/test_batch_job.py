@@ -115,14 +115,13 @@ class TestLoadSampleCsvs:
             "date,price,total_volume,market_cap,coin_name\n"
             "2020-01-01 00:00:00.000,10.0,1000.0,5000.0,bitcoin\n"
             "2020-01-01 00:00:00.000,0.5,2000.0,3000.0,dogecoin\n"
-            "2020-01-01 00:00:00.000,200.0,3000.0,9000.0,ethereum\n"
         )
         csv_file = tmp_path / "test.csv"
         csv_file.write_text(csv_content)
 
         df = batch_job.load_sample_csvs(spark, str(csv_file))
         symbols = {row["symbol"] for row in df.collect()}
-        assert symbols == {"BTC", "DOGE", "ETH"}
+        assert symbols == {"BTC", "DOGE"}
 
     def test_unknown_coin_name_is_filtered_out(self, spark, tmp_path):
         csv_content = (

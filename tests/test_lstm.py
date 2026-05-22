@@ -46,9 +46,10 @@ from inference import (
     _load_last_n_from_csv,
     SEQ_LEN,
     HORIZON,
-    COIN,
     MODEL_VERSION,
     CONFIDENCE,
+    _model_path,
+    _scaler_path,
 )
 
 
@@ -221,7 +222,7 @@ class TestIterativePrediction:
 
 class TestMongoDocumentStructure:
 
-    def _make_fake_doc(self, offset: int, price: float) -> dict:
+    def _make_fake_doc(self, offset: int, price: float, coin_symbol: str = "BTC") -> dict:
         """Build a prediction document the same way inference.py does."""
         from datetime import datetime, timedelta, timezone
         now_utc = datetime.now(timezone.utc)
@@ -229,7 +230,7 @@ class TestMongoDocumentStructure:
             hour=0, minute=0, second=0, microsecond=0
         ) + timedelta(days=offset)
         return {
-            "coin": COIN,
+            "coin": coin_symbol,
             "predicted_price": float(price),
             "prediction_date": prediction_date,
             "confidence": CONFIDENCE,
@@ -247,8 +248,12 @@ class TestMongoDocumentStructure:
         assert required <= set(doc.keys()), f"Missing fields: {required - set(doc.keys())}"
 
     def test_coin_is_btc(self):
-        doc = self._make_fake_doc(1, 65000.0)
+        doc = self._make_fake_doc(1, 65000.0, coin_symbol="BTC")
         assert doc["coin"] == "BTC"
+
+    def test_coin_can_be_doge(self):
+        doc = self._make_fake_doc(1, 0.15, coin_symbol="DOGE")
+        assert doc["coin"] == "DOGE"
 
     def test_predicted_price_positive(self):
         doc = self._make_fake_doc(1, 65000.0)
@@ -267,6 +272,67 @@ class TestMongoDocumentStructure:
         from datetime import datetime, timezone
         doc = self._make_fake_doc(offset=1, price=65000.0)
         assert doc["prediction_date"] > datetime.now(timezone.utc)
+
+
+# ===========================================================================
+# 8. Model filenames are versioned per coin
+# ===========================================================================
+
+class TestModelFilenames:
+
+    def test_bitcoin_model_filename(self):
+        """BTC model must be saved as lstm_bitcoin_v1.pt"""
+        path = _model_path("bitcoin")
+        assert path.name == "lstm_bitcoin_v1.pt", f"Got {path.name}"
+
+    def test_dogecoin_model_filename(self):
+        """DOGE model must be saved as lstm_dogecoin_v1.pt"""
+        path = _model_path("dogecoin")
+        assert path.name == "lstm_dogecoin_v1.pt", f"Got {path.name}"
+
+    def test_bitcoin_scaler_filename(self):
+        """BTC scaler must be saved as scaler_bitcoin.pkl"""
+        path = _scaler_path("bitcoin")
+        assert path.name == "scaler_bitcoin.pkl", f"Got {path.name}"
+
+    def test_dogecoin_scaler_filename(self):
+        """DOGE scaler must be saved as scaler_dogecoin.pkl"""
+        path = _scaler_path("dogecoin")
+        assert path.name == "scaler_dogecoin.pkl", f"Got {path.name}"
+
+
+# ===========================================================================
+# 9. BTC and DOGE both preprocess correctly
+# ===========================================================================
+
+class TestBtcAndDogePreprocess:
+
+    def _make_csv(self, tmp_path_factory, name: str, n: int = 200) -> Path:
+        tmp = tmp_path_factory.mktemp(name)
+        csv_path = tmp / f"{name}.csv"
+        dates = pd.date_range("2020-01-01", periods=n, freq="D")
+        prices = np.cumsum(np.random.randn(n)) + 1000
+        pd.DataFrame({"date": dates, "price": prices}).to_csv(csv_path, index=False)
+        return csv_path
+
+    def test_btc_and_doge_preprocess(self, tmp_path_factory):
+        """Both bitcoin.csv and dogecoin.csv must load and produce valid sequences."""
+        for coin_name in ["bitcoin", "dogecoin"]:
+            csv_path = self._make_csv(tmp_path_factory, coin_name)
+            X_tr, y_tr, X_v, y_v, X_te, y_te, scaler = load_and_preprocess(
+                csv_path=csv_path,
+                seq_len=SEQ_LEN,
+                save_scaler=False,
+            )
+            total = len(X_tr) + len(X_v) + len(X_te)
+            assert total == 200 - SEQ_LEN, (
+                f"{coin_name}: expected {200 - SEQ_LEN} sequences, got {total}"
+            )
+            # train ratio ~80%
+            assert len(X_tr) > len(X_v), f"{coin_name}: train set should be larger than val"
+            assert len(X_tr) > len(X_te), f"{coin_name}: train set should be larger than test"
+            # Scaler worked
+            assert (y_tr >= 0).all() and (y_tr <= 1).all(), f"{coin_name}: y_train out of [0,1]"
 
 
 # ===========================================================================

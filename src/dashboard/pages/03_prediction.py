@@ -30,16 +30,14 @@ from app import get_db
 
 logger = logging.getLogger(__name__)
 
-st.set_page_config(page_title="LSTM Predictions", layout="wide")
-
 st.title("LSTM Price Predictions")
 st.caption("Model: 2-layer LSTM, input_size=1, hidden=128, seq_len=60, 7-day forecast")
 
 coin = st.session_state.get("selected_coin", "BTC")
 coin = st.selectbox(
     "Coin",
-    ["BTC", "ETH", "DOGE"],
-    index=["BTC", "ETH", "DOGE"].index(coin),
+    ["BTC", "DOGE"],
+    index=["BTC", "DOGE"].index(coin) if coin in ["BTC", "DOGE"] else 0,
     key="pred_coin",
 )
 

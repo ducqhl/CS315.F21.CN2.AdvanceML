@@ -74,10 +74,9 @@ logger = logging.getLogger(__name__)
 
 # ── Constants ─────────────────────────────────────────────────────────────────
 
-# Sample CSV mapping — coin_name column value → symbol
+# Sample CSV mapping — coin_name column value → symbol (BTC + DOGE only)
 SAMPLE_COIN_MAP: dict[str, str] = {
-    "bitcoin": "BTC",
-    "ethereum": "ETH",
+    "bitcoin":  "BTC",
     "dogecoin": "DOGE",
 }
 

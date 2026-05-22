@@ -23,8 +23,6 @@ from utils import compute_rsi, simulate_ohlc  # pure helpers, no Streamlit dep
 
 logger = logging.getLogger(__name__)
 
-st.set_page_config(page_title="Technical Analysis", layout="wide")
-
 st.title("Technical Analysis")
 st.caption("Data source: historical_sma (Batch Layer — G-Research dataset)")
 

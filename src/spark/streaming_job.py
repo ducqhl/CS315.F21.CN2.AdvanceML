@@ -100,6 +100,11 @@ CRYPTO_SCHEMA = StructType(
         StructField("change_24h", DoubleType(), True),
         StructField("timestamp", StringType(), True),  # ISO-8601 string
         StructField("source", StringType(), True),
+        # OHLC fields from CoinGecko /coins/{id}/ohlc (most recent 4h candle)
+        StructField("open",  DoubleType(), True),
+        StructField("high",  DoubleType(), True),
+        StructField("low",   DoubleType(), True),
+        StructField("close", DoubleType(), True),
     ]
 )
 
@@ -345,6 +350,11 @@ def _enrich_and_write(batch_df: DataFrame, batch_id: int) -> None:
         col("bb_lower"),
         col("event_time"),
         col("source"),
+        # OHLC from producer — null when OHLC not fetched this cycle
+        col("open"),
+        col("high"),
+        col("low"),
+        col("close"),
     ).withColumn("created_at", current_timestamp())
 
     write_batch(out, "realtime_prices")
