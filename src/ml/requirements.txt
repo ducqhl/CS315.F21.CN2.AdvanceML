@@ -1,0 +1,10 @@
+# src/ml/requirements.txt
+# Dependencies for the ML layer: training, inference, and scheduler.
+
+torch==2.2.2
+numpy==1.26.4
+pandas==2.2.1
+scikit-learn==1.4.1.post1
+pymongo==4.6.3
+pycoingecko>=3.1.0
+python-dotenv==1.0.1

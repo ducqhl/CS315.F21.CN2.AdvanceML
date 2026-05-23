@@ -43,7 +43,7 @@ days = TIMEFRAME_MAP[timeframe]
 
 # ── Data loading ──────────────────────────────────────────────────────────────
 
-@st.cache_data(ttl=30)
+@st.cache_data(ttl=300)
 def load_historical_sma(coin: str, days: int) -> pd.DataFrame:
     """Load historical_sma records for *coin*.  If days==0 load all."""
     db = get_db()

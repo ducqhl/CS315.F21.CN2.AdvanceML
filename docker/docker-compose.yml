@@ -99,11 +99,14 @@ services:
     depends_on:
       kafka:
         condition: service_healthy
+      mongodb:
+        condition: service_healthy
     env_file:
       - path: ../.env
         required: false          # allows fresh-clone start before `cp .env.example .env`
     environment:
       KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+      MONGO_URI: mongodb://${MONGO_INITDB_ROOT_USERNAME:-admin}:${MONGO_INITDB_ROOT_PASSWORD:-password123}@mongodb:27017/${MONGO_DB:-crypto_db}?authSource=admin
 
   # ── Spark Master ───────────────────────────────────────────────────────────
   spark-master:
@@ -177,6 +180,28 @@ services:
       timeout: 10s
       retries: 3
       start_period: 30s
+
+  # ── Inference Scheduler (runs LSTM inference every 5 minutes) ─────────────
+  inference_scheduler:
+    build:
+      context: ../src/ml
+      dockerfile: Dockerfile
+    container_name: inference-scheduler
+    restart: unless-stopped
+    depends_on:
+      mongodb:
+        condition: service_healthy
+    env_file:
+      - path: ../.env
+        required: false
+    environment:
+      MONGO_URI: mongodb://${MONGO_INITDB_ROOT_USERNAME:-admin}:${MONGO_INITDB_ROOT_PASSWORD:-password123}@mongodb:27017/${MONGO_DB:-crypto_db}?authSource=admin
+      INFERENCE_INTERVAL_SECONDS: "300"
+      COINGECKO_API_KEY: ${COINGECKO_API_KEY:-}
+      SCHEDULER_FETCH_COINGECKO: "true"
+    volumes:
+      - ../src/ml:/app        # live model artifacts without image rebuild
+      - ../data:/app/data     # CSV fallback data
 
   # ── FastAPI Backend ────────────────────────────────────────────────────────────
   api:

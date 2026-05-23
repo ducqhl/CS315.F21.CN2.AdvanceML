@@ -1,19 +1,19 @@
 """
-03_prediction.py — LSTM prediction page (Sprint 5 integration).
+03_prediction.py — LSTM prediction page with real-time comparison.
 
-When  predictions  collection is populated (Sprint 5 complete):
-  - Shows metric cards: next-day predicted price, 7-day range, model version.
-  - Renders a combined line chart: historical BTC prices (batch layer) overlaid
-    with the 7-day LSTM forecast.
-  - Shows a compact table of the 7 upcoming predictions.
+Features:
+  - Auto-refreshes every 5 minutes to pick up new scheduler predictions.
+  - Historical price chart from live_prices (realtime) with fallback to
+    historical_sma (batch layer).
+  - LSTM 7-day forecast overlay on the same chart.
+  - Prediction accuracy section: when past predictions have actual price data
+    available in live_prices, computes and displays MAE / MAPE.
+  - Graceful degradation when predictions collection is empty.
 
-When  predictions  collection is empty (graceful degradation):
-  - Keeps the placeholder UI with reserved layout and an informational message.
-  - Historical context chart is still shown from  historical_sma.
-
-MongoDB fields used from  predictions  collection
--------------------------------------------------
-  coin, predicted_price, prediction_date, confidence, model_version, created_at
+MongoDB collections used:
+  predictions     — LSTM forecast docs (coin, predicted_price, prediction_date, ...)
+  live_prices     — realtime prices written directly by producer (price_usd, timestamp)
+  historical_sma  — batch-layer daily avg_close (fallback context)
 """
 
 import logging
@@ -22,6 +22,7 @@ from datetime import datetime, timezone, timedelta
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
+from streamlit_autorefresh import st_autorefresh
 
 import sys
 import os
@@ -30,8 +31,11 @@ from app import get_db
 
 logger = logging.getLogger(__name__)
 
+# Auto-refresh every 5 minutes — picks up new predictions from the scheduler
+st_autorefresh(interval=300_000, key="pred_refresh")
+
 st.title("LSTM Price Predictions")
-st.caption("Model: 2-layer LSTM, input_size=1, hidden=128, seq_len=60, 7-day forecast")
+st.caption("Model: 2-layer LSTM · seq_len=60 · 7-day MIMO forecast · refreshes every 5 min")
 
 coin = st.session_state.get("selected_coin", "BTC")
 coin = st.selectbox(
@@ -42,11 +46,11 @@ coin = st.selectbox(
 )
 
 
-# ── Data loaders ──────────────────────────────────────────────────────────────
+# ── Data loaders ───────────────────────────────────────────────────────────────
 
-@st.cache_data(ttl=30)
+@st.cache_data(ttl=300)
 def load_predictions(coin: str) -> pd.DataFrame:
-    """Load predictions collection for *coin*, sorted by prediction_date ascending."""
+    """Load all predictions for *coin* sorted by prediction_date ascending."""
     db = get_db()
     cursor = db.predictions.find(
         {"coin": coin},
@@ -58,6 +62,7 @@ def load_predictions(coin: str) -> pd.DataFrame:
             "prediction_date": 1,
             "confidence": 1,
             "model_version": 1,
+            "seed_source": 1,
             "created_at": 1,
         },
     )
@@ -69,9 +74,31 @@ def load_predictions(coin: str) -> pd.DataFrame:
     return df
 
 
-@st.cache_data(ttl=60)
+@st.cache_data(ttl=300)
+def load_live_prices(coin: str, days: int = 30) -> pd.DataFrame:
+    """
+    Load recent actual prices from live_prices collection (realtime, direct from producer).
+    Returns DataFrame with columns [date, price] or empty if collection has no data.
+    """
+    db = get_db()
+    cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+    cursor = db.live_prices.find(
+        {"coin": coin, "timestamp": {"$gte": cutoff}},
+        sort=[("timestamp", 1)],
+        projection={"_id": 0, "timestamp": 1, "price_usd": 1},
+    )
+    docs = list(cursor)
+    if not docs:
+        return pd.DataFrame()
+    df = pd.DataFrame(docs)
+    df = df.rename(columns={"timestamp": "date", "price_usd": "price"})
+    df["date"] = pd.to_datetime(df["date"], utc=True)
+    return df
+
+
+@st.cache_data(ttl=300)
 def load_historical_context(coin: str, days: int = 90) -> pd.DataFrame:
-    """Load last *days* of historical_sma for background context chart."""
+    """Load last *days* of historical_sma for background context (batch layer fallback)."""
     db = get_db()
     cutoff = datetime.now(timezone.utc) - timedelta(days=days)
     cursor = db.historical_sma.find(
@@ -87,52 +114,138 @@ def load_historical_context(coin: str, days: int = 90) -> pd.DataFrame:
     return df
 
 
-# ── Fetch data ────────────────────────────────────────────────────────────────
+@st.cache_data(ttl=300)
+def load_accuracy_data(coin: str) -> pd.DataFrame:
+    """
+    For past predictions (prediction_date < now), find the closest live_prices
+    entry within ±12h and compute prediction accuracy.
+
+    Returns DataFrame: [prediction_date, predicted_price, actual_price, abs_error, pct_error]
+    or empty if no past predictions or no matching actuals.
+    """
+    db = get_db()
+    now = datetime.now(timezone.utc)
+    past_preds = list(db.predictions.find(
+        {"coin": coin, "prediction_date": {"$lt": now}},
+        sort=[("prediction_date", 1)],
+        projection={"_id": 0, "prediction_date": 1, "predicted_price": 1},
+    ))
+    if not past_preds:
+        return pd.DataFrame()
+
+    results = []
+    for row in past_preds:
+        target = row["prediction_date"]
+        if not isinstance(target, datetime):
+            continue
+        window_start = target - timedelta(hours=12)
+        window_end = target + timedelta(hours=12)
+        actual_doc = db.live_prices.find_one(
+            {"coin": coin, "timestamp": {"$gte": window_start, "$lte": window_end}},
+            sort=[("timestamp", 1)],
+        )
+        if actual_doc:
+            actual = actual_doc["price_usd"]
+            predicted = row["predicted_price"]
+            abs_err = abs(predicted - actual)
+            pct_err = abs_err / actual * 100 if actual else None
+            results.append({
+                "prediction_date": pd.Timestamp(target).tz_localize("UTC")
+                    if target.tzinfo is None else pd.Timestamp(target),
+                "predicted_price": predicted,
+                "actual_price": actual,
+                "abs_error": abs_err,
+                "pct_error": pct_err,
+            })
+    return pd.DataFrame(results)
+
+
+# ── Fetch data ─────────────────────────────────────────────────────────────────
 pred_df = load_predictions(coin)
-hist_df = load_historical_context(coin)
+live_df = load_live_prices(coin, days=30)
+hist_df = load_historical_context(coin, days=90)
+accuracy_df = load_accuracy_data(coin)
 
 has_predictions = not pred_df.empty
+# Prefer live_prices for the historical chart; fall back to batch historical_sma
+use_live = not live_df.empty
 
-# ── Historical + Forecast chart ───────────────────────────────────────────────
-st.subheader(f"{coin} Price — Historical (Batch Layer) + LSTM Forecast")
+# ── Historical + Forecast chart ────────────────────────────────────────────────
+st.subheader(f"{coin} Price — Historical + LSTM Forecast")
+source_label = "live prices (realtime)" if use_live else "batch layer (historical_sma)"
+st.caption(f"Historical source: {source_label}")
 
+fig = go.Figure()
+
+# Background context from batch layer (dimmer line, longer lookback)
 if not hist_df.empty:
-    fig = go.Figure()
-
-    # Historical trace
     fig.add_trace(go.Scatter(
         x=hist_df["date"],
         y=hist_df["avg_close"],
         mode="lines",
-        name=f"{coin} historical",
+        name=f"{coin} batch history",
+        line=dict(color="rgba(255,167,38,0.35)", width=1.5),
+        showlegend=True,
+    ))
+
+# Primary actual prices from live_prices (brighter, on top)
+if use_live:
+    fig.add_trace(go.Scatter(
+        x=live_df["date"],
+        y=live_df["price"],
+        mode="lines",
+        name=f"{coin} actual (live)",
         line=dict(color="#ffa726", width=2),
     ))
 
-    if has_predictions:
-        # LSTM forecast trace
+if has_predictions:
+    # Only show future predictions (not past ones already evaluated)
+    now_utc = datetime.now(timezone.utc)
+    future_df = pred_df[pred_df["prediction_date"] >= now_utc]
+    if not future_df.empty:
         fig.add_trace(go.Scatter(
-            x=pred_df["prediction_date"],
-            y=pred_df["predicted_price"],
+            x=future_df["prediction_date"],
+            y=future_df["predicted_price"],
             mode="lines+markers",
             name="LSTM 7-day forecast",
             line=dict(color="#00e5ff", width=2, dash="dot"),
             marker=dict(size=7, symbol="circle"),
         ))
 
-        # Vertical divider between historical and forecast
-        if not hist_df.empty:
-            last_hist_date = hist_df["date"].max()
-            fig.add_vline(
-                x=last_hist_date.timestamp() * 1000,
-                line_dash="dash",
-                line_color="gray",
-                annotation_text="Forecast start",
-                annotation_position="top left",
-            )
+    # Past predictions vs actuals (accuracy scatter)
+    if not accuracy_df.empty:
+        fig.add_trace(go.Scatter(
+            x=accuracy_df["prediction_date"],
+            y=accuracy_df["predicted_price"],
+            mode="markers",
+            name="past predictions",
+            marker=dict(size=9, color="#ff6b6b", symbol="x"),
+        ))
+        fig.add_trace(go.Scatter(
+            x=accuracy_df["prediction_date"],
+            y=accuracy_df["actual_price"],
+            mode="markers",
+            name="actual at pred date",
+            marker=dict(size=9, color="#69ff47", symbol="circle-open"),
+        ))
 
+    # Vertical divider at forecast start
+    divider_x = hist_df["date"].max() if not hist_df.empty else (
+        live_df["date"].max() if not live_df.empty else None
+    )
+    if divider_x is not None:
+        fig.add_vline(
+            x=divider_x.timestamp() * 1000,
+            line_dash="dash",
+            line_color="gray",
+            annotation_text="Forecast start",
+            annotation_position="top left",
+        )
+
+if fig.data:
     fig.update_layout(
         template="plotly_dark",
-        height=400,
+        height=420,
         xaxis_title="Date",
         yaxis_title="Price (USD)",
         margin=dict(l=0, r=0, t=30, b=0),
@@ -140,15 +253,14 @@ if not hist_df.empty:
     )
     st.plotly_chart(fig, use_container_width=True)
 else:
-    st.info("No historical data found. Run the Spark batch job first.")
+    st.info("No historical data found. Run the Spark batch job or start the producer first.")
 
 st.markdown("---")
 
-# ── Predictions section ───────────────────────────────────────────────────────
+# ── Predictions section ────────────────────────────────────────────────────────
 st.subheader("Model Predictions")
 
 if not has_predictions:
-    # ── Graceful placeholder when Sprint 5 not run yet ────────────────────────
     st.info(
         "LSTM model not trained yet.  \n"
         "Train and run inference with:  \n"
@@ -162,58 +274,103 @@ if not has_predictions:
     col3.metric("Model version", "lstm_v1 (pending)")
 
 else:
-    # ── Live prediction metrics ───────────────────────────────────────────────
-    next_day_row = pred_df.iloc[0]    # earliest future prediction
-    next_day_price = next_day_row["predicted_price"]
-    forecast_high = pred_df["predicted_price"].max()
-    forecast_low = pred_df["predicted_price"].min()
-    model_ver = next_day_row.get("model_version", "lstm_v1")
+    # Only future predictions for metrics cards
+    now_utc = datetime.now(timezone.utc)
+    future_df = pred_df[pred_df["prediction_date"] >= now_utc]
+
+    if future_df.empty:
+        st.warning("All stored predictions are in the past. Waiting for next scheduler cycle...")
+        col1, col2, col3 = st.columns(3)
+        col1.metric("Next predicted price", "—")
+        col2.metric("7-day range", "—")
+        col3.metric("Model version", pred_df.iloc[-1].get("model_version", "lstm_v1"))
+    else:
+        next_day_row = future_df.iloc[0]
+        next_day_price = next_day_row["predicted_price"]
+        forecast_high = future_df["predicted_price"].max()
+        forecast_low = future_df["predicted_price"].min()
+        model_ver = next_day_row.get("model_version", "lstm_v1")
+        seed_src = next_day_row.get("seed_source", "—")
+
+        col1, col2, col3 = st.columns(3)
+        col1.metric("Next-day predicted price", f"${next_day_price:,.2f}")
+        col2.metric("7-day range", f"${forecast_low:,.0f} – ${forecast_high:,.0f}")
+        col3.metric("Model version", model_ver)
+
+        # ── 7-day forecast bar chart ───────────────────────────────────────────
+        st.subheader("7-Day Forecast Detail")
+        forecast_fig = go.Figure()
+        forecast_fig.add_trace(go.Bar(
+            x=future_df["prediction_date"].dt.strftime("%b %d"),
+            y=future_df["predicted_price"],
+            marker_color="#00e5ff",
+            name="Predicted price",
+        ))
+        forecast_fig.update_layout(
+            template="plotly_dark",
+            height=280,
+            xaxis_title="Date",
+            yaxis_title="Predicted Price (USD)",
+            margin=dict(l=0, r=0, t=10, b=0),
+        )
+        st.plotly_chart(forecast_fig, use_container_width=True)
+
+        # ── Forecast table ─────────────────────────────────────────────────────
+        display_df = future_df.copy()
+        display_df["prediction_date"] = display_df["prediction_date"].dt.strftime("%Y-%m-%d")
+        display_df["predicted_price"] = display_df["predicted_price"].map("${:,.2f}".format)
+        display_df = display_df.rename(columns={
+            "prediction_date": "Date",
+            "predicted_price": "Predicted Price (USD)",
+            "confidence": "Confidence",
+            "model_version": "Model",
+        })
+        cols_to_show = [c for c in ["Date", "Predicted Price (USD)", "Confidence", "Model"]
+                        if c in display_df.columns]
+        st.dataframe(display_df[cols_to_show].reset_index(drop=True), use_container_width=True)
+
+        # ── Metadata caption ───────────────────────────────────────────────────
+        if "created_at" in pred_df.columns and not pred_df["created_at"].isna().all():
+            created = pd.to_datetime(pred_df["created_at"].iloc[-1], utc=True)
+            st.caption(
+                f"Last prediction run: {created.strftime('%Y-%m-%d %H:%M UTC')} "
+                f"· Seed source: {seed_src}"
+            )
+
+st.markdown("---")
+
+# ── Prediction Accuracy (historical) ──────────────────────────────────────────
+st.subheader("Prediction Accuracy (Historical)")
+
+if accuracy_df.empty:
+    st.info(
+        "No past predictions with matching actual prices yet.  \n"
+        "Accuracy data appears once prediction dates have passed "
+        "and the producer has written live price data for those dates."
+    )
+else:
+    mae = accuracy_df["abs_error"].mean()
+    mape = accuracy_df["pct_error"].dropna().mean()
+    n_evaluated = len(accuracy_df)
 
     col1, col2, col3 = st.columns(3)
-    col1.metric(
-        "Next-day predicted price",
-        f"${next_day_price:,.2f}",
-    )
-    col2.metric(
-        "7-day range",
-        f"${forecast_low:,.0f} – ${forecast_high:,.0f}",
-    )
-    col3.metric("Model version", model_ver)
+    col1.metric("Mean Abs Error", f"${mae:,.2f}")
+    col2.metric("Mean Abs % Error", f"{mape:.1f}%" if mape is not None else "—")
+    col3.metric("Predictions evaluated", str(n_evaluated))
 
-    # ── 7-day forecast bar chart ──────────────────────────────────────────────
-    st.subheader("7-Day Forecast Detail")
-
-    forecast_fig = go.Figure()
-    forecast_fig.add_trace(go.Bar(
-        x=pred_df["prediction_date"].dt.strftime("%b %d"),
-        y=pred_df["predicted_price"],
-        marker_color="#00e5ff",
-        name="Predicted price",
-    ))
-    forecast_fig.update_layout(
-        template="plotly_dark",
-        height=280,
-        xaxis_title="Date",
-        yaxis_title="Predicted Price (USD)",
-        margin=dict(l=0, r=0, t=10, b=0),
+    acc_display = accuracy_df.copy()
+    acc_display["prediction_date"] = acc_display["prediction_date"].dt.strftime("%Y-%m-%d")
+    acc_display["predicted_price"] = acc_display["predicted_price"].map("${:,.2f}".format)
+    acc_display["actual_price"] = acc_display["actual_price"].map("${:,.2f}".format)
+    acc_display["abs_error"] = acc_display["abs_error"].map("${:,.2f}".format)
+    acc_display["pct_error"] = acc_display["pct_error"].map(
+        lambda x: f"{x:.1f}%" if x is not None else "—"
     )
-    st.plotly_chart(forecast_fig, use_container_width=True)
-
-    # ── Prediction table ──────────────────────────────────────────────────────
-    display_df = pred_df.copy()
-    display_df["prediction_date"] = display_df["prediction_date"].dt.strftime("%Y-%m-%d")
-    display_df["predicted_price"] = display_df["predicted_price"].map("${:,.2f}".format)
-    display_df = display_df.rename(columns={
+    acc_display = acc_display.rename(columns={
         "prediction_date": "Date",
-        "predicted_price": "Predicted Price (USD)",
-        "confidence": "Confidence",
-        "model_version": "Model",
+        "predicted_price": "Predicted",
+        "actual_price": "Actual",
+        "abs_error": "Abs Error",
+        "pct_error": "% Error",
     })
-    cols_to_show = [c for c in ["Date", "Predicted Price (USD)", "Confidence", "Model"]
-                    if c in display_df.columns]
-    st.dataframe(display_df[cols_to_show].reset_index(drop=True), use_container_width=True)
-
-    # ── Created-at timestamp ──────────────────────────────────────────────────
-    if "created_at" in pred_df.columns and not pred_df["created_at"].isna().all():
-        created = pd.to_datetime(pred_df["created_at"].iloc[0], utc=True)
-        st.caption(f"Predictions generated at {created.strftime('%Y-%m-%d %H:%M UTC')}")
+    st.dataframe(acc_display.reset_index(drop=True), use_container_width=True)

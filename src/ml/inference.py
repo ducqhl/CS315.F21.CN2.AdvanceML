@@ -8,14 +8,18 @@ Usage
 
 Data source priority
 --------------------
-1. MongoDB  historical_sma  collection — last 60 days of  avg_close  for coin.
-2. CSV fallback — data/sample/{coin}.csv  last 60 rows (when MongoDB is empty
-   or unreachable).
+1. MongoDB  live_prices  collection — directly written by producer on every
+   CoinGecko API call. Requires ≥ SEQ_LEN+31 = 91 rows to be useful.
+   Accumulates at 10-min poll interval → ~15 hours to reach threshold.
+2. MongoDB  historical_sma  collection — batch-layer daily avg_close.
+3. CSV fallback — data/sample/{coin}.csv  last SEQ_LEN+31 rows.
 
 Prediction strategy
 -------------------
-Iterative / autoregressive: each predicted price is fed back as the input
-for the next step so we produce HORIZON = 7 forward-looking daily prices.
+MIMO (Multi-Input Multi-Output): a single forward pass predicts all 7 future
+log_return_1d values at once, eliminating error compounding from autoregressive
+chaining. USD prices are reconstructed as:
+    price[k] = last_price_usd * exp( cumsum(log_returns)[k] )
 
 MongoDB document written per prediction
 ----------------------------------------
@@ -23,8 +27,9 @@ MongoDB document written per prediction
     "coin":             "BTC" | "DOGE",
     "predicted_price":  float,
     "prediction_date":  datetime (future date, UTC),
-    "confidence":       0.8,           # placeholder — LSTM output is a point estimate
+    "confidence":       0.8,           # placeholder
     "model_version":    "lstm_v1",
+    "seed_source":      "live_prices" | "historical_sma" | "csv",
     "created_at":       datetime.utcnow()
 }
 
@@ -41,9 +46,11 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import numpy as np
+import pandas as pd
 import torch
 
 from model import LSTMModel
+from preprocess import _build_features
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(
@@ -95,12 +102,12 @@ def _scaler_path(coin: str) -> Path:
 
 def _load_last_n_from_mongo(
     coin_symbol: str,
-    n: int = SEQ_LEN,
+    n: int,
     mongo_uri: str | None = None,
 ) -> np.ndarray | None:
     """
     Query  historical_sma  for the last *n* avg_close values for *coin_symbol*.
-    Returns a 1-D numpy array sorted chronologically, or None on failure.
+    Returns a 1-D numpy array of close prices sorted chronologically, or None on failure.
     """
     uri = mongo_uri or os.environ.get("MONGO_URI", _DEFAULT_URI)
     try:
@@ -130,9 +137,48 @@ def _load_last_n_from_mongo(
         return None
 
 
-def _load_last_n_from_csv(coin: str, n: int = SEQ_LEN) -> np.ndarray:
-    """Return the last *n* close prices from the coin sample CSV."""
-    import pandas as pd
+def _load_last_n_from_live_prices(
+    coin_symbol: str,
+    n: int,
+    mongo_uri: str | None = None,
+) -> np.ndarray | None:
+    """
+    Query  live_prices  for the last *n* price_usd values for *coin_symbol*.
+    Returns a 1-D numpy array sorted chronologically, or None when insufficient data.
+
+    live_prices is written directly by the producer on every CoinGecko poll —
+    it accumulates faster than historical_sma (which requires a Spark batch run).
+    """
+    uri = mongo_uri or os.environ.get("MONGO_URI", _DEFAULT_URI)
+    try:
+        import pymongo
+        client = pymongo.MongoClient(uri, serverSelectionTimeoutMS=3000)
+        db = client["crypto_db"]
+        cursor = db.live_prices.find(
+            {"coin": coin_symbol},
+            sort=[("timestamp", -1)],
+            limit=n,
+            projection={"_id": 0, "price_usd": 1},
+        )
+        docs = list(cursor)
+        client.close()
+        if len(docs) < n:
+            logger.info(
+                "live_prices has %d/%d rows for %s — insufficient; trying historical_sma.",
+                len(docs), n, coin_symbol,
+            )
+            return None
+        # Reverse to chronological order (oldest first)
+        prices = np.array([d["price_usd"] for d in reversed(docs)], dtype=np.float32)
+        logger.info("Loaded %d prices from live_prices (freshest seed).", n)
+        return prices
+    except Exception as exc:
+        logger.warning("live_prices unavailable (%s); trying historical_sma.", exc)
+        return None
+
+
+def _load_last_n_from_csv(coin: str, n: int) -> np.ndarray:
+    """Return the last *n* close prices from the coin sample CSV (1-D array)."""
     csv_path = _DATA_DIR / f"{coin}.csv"
     df = pd.read_csv(csv_path)
     col = "price" if "price" in df.columns else "close"
@@ -141,49 +187,45 @@ def _load_last_n_from_csv(coin: str, n: int = SEQ_LEN) -> np.ndarray:
     return prices.astype(np.float32)
 
 
-# ── Iterative forecast ─────────────────────────────────────────────────────────
+# ── MIMO forecast ──────────────────────────────────────────────────────────────
 
 @torch.no_grad()
-def _iterative_predict(
+def _mimo_predict(
     model: LSTMModel,
-    seed_sequence: np.ndarray,
+    seed_features: np.ndarray,
     scaler,
+    last_price_usd: float,
     horizon: int = HORIZON,
 ) -> np.ndarray:
     """
-    Generate *horizon* future price predictions autoregressively.
+    Generate *horizon* future USD prices via a single MIMO forward pass.
 
     Parameters
     ----------
-    model         : trained LSTMModel in eval mode.
-    seed_sequence : 1-D array of shape (SEQ_LEN,) — last SEQ_LEN raw prices.
-    scaler        : fitted MinMaxScaler.
-    horizon       : number of steps to forecast.
+    model          : trained LSTMModel in eval mode.
+    seed_features  : ndarray (SEQ_LEN, 5) — already scaled feature window.
+    scaler         : fitted StandardScaler.
+    last_price_usd : raw USD close price at the last seed timestep.
+    horizon        : number of steps to forecast (should match output_size=7).
 
     Returns
     -------
-    1-D numpy array of predicted prices in original USD scale.
+    1-D numpy array of *horizon* predicted prices in original USD scale.
     """
     model.eval()
 
-    # Normalise the seed
-    norm_seq = scaler.transform(seed_sequence.reshape(-1, 1)).flatten()
+    # Shape: (1, SEQ_LEN, 5)
+    x = torch.tensor(seed_features[np.newaxis, :, :], dtype=torch.float32)
 
-    predictions_norm: list[float] = []
-    window = list(norm_seq)   # mutable sliding window
+    # Single forward pass → (1, horizon) normalised log_return_1d values
+    log_rets_norm = model(x).squeeze(0).cpu().numpy()   # (horizon,)
 
-    for _ in range(horizon):
-        # Shape: (1, SEQ_LEN, 1)
-        x = torch.tensor(window[-SEQ_LEN:], dtype=torch.float32).unsqueeze(0).unsqueeze(-1)
-        pred_norm = model(x).squeeze().item()
-        predictions_norm.append(pred_norm)
-        window.append(pred_norm)   # feed prediction back as next input
+    # Un-standardise feature-0 (log_return_1d): norm * scale + mean
+    log_rets = log_rets_norm * scaler.scale_[0] + scaler.mean_[0]
 
-    # Inverse-transform to USD prices
-    preds_usd = scaler.inverse_transform(
-        np.array(predictions_norm, dtype=np.float32).reshape(-1, 1)
-    ).flatten()
-    return preds_usd
+    # Reconstruct USD prices: price[k] = last_price * exp( cumsum(log_rets)[k] )
+    prices_usd = last_price_usd * np.exp(np.cumsum(log_rets))
+    return prices_usd.astype(np.float32)
 
 
 # ── MongoDB write ──────────────────────────────────────────────────────────────
@@ -192,9 +234,15 @@ def _write_predictions(
     predictions_usd: np.ndarray,
     coin_symbol: str,
     mongo_uri: str | None = None,
+    seed_source: str = "unknown",
 ) -> list[dict]:
     """
     Write 7-day forecast to  predictions  collection (upsert on coin + prediction_date).
+
+    Parameters
+    ----------
+    seed_source : which data source seeded this inference run
+                  ("live_prices" | "historical_sma" | "csv")
 
     Returns the list of documents written.
     """
@@ -219,6 +267,7 @@ def _write_predictions(
             "prediction_date": prediction_date,
             "confidence": CONFIDENCE,
             "model_version": MODEL_VERSION,
+            "seed_source": seed_source,
             "created_at": now_utc,
         }
         collection.update_one(
@@ -228,8 +277,8 @@ def _write_predictions(
         )
         docs_written.append(doc)
         logger.info(
-            "Upserted prediction: %s  date=%s  price=$%.2f",
-            coin_symbol, prediction_date.date(), price,
+            "Upserted prediction: %s  date=%s  price=$%.4f  seed=%s",
+            coin_symbol, prediction_date.date(), price, seed_source,
         )
 
     client.close()
@@ -265,7 +314,7 @@ def run_inference(coin: str = "bitcoin", mongo_uri: str | None = None) -> list[d
             f"Run  python src/ml/train_lstm.py --coin {coin}  first."
         )
 
-    model = LSTMModel(input_size=1, hidden_size=128, num_layers=2, dropout=0.2, output_size=1)
+    model = LSTMModel(input_size=5, hidden_size=128, num_layers=2, dropout=0.2, output_size=7)
     model.load_state_dict(torch.load(model_path, map_location="cpu"))
     model.eval()
     logger.info("Loaded model from %s", model_path)
@@ -274,17 +323,60 @@ def run_inference(coin: str = "bitcoin", mongo_uri: str | None = None) -> list[d
         scaler = pickle.load(f)
     logger.info("Loaded scaler from %s", scaler_path)
 
-    # ── 2. Seed data ───────────────────────────────────────────────────────────
-    seed = _load_last_n_from_mongo(coin_symbol, n=SEQ_LEN, mongo_uri=mongo_uri)
-    if seed is None:
-        seed = _load_last_n_from_csv(coin, n=SEQ_LEN)
+    # ── 2. Seed data — fetch SEQ_LEN + 31 rows for feature warmup ─────────────
+    n_fetch = SEQ_LEN + 31   # extra 31 rows to cover warmup (log_return_30d + RSI_14)
 
-    # ── 3. Forecast ────────────────────────────────────────────────────────────
-    predictions_usd = _iterative_predict(model, seed, scaler, horizon=HORIZON)
-    logger.info("7-day forecast for %s (USD): %s", coin_symbol, [f"${p:.2f}" for p in predictions_usd])
+    # Priority 1: live_prices (freshest — directly written by producer every poll cycle)
+    raw_close = _load_last_n_from_live_prices(coin_symbol, n=n_fetch, mongo_uri=mongo_uri)
+    seed_source = "live_prices"
 
-    # ── 4. Write to MongoDB ────────────────────────────────────────────────────
-    docs = _write_predictions(predictions_usd, coin_symbol=coin_symbol, mongo_uri=mongo_uri)
+    # Priority 2: historical_sma (batch layer — reliable but updated less frequently)
+    if raw_close is None:
+        raw_close = _load_last_n_from_mongo(coin_symbol, n=n_fetch, mongo_uri=mongo_uri)
+        seed_source = "historical_sma"
+
+    # Priority 3: CSV fallback (static file — always available)
+    if raw_close is None:
+        raw_close = _load_last_n_from_csv(coin, n=n_fetch)
+        seed_source = "csv"
+
+    logger.info("Seed source for %s: %s", coin_symbol, seed_source)
+
+    # ── 3. Build features from raw close prices ────────────────────────────────
+    df_seed = pd.DataFrame({"close": raw_close.astype(np.float64)})
+    features = _build_features(df_seed)   # (n_fetch, 5); warmup rows have NaN
+
+    # Drop warmup rows
+    valid = ~np.isnan(features).any(axis=1)
+    features = features[valid]
+    close_for_seed = raw_close[valid]
+
+    if len(features) < SEQ_LEN:
+        raise ValueError(
+            f"Not enough clean rows after warmup drop: {len(features)} < SEQ_LEN={SEQ_LEN}. "
+            "Fetch more history."
+        )
+
+    # ── 4. Scale seed and take last SEQ_LEN rows ──────────────────────────────
+    seed_scaled = scaler.transform(features)
+    seed = seed_scaled[-SEQ_LEN:]          # (SEQ_LEN, 5)
+    last_price_usd = float(close_for_seed[-1])
+
+    # ── 5. MIMO forecast ───────────────────────────────────────────────────────
+    predictions_usd = _mimo_predict(model, seed, scaler, last_price_usd, horizon=HORIZON)
+    logger.info(
+        "7-day forecast for %s (USD): %s",
+        coin_symbol,
+        [f"${p:.4f}" for p in predictions_usd],
+    )
+
+    # ── 6. Write to MongoDB ────────────────────────────────────────────────────
+    docs = _write_predictions(
+        predictions_usd,
+        coin_symbol=coin_symbol,
+        mongo_uri=mongo_uri,
+        seed_source=seed_source,
+    )
     return docs
 
 
@@ -300,4 +392,4 @@ if __name__ == "__main__":
     docs = run_inference(coin=args.coin)
     print(f"\nWrote {len(docs)} predictions for {args.coin} to MongoDB predictions collection.")
     for d in docs:
-        print(f"  {d['prediction_date'].date()}  ${d['predicted_price']:,.2f}")
+        print(f"  {d['prediction_date'].date()}  ${d['predicted_price']:,.4f}")

@@ -10,10 +10,10 @@ Steps
 -----
 1. Load & preprocess sequences from  data/sample/{coin}.csv  (via preprocess.py)
 2. Build PyTorch TensorDataset / DataLoader  (shuffle=False — time series)
-3. Train for EPOCHS epochs with Adam + MSELoss
+3. Train for EPOCHS epochs with Adam + MSELoss on normalised log-returns
 4. Track validation loss each epoch; save best weights to
    src/ml/model/lstm_{coin}_v1.pt
-5. Evaluate on test set; inverse-transform predictions back to USD prices
+5. Evaluate on test set; reconstruct USD prices via last_price * exp(cumsum(log_returns))
 6. Print RMSE, MAE, and directional accuracy
 7. Save metrics JSON to  src/ml/model/metrics_{coin}.json
 """
@@ -68,28 +68,39 @@ def _scaler_path(coin: str) -> Path:
 
 # ── Evaluation helpers ─────────────────────────────────────────────────────────
 
-def _inverse(arr: np.ndarray, scaler) -> np.ndarray:
-    """Inverse-transform a 1-D array of normalised prices back to USD."""
-    return scaler.inverse_transform(arr.reshape(-1, 1)).flatten()
-
-
 def compute_metrics(
-    y_true_norm: np.ndarray,
-    y_pred_norm: np.ndarray,
+    y_true_norm: np.ndarray,   # (M, 7) normalised log_return_1d targets
+    y_pred_norm: np.ndarray,   # (M, 7) normalised log_return_1d predictions
     scaler,
+    last_price_usd: float,
 ) -> dict[str, float]:
-    """Return RMSE, MAE, and directional accuracy (all in original price scale)."""
-    y_true = _inverse(y_true_norm, scaler)
-    y_pred = _inverse(y_pred_norm, scaler)
+    """Return RMSE, MAE, and directional accuracy (approximate USD scale).
 
-    rmse = float(np.sqrt(np.mean((y_true - y_pred) ** 2)))
-    mae = float(np.mean(np.abs(y_true - y_pred)))
+    Un-standardises feature-0 (log_return_1d) using the scaler's mean/scale,
+    then reconstructs cumulative USD price paths from last_price_usd.
+    RMSE/MAE are computed across all M sequences and all 7 horizon steps.
+    Directional accuracy uses only step-1 (first next-day log_return).
+    """
+    mean0  = scaler.mean_[0]
+    scale0 = scaler.scale_[0]
 
-    # Directional accuracy — fraction of correct up/down predictions
-    if len(y_true) > 1:
-        dir_true = np.sign(np.diff(y_true))
-        dir_pred = np.sign(np.diff(y_pred))
-        dir_acc = float(np.mean(dir_true == dir_pred) * 100)
+    # Un-standardise: log_return = norm_value * scale + mean
+    y_true_lr = y_true_norm * scale0 + mean0   # (M, 7)
+    y_pred_lr = y_pred_norm * scale0 + mean0   # (M, 7)
+
+    # Reconstruct cumulative USD price paths
+    # price at step k = last_price * exp( sum(log_ret[0 .. k]) )
+    y_true_usd = last_price_usd * np.exp(np.cumsum(y_true_lr, axis=1))
+    y_pred_usd = last_price_usd * np.exp(np.cumsum(y_pred_lr, axis=1))
+
+    rmse = float(np.sqrt(np.mean((y_true_usd - y_pred_usd) ** 2)))
+    mae  = float(np.mean(np.abs(y_true_usd - y_pred_usd)))
+
+    # Directional accuracy — step-1 direction (sign of first log_return)
+    if len(y_true_lr) > 0:
+        dir_true = np.sign(y_true_lr[:, 0])
+        dir_pred = np.sign(y_pred_lr[:, 0])
+        dir_acc  = float(np.mean(dir_true == dir_pred) * 100)
     else:
         dir_acc = 0.0
 
@@ -135,10 +146,12 @@ def train(
 
     # ── 1. Data ───────────────────────────────────────────────────────────────
     logger.info("Loading and preprocessing data from %s ...", csv_path)
-    X_train, y_train, X_val, y_val, X_test, y_test, scaler = load_and_preprocess(
-        csv_path=csv_path,
-        save_scaler=(not dry_run),
-        scaler_path=scaler_path,
+    X_train, y_train, X_val, y_val, X_test, y_test, scaler, last_price_usd = (
+        load_and_preprocess(
+            csv_path=csv_path,
+            save_scaler=(not dry_run),
+            scaler_path=scaler_path,
+        )
     )
 
     def _to_tensors(X, y):
@@ -158,11 +171,11 @@ def train(
 
     # ── 2. Model ──────────────────────────────────────────────────────────────
     model = LSTMModel(
-        input_size=1,
+        input_size=5,
         hidden_size=128,
         num_layers=2,
         dropout=0.2,
-        output_size=1,
+        output_size=7,
     ).to(device)
 
     criterion = nn.MSELoss()
@@ -186,7 +199,7 @@ def train(
         for X_batch, y_batch in train_loader:
             X_batch, y_batch = X_batch.to(device), y_batch.to(device)
             optimizer.zero_grad()
-            preds = model(X_batch).squeeze(-1)
+            preds = model(X_batch)          # (batch, 7)
             loss = criterion(preds, y_batch)
             loss.backward()
             # Gradient clipping prevents exploding gradients in LSTM
@@ -202,22 +215,23 @@ def train(
         with torch.no_grad():
             for X_batch, y_batch in val_loader:
                 X_batch, y_batch = X_batch.to(device), y_batch.to(device)
-                preds = model(X_batch).squeeze(-1)
+                preds = model(X_batch)      # (batch, 7)
                 val_loss_sum += criterion(preds, y_batch).item() * len(X_batch)
         val_loss = val_loss_sum / max(len(val_ds), 1)
 
         scheduler.step(val_loss)
 
-        # — Checkpoint —
-        if val_loss < best_val_loss and not dry_run:
+        # — Checkpoint (always track improvement; save only when not dry_run) —
+        if val_loss < best_val_loss:
             best_val_loss = val_loss
-            torch.save(model.state_dict(), model_path)
             epochs_no_improve = 0
-        elif not dry_run:
+            if not dry_run:
+                torch.save(model.state_dict(), model_path)
+        else:
             epochs_no_improve += 1
 
-        # — Progress logging every 10 epochs —
-        if epoch % 10 == 0 or epoch == 1:
+        # — Progress logging every 5 epochs —
+        if epoch % 5 == 0 or epoch == 1:
             logger.info(
                 "Epoch %3d/%d  train_loss=%.6f  val_loss=%.6f",
                 epoch, epochs, train_loss, val_loss,
@@ -238,14 +252,14 @@ def train(
     all_preds, all_true = [], []
     with torch.no_grad():
         for X_batch, y_batch in test_loader:
-            preds = model(X_batch.to(device)).squeeze(-1).cpu().numpy()
+            preds = model(X_batch.to(device)).cpu().numpy()   # (batch, 7)
             all_preds.append(preds)
             all_true.append(y_batch.numpy())
 
-    y_pred_norm = np.concatenate(all_preds)
-    y_true_norm = np.concatenate(all_true)
+    y_pred_norm = np.concatenate(all_preds)    # (M, 7)
+    y_true_norm = np.concatenate(all_true)     # (M, 7)
 
-    metrics = compute_metrics(y_true_norm, y_pred_norm, scaler)
+    metrics = compute_metrics(y_true_norm, y_pred_norm, scaler, last_price_usd)
 
     logger.info("── Test Metrics (%s) ─────────────────────────────────────", coin)
     logger.info("  RMSE:                 $%.2f", metrics["rmse"])
@@ -257,6 +271,7 @@ def train(
         metrics["epochs_trained"] = epoch
         metrics["best_val_loss"] = float(best_val_loss)
         metrics["coin"] = coin
+        metrics["last_price_usd"] = last_price_usd
         with open(metrics_path, "w") as f:
             json.dump(metrics, f, indent=2)
         logger.info("Metrics saved to %s", metrics_path)

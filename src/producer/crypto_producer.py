@@ -9,9 +9,9 @@ Also fetches 4h OHLC candles via /coins/{id}/ohlc every OHLC_POLL_MULTIPLIER
 cycles (default every 3rd cycle = every 30 min) to stay within demo tier limits.
 
 Monthly call budget (demo tier = 10k/month):
-  Price cycles/month: 6 × 24 × 30 = 4,320  → 4,320 price calls
-  OHLC calls/month:   4,320 / 3 × 2 coins   = 2,880 OHLC calls
-  Total                                      ≈ 7,200  (under 10k limit)
+  Price cycles/month: 12 × 24 × 30 = 8,640  → 8,640 price calls
+  OHLC calls/month:   8,640 / 3 × 2 coins   = 5,760 OHLC calls
+  Total                                      ≈ 14,400  (requires demo key or paid plan)
 
 Producer config guarantees:
   - acks="all"  — wait for all ISR replicas
@@ -38,8 +38,11 @@ load_dotenv()
 
 KAFKA_BOOTSTRAP_SERVERS = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "localhost:9092")
 TOPIC_RAW               = os.getenv("KAFKA_TOPIC_RAW", "crypto_raw")
-POLL_INTERVAL_SECONDS   = int(os.getenv("POLL_INTERVAL_SECONDS", "600"))
+POLL_INTERVAL_SECONDS   = int(os.getenv("POLL_INTERVAL_SECONDS", "300"))
 COINGECKO_API_KEY       = os.getenv("COINGECKO_API_KEY", "")  # empty = no-key mode
+MONGO_URI               = os.getenv("MONGO_URI", "")          # empty = disable direct DB write
+
+LIVE_PRICES_COLLECTION = "live_prices"
 
 # BTC + DOGE only (2 coins within demo tier budget)
 COINS = ["bitcoin", "dogecoin"]
@@ -61,6 +64,61 @@ logging.basicConfig(
     stream=sys.stdout,
 )
 logger = logging.getLogger("crypto_producer")
+
+
+# ── MongoDB direct-write helpers ──────────────────────────────────────────────
+_mongo_client = None
+
+
+def _get_mongo_client():
+    """Lazy singleton MongoClient. Returns None if MONGO_URI is unset or unreachable."""
+    global _mongo_client
+    if _mongo_client is not None:
+        return _mongo_client
+    if not MONGO_URI:
+        return None
+    try:
+        import pymongo
+        _mongo_client = pymongo.MongoClient(MONGO_URI, serverSelectionTimeoutMS=2000)
+        # Force a quick connection check
+        _mongo_client.admin.command("ping")
+        logger.info("MongoDB client initialised for live_prices writes.")
+    except Exception as exc:
+        logger.warning("MongoDB unavailable — live_prices writes disabled: %s", exc)
+        _mongo_client = None
+    return _mongo_client
+
+
+def write_to_live_prices(records: list) -> None:
+    """
+    Persist CoinGecko price records directly to MongoDB live_prices collection.
+    Non-fatal: any exception is caught and logged as a WARNING so Kafka send is unaffected.
+    No-op when MONGO_URI is empty.
+    """
+    if not MONGO_URI:
+        return
+    try:
+        client = _get_mongo_client()
+        if client is None:
+            return
+        db = client["crypto_db"]
+        docs = []
+        for r in records:
+            docs.append({
+                "coin":       r["coin"],
+                "coin_id":    r["coin_id"],
+                "price_usd":  r["price_usd"],
+                "volume_24h": r["volume_24h"],
+                "market_cap": r["market_cap"],
+                "change_24h": r["change_24h"],
+                "timestamp":  datetime.fromisoformat(r["timestamp"]),
+                "source":     "coingecko_direct",
+            })
+        if docs:
+            db[LIVE_PRICES_COLLECTION].insert_many(docs, ordered=False)
+            logger.info("Wrote %d docs to live_prices.", len(docs))
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("live_prices write failed (non-fatal): %s", exc)
 
 
 # ── CoinGecko SDK client ──────────────────────────────────────────────────────
@@ -186,6 +244,7 @@ def produce_loop(producer: KafkaProducer) -> None:
                         logger.warning("OHLC fetch failed for %s: %s", coin_id, exc)
 
             sent = 0
+            records_this_cycle = []
             for coin_id, metrics in data.items():
                 record = transform_to_record(
                     coin_id, metrics, ts, ohlc_candles=ohlc_map.get(coin_id)
@@ -197,9 +256,12 @@ def produce_loop(producer: KafkaProducer) -> None:
                     key=symbol,
                     value=record,
                 ).add_errback(_on_send_error)
+                records_this_cycle.append(record)
                 sent += 1
 
             producer.flush()
+            # Persist directly to MongoDB live_prices — bypasses Kafka/Spark latency
+            write_to_live_prices(records_this_cycle)
             logger.info(
                 "Cycle %d — produced %d records to '%s' at %s (ohlc=%s)",
                 cycle, sent, TOPIC_RAW, ts, fetch_ohlc_this_cycle,

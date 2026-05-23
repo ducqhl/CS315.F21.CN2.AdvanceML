@@ -34,7 +34,7 @@ coin = st.session_state.get("selected_coin", "BTC")
 
 # ── Data loading helpers ──────────────────────────────────────────────────────
 
-@st.cache_data(ttl=30)
+@st.cache_data(ttl=300)
 def load_realtime_latest(coin: str) -> dict | None:
     """Return the most recent realtime_prices record for *coin*, or None."""
     db = get_db()
@@ -45,7 +45,7 @@ def load_realtime_latest(coin: str) -> dict | None:
     return doc
 
 
-@st.cache_data(ttl=30)
+@st.cache_data(ttl=300)
 def load_realtime_24h(coin: str) -> pd.DataFrame:
     """Return last 24 h of realtime_prices for *coin* as a DataFrame."""
     db = get_db()
@@ -64,7 +64,7 @@ def load_realtime_24h(coin: str) -> pd.DataFrame:
     return df
 
 
-@st.cache_data(ttl=30)
+@st.cache_data(ttl=300)
 def load_daily_fallback(coin: str, n: int = 30) -> pd.DataFrame:
     """Return last *n* daily_stats records for *coin* when realtime is empty."""
     db = get_db()

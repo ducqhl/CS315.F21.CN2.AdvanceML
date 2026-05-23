@@ -1,17 +1,21 @@
 """
-model.py — LSTM model architecture for BTC price prediction.
+model.py — LSTM model architecture for BTC / DOGE price prediction.
 
 Architecture
 ------------
-- 2-layer LSTM  (input_size=1, hidden=128, dropout=0.2)
-- Fully-connected head: Linear(128 → 64) → ReLU → Dropout(0.1) → Linear(64 → 1)
-- Output: single float — predicted (normalised) next-day close price
+- 2-layer LSTM  (input_size=5, hidden=128, dropout=0.2)
+- Fully-connected head: Linear(128 → 64) → ReLU → Dropout(0.1) → Linear(64 → 7)
+- Output: 7-step MIMO forecast of log_return_1d (normalised)
+
+Input features (input_size=5)
+------------------------------
+0: log_return_1d, 1: log_return_7d, 2: log_return_30d, 3: RSI_14, 4: log_volume
 
 Public API
 ----------
 LSTMModel(input_size, hidden_size, num_layers, dropout, output_size)
-    .forward(x)   → tensor (batch, output_size)
-    .predict(X)   → numpy array  (N,)
+    .forward(x)   → tensor (batch, output_size)   — output_size=7 for MIMO
+    .predict(X)   → numpy array  (N, output_size)
 """
 
 from __future__ import annotations
@@ -27,20 +31,20 @@ class LSTMModel(nn.Module):
 
     Parameters
     ----------
-    input_size  : int   — number of input features (1 for univariate).
+    input_size  : int   — number of input features (5: log-returns + RSI + volume).
     hidden_size : int   — LSTM hidden state dimension.
     num_layers  : int   — stacked LSTM depth.
     dropout     : float — dropout probability applied between LSTM layers.
-    output_size : int   — prediction horizon (1 for next-step prediction).
+    output_size : int   — prediction horizon (7 for MIMO 7-day forecast).
     """
 
     def __init__(
         self,
-        input_size: int = 1,
+        input_size: int = 5,
         hidden_size: int = 128,
         num_layers: int = 2,
         dropout: float = 0.2,
-        output_size: int = 1,
+        output_size: int = 7,
     ) -> None:
         super().__init__()
 
@@ -93,10 +97,10 @@ class LSTMModel(nn.Module):
 
         Returns
         -------
-        numpy array, shape (N,)
+        numpy array, shape (N, output_size)
         """
         self.eval()
         if not isinstance(X, torch.Tensor):
             X = torch.tensor(X, dtype=torch.float32)
         out = self.forward(X)          # (N, output_size)
-        return out.squeeze(-1).cpu().numpy()
+        return out.cpu().numpy()
