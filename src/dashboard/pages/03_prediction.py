@@ -64,6 +64,10 @@ def load_predictions(coin: str) -> pd.DataFrame:
             "model_version": 1,
             "seed_source": 1,
             "created_at": 1,
+            # v2 multi-task fields (may be absent in v1 docs)
+            "direction": 1,
+            "direction_prob": 1,
+            "trend_strength": 1,
         },
     )
     docs = list(cursor)
@@ -336,6 +340,73 @@ else:
                 f"Last prediction run: {created.strftime('%Y-%m-%d %H:%M UTC')} "
                 f"· Seed source: {seed_src}"
             )
+
+st.markdown("---")
+
+# ── Trend Direction & Strength (v2 model only) ────────────────────────────────
+st.subheader("Trend Direction & Strength")
+
+# Direction emoji mapping
+_DIR_EMOJI = {"UP": "↑", "FLAT": "→", "DOWN": "↓"}
+# Strength colour indicator (using coloured squares)
+_STRENGTH_EMOJI = {"STRONG": "🟩", "MODERATE": "🟨", "WEAK": "🟥"}
+
+# Check if any prediction doc has direction fields (v2 model)
+_has_direction_fields = (
+    has_predictions
+    and "direction" in pred_df.columns
+    and pred_df["direction"].notna().any()
+)
+
+if not _has_direction_fields:
+    st.info(
+        "Direction & strength predictions require the v2 multi-task model.  \n"
+        "Retrain with:  \n"
+        "```bash\n"
+        "python src/ml/train_lstm.py --coin bitcoin\n"
+        "python src/ml/inference.py --coin bitcoin\n"
+        "```"
+    )
+else:
+    now_utc = datetime.now(timezone.utc)
+    future_dir_df = pred_df[pred_df["prediction_date"] >= now_utc].copy()
+
+    if future_dir_df.empty:
+        st.warning("All direction predictions are in the past. Waiting for next inference run...")
+    else:
+        # Build display table
+        rows = []
+        for _, row in future_dir_df.iterrows():
+            date_str   = row["prediction_date"].strftime("%Y-%m-%d")
+            direction  = row.get("direction", None)
+            dir_prob   = row.get("direction_prob", None)
+            strength   = row.get("trend_strength", None)
+
+            dir_display      = _DIR_EMOJI.get(direction, "—") if direction else "—"
+            strength_display = (
+                f"{_STRENGTH_EMOJI.get(strength, '')} {strength}"
+                if strength else "—"
+            )
+            confidence_pct = (
+                f"{dir_prob * 100:.1f}%" if dir_prob is not None else "—"
+            )
+            rows.append({
+                "Date":         date_str,
+                "Direction":    dir_display,
+                "Strength":     strength_display,
+                "Confidence %": confidence_pct,
+            })
+
+        direction_table_df = pd.DataFrame(rows)
+        with st.expander("Trend Direction & Strength Detail", expanded=True):
+            st.dataframe(direction_table_df.reset_index(drop=True), use_container_width=True)
+
+        # Summary metrics
+        dir_counts = future_dir_df["direction"].value_counts()
+        col1, col2, col3 = st.columns(3)
+        col1.metric("UP days",   str(dir_counts.get("UP",   0)))
+        col2.metric("FLAT days", str(dir_counts.get("FLAT", 0)))
+        col3.metric("DOWN days", str(dir_counts.get("DOWN", 0)))
 
 st.markdown("---")
 

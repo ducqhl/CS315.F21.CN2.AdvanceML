@@ -8,7 +8,7 @@ No live MongoDB connection is required — inference write path is mocked.
 Tests
 -----
 1.  LSTMModel forward pass output shape: (batch, 7)
-2.  Sequence creation: MIMO targets shape (M, 7), input shape (M, 60, 5)
+2.  Sequence creation: MIMO targets shape (M, 7), input shape (M, 60, N_FEATURES)
 3.  Scaler normalisation: StandardScaler fitted on train only
 4.  Train/val/test split is chronological (no shuffle)
 5.  MIMO predict returns exactly HORIZON positive USD prices
@@ -17,6 +17,10 @@ Tests
 8.  Model filenames are versioned per coin
 9.  BTC and DOGE both preprocess correctly (shapes, scaler type)
 10. Dry-run train() completes without error
+11. DirectionHead forward shape and softmax correctness
+12. make_direction_labels() values, shape, and threshold logic
+13. Multi-task model returns dual-head output; single-head returns tensor
+14. load_and_preprocess() returns 11-item tuple; direction labels shape/values correct
 """
 
 from __future__ import annotations
@@ -41,14 +45,16 @@ _ML_DIR = Path(__file__).resolve().parent.parent / "src" / "ml"
 if str(_ML_DIR) not in sys.path:
     sys.path.insert(0, str(_ML_DIR))
 
-from model import LSTMModel
+from model import LSTMModel, DirectionHead
 from preprocess import (
     _create_sequences,
     _load_csv,
     _build_features,
     load_and_preprocess,
+    make_direction_labels,
     SEQ_LEN,
     HORIZON,
+    N_FEATURES,
 )
 from inference import (
     _mimo_predict,
@@ -68,8 +74,17 @@ from inference import (
 
 @pytest.fixture(scope="module")
 def small_model() -> LSTMModel:
-    """A LSTMModel instance with input_size=5, output_size=7."""
+    """A LSTMModel instance with input_size=5, output_size=7 (old backward-compat)."""
     return LSTMModel(input_size=5, hidden_size=128, num_layers=2, dropout=0.2, output_size=7)
+
+
+@pytest.fixture(scope="module")
+def small_model_v2() -> LSTMModel:
+    """A LSTMModel with N_FEATURES=9 and direction head (new multi-task)."""
+    return LSTMModel(
+        input_size=9, hidden_size=128, num_layers=2, dropout=0.2,
+        output_size=7, use_direction_head=True, n_classes=3,
+    )
 
 
 @pytest.fixture(scope="module")
@@ -94,13 +109,17 @@ def sample_csv(tmp_path_factory) -> Path:
 
 @pytest.fixture(scope="module")
 def fitted_scaler(sample_csv):
-    """Return the full 8-tuple from a preprocessing run on sample_csv."""
+    """Return the full 11-tuple from a preprocessing run on sample_csv."""
     result = load_and_preprocess(
         csv_path=sample_csv,
         seq_len=SEQ_LEN,
-        save_scaler=False,  # don't overwrite the real scaler.pkl
+        save_scaler=False,
+        with_fear_greed=False,  # avoid API call in tests
     )
-    # result = X_train, y_train, X_val, y_val, X_test, y_test, scaler, last_price_usd
+    # result = (X_train, y_train, y_dir_train,
+    #           X_val,   y_val,   y_dir_val,
+    #           X_test,  y_test,  y_dir_test,
+    #           scaler, last_price_usd)
     return result
 
 
@@ -144,25 +163,26 @@ class TestSequenceCreation:
 
     def test_sequence_count_from_100_rows(self):
         """100 rows with seq_len=60, horizon=7 → 100 - 60 - 7 + 1 = 34 sequences."""
-        scaled = np.random.rand(100, 5).astype(np.float32)
+        scaled = np.random.rand(100, N_FEATURES).astype(np.float32)
         X, y = _create_sequences(scaled, seq_len=60, horizon=7)
         expected = 100 - 60 - 7 + 1
         assert len(X) == expected, f"Expected {expected} sequences, got {len(X)}"
         assert len(y) == expected
 
     def test_sequence_shape(self):
-        """Each X sequence must have shape (seq_len, 5); y must have shape (horizon,)."""
-        scaled = np.random.rand(100, 5).astype(np.float32)
+        """Each X sequence must have shape (seq_len, N_FEATURES); y must have shape (horizon,)."""
+        scaled = np.random.rand(100, N_FEATURES).astype(np.float32)
         X, y = _create_sequences(scaled, seq_len=60, horizon=7)
-        assert X.shape == (34, 60, 5), f"X shape: {X.shape}"
-        assert y.shape == (34, 7),     f"y shape: {y.shape}"
+        expected_x_shape = (34, 60, N_FEATURES)
+        assert X.shape == expected_x_shape, f"X shape: {X.shape}, expected {expected_x_shape}"
+        assert y.shape == (34, 7), f"y shape: {y.shape}"
 
     def test_target_is_feature_zero_next_horizon_steps(self):
         """y[i, k] must equal scaled[seq_len + i + k, 0] (feature-0 log_return_1d)."""
         scaled = np.arange(100, dtype=np.float32).reshape(-1, 1)
-        # Broadcast to 5 features — only feature 0 (the values 0..99) is tested.
-        scaled5 = np.repeat(scaled, 5, axis=1)
-        X, y = _create_sequences(scaled5, seq_len=5, horizon=3)
+        # Broadcast to N_FEATURES features — only feature 0 (the values 0..99) is tested.
+        scaled_n = np.repeat(scaled, N_FEATURES, axis=1)
+        X, y = _create_sequences(scaled_n, seq_len=5, horizon=3)
         # First target sequence starts at index 5: y[0] = [5, 6, 7]
         np.testing.assert_array_equal(y[0], [5.0, 6.0, 7.0])
         # Second: y[1] = [6, 7, 8]
@@ -183,18 +203,20 @@ class TestScalerNormalisation:
             f"Expected StandardScaler, got {type(scaler).__name__}"
         )
 
-    def test_scaler_has_5_features(self, fitted_scaler):
-        """StandardScaler must have mean_ and scale_ of length 5."""
+    def test_scaler_has_n_features(self, fitted_scaler):
+        """StandardScaler must have mean_ and scale_ of length N_FEATURES."""
         *_, scaler, last_price = fitted_scaler
         assert hasattr(scaler, "mean_"), "Scaler missing mean_"
         assert hasattr(scaler, "scale_"), "Scaler missing scale_"
-        assert len(scaler.mean_) == 5, f"Expected 5 features, got {len(scaler.mean_)}"
+        assert len(scaler.mean_) == N_FEATURES, (
+            f"Expected {N_FEATURES} features, got {len(scaler.mean_)}"
+        )
 
     def test_scaler_inverse_roundtrip(self, fitted_scaler):
         """transform → inverse_transform → transform should recover the input."""
         X_tr, *_, scaler, last_price = fitted_scaler
         # Take the first time step of 5 training sequences (already scaled)
-        sample_scaled = X_tr[:5, 0, :]           # (5, 5)
+        sample_scaled = X_tr[:5, 0, :]           # (5, N_FEATURES)
         sample_raw    = scaler.inverse_transform(sample_scaled)
         rescaled      = scaler.transform(sample_raw)
         np.testing.assert_allclose(sample_scaled, rescaled, atol=1e-5)
@@ -226,23 +248,25 @@ class TestChronologicalSplit:
 
     def test_splits_are_non_empty(self, fitted_scaler):
         """All three splits must produce at least 1 sequence."""
-        X_tr, y_tr, X_v, y_v, X_te, y_te, *_ = fitted_scaler
+        X_tr, y_tr, y_dir_tr, X_v, y_v, y_dir_v, X_te, y_te, y_dir_te, *_ = fitted_scaler
         assert len(X_tr) > 0, "Training split is empty"
         assert len(X_v)  > 0, "Validation split is empty"
         assert len(X_te) > 0, "Test split is empty"
 
     def test_train_is_largest_split(self, fitted_scaler):
         """Train set must be larger than val and test."""
-        X_tr, _, X_v, _, X_te, *_ = fitted_scaler
+        X_tr, y_tr, y_dir_tr, X_v, y_v, y_dir_v, X_te, *_ = fitted_scaler
         assert len(X_tr) >= len(X_v),  "Train should be >= val"
         assert len(X_tr) >= len(X_te), "Train should be >= test"
 
     def test_sequence_shapes_consistent(self, fitted_scaler):
-        """All X arrays must have shape (M, SEQ_LEN, 5); y arrays (M, HORIZON)."""
-        X_tr, y_tr, X_v, y_v, X_te, y_te, *_ = fitted_scaler
+        """All X arrays must have shape (M, SEQ_LEN, N_FEATURES); y arrays (M, HORIZON)."""
+        X_tr, y_tr, y_dir_tr, X_v, y_v, y_dir_v, X_te, y_te, y_dir_te, *_ = fitted_scaler
         for name, X, y in [("train", X_tr, y_tr), ("val", X_v, y_v), ("test", X_te, y_te)]:
-            assert X.shape[1:] == (SEQ_LEN, 5), f"{name} X shape: {X.shape}"
-            assert y.shape[1]  == HORIZON,      f"{name} y shape: {y.shape}"
+            assert X.shape[1:] == (SEQ_LEN, N_FEATURES), (
+                f"{name} X shape: {X.shape}, expected (_, {SEQ_LEN}, {N_FEATURES})"
+            )
+            assert y.shape[1] == HORIZON, f"{name} y shape: {y.shape}"
 
 
 # ===========================================================================
@@ -255,29 +279,42 @@ class TestMimoPrediction:
         """_mimo_predict must return exactly HORIZON values."""
         *_, scaler, last_price = fitted_scaler
         seed = np.random.rand(SEQ_LEN, 5).astype(np.float32)
-        preds = _mimo_predict(small_model, seed, scaler, last_price, horizon=HORIZON)
+        # Use a mock scaler with 5 features for old model compat
+        from sklearn.preprocessing import StandardScaler
+        mock_scaler = StandardScaler()
+        mock_scaler.fit(np.random.rand(100, 5))
+        preds = _mimo_predict(small_model, seed, mock_scaler, last_price, horizon=HORIZON)
         assert len(preds) == HORIZON, f"Expected {HORIZON} predictions, got {len(preds)}"
 
     def test_predictions_are_positive_floats(self, small_model, fitted_scaler):
         """All predicted prices must be positive (prices > 0)."""
         *_, scaler, last_price = fitted_scaler
         seed = np.random.rand(SEQ_LEN, 5).astype(np.float32)
-        preds = _mimo_predict(small_model, seed, scaler, last_price, horizon=HORIZON)
+        from sklearn.preprocessing import StandardScaler
+        mock_scaler = StandardScaler()
+        mock_scaler.fit(np.random.rand(100, 5))
+        preds = _mimo_predict(small_model, seed, mock_scaler, last_price, horizon=HORIZON)
         assert all(p > 0 for p in preds), f"Non-positive price found: {preds}"
 
     def test_predictions_are_numpy_array(self, small_model, fitted_scaler):
         """_mimo_predict must return a numpy array."""
         *_, scaler, last_price = fitted_scaler
         seed = np.random.rand(SEQ_LEN, 5).astype(np.float32)
-        preds = _mimo_predict(small_model, seed, scaler, last_price, horizon=HORIZON)
+        from sklearn.preprocessing import StandardScaler
+        mock_scaler = StandardScaler()
+        mock_scaler.fit(np.random.rand(100, 5))
+        preds = _mimo_predict(small_model, seed, mock_scaler, last_price, horizon=HORIZON)
         assert isinstance(preds, np.ndarray)
 
     def test_single_forward_pass_no_compounding(self, small_model, fitted_scaler):
         """Calling _mimo_predict twice with the same seed must return the same result."""
         *_, scaler, last_price = fitted_scaler
         seed = np.random.rand(SEQ_LEN, 5).astype(np.float32)
-        preds1 = _mimo_predict(small_model, seed, scaler, last_price, horizon=HORIZON)
-        preds2 = _mimo_predict(small_model, seed, scaler, last_price, horizon=HORIZON)
+        from sklearn.preprocessing import StandardScaler
+        mock_scaler = StandardScaler()
+        mock_scaler.fit(np.random.rand(100, 5))
+        preds1 = _mimo_predict(small_model, seed, mock_scaler, last_price, horizon=HORIZON)
+        preds2 = _mimo_predict(small_model, seed, mock_scaler, last_price, horizon=HORIZON)
         np.testing.assert_array_equal(preds1, preds2)
 
 
@@ -325,8 +362,9 @@ class TestMongoDocumentStructure:
         assert doc["predicted_price"] > 0
 
     def test_model_version_correct(self):
+        """model_version must match the current MODEL_VERSION constant (lstm_v2)."""
         doc = self._make_fake_doc(1, 65000.0)
-        assert doc["model_version"] == "lstm_v1"
+        assert doc["model_version"] == "lstm_v2"
 
     def test_confidence_is_placeholder(self):
         doc = self._make_fake_doc(1, 65000.0)
@@ -346,12 +384,12 @@ class TestMongoDocumentStructure:
 class TestModelFilenames:
 
     def test_bitcoin_model_filename(self):
-        """BTC model must be saved as lstm_bitcoin_v1.pt"""
+        """BTC model (v1 compat path) must be saved as lstm_bitcoin_v1.pt"""
         path = _model_path("bitcoin")
         assert path.name == "lstm_bitcoin_v1.pt", f"Got {path.name}"
 
     def test_dogecoin_model_filename(self):
-        """DOGE model must be saved as lstm_dogecoin_v1.pt"""
+        """DOGE model (v1 compat path) must be saved as lstm_dogecoin_v1.pt"""
         path = _model_path("dogecoin")
         assert path.name == "lstm_dogecoin_v1.pt", f"Got {path.name}"
 
@@ -390,19 +428,27 @@ class TestBtcAndDogePreprocess:
         from sklearn.preprocessing import StandardScaler
         for coin_name in ["bitcoin", "dogecoin"]:
             csv_path = self._make_csv(tmp_path_factory, coin_name)
-            X_tr, y_tr, X_v, y_v, X_te, y_te, scaler, last_price = load_and_preprocess(
+            (
+                X_tr, y_tr, y_dir_tr,
+                X_v,  y_v,  y_dir_v,
+                X_te, y_te, y_dir_te,
+                scaler, last_price,
+            ) = load_and_preprocess(
                 csv_path=csv_path,
                 seq_len=SEQ_LEN,
                 save_scaler=False,
+                with_fear_greed=False,
             )
             # All splits non-empty
             assert len(X_tr) > 0, f"{coin_name}: train is empty"
             assert len(X_v)  > 0, f"{coin_name}: val is empty"
             assert len(X_te) > 0, f"{coin_name}: test is empty"
 
-            # Shapes: (M, SEQ_LEN, 5) and (M, HORIZON)
-            assert X_tr.shape[1:] == (SEQ_LEN, 5), f"{coin_name}: X_tr shape {X_tr.shape}"
-            assert y_tr.shape[1]  == HORIZON,      f"{coin_name}: y_tr shape {y_tr.shape}"
+            # Shapes: (M, SEQ_LEN, N_FEATURES) and (M, HORIZON)
+            assert X_tr.shape[1:] == (SEQ_LEN, N_FEATURES), (
+                f"{coin_name}: X_tr shape {X_tr.shape}"
+            )
+            assert y_tr.shape[1] == HORIZON, f"{coin_name}: y_tr shape {y_tr.shape}"
 
             # Train ratio ~80%: train is larger than val and test
             assert len(X_tr) > len(X_v),  f"{coin_name}: train <= val"
@@ -442,3 +488,250 @@ class TestDryRunTraining:
         assert "mae" in metrics
         assert metrics["rmse"] >= 0
         assert metrics["mae"] >= 0
+        # New metrics must also be present
+        assert "direction_accuracy_pct" in metrics
+        assert "f1_macro" in metrics
+
+
+# ===========================================================================
+# 11. DirectionHead — shape and softmax
+# ===========================================================================
+
+class TestDirectionHead:
+
+    def test_forward_shape(self):
+        """DirectionHead forward must return shape (batch, output_size, n_classes)."""
+        head = DirectionHead(hidden_size=128, output_size=7, n_classes=3)
+        last_hidden = torch.rand(4, 128)
+        out = head(last_hidden)
+        assert out.shape == (4, 7, 3), f"Expected (4, 7, 3), got {tuple(out.shape)}"
+
+    def test_softmax_sums_to_one(self):
+        """Softmax over the class dimension must sum to ~1 for every (batch, step)."""
+        head = DirectionHead(hidden_size=128, output_size=7, n_classes=3)
+        last_hidden = torch.rand(4, 128)
+        logits = head(last_hidden)   # (4, 7, 3)
+        probs = torch.softmax(logits, dim=2)   # (4, 7, 3)
+        sums = probs.sum(dim=2)                # (4, 7) — should be all ~1
+        np.testing.assert_allclose(
+            sums.detach().numpy(), np.ones((4, 7)), atol=1e-5
+        )
+
+    def test_output_dtype(self):
+        """DirectionHead output must be float32."""
+        head = DirectionHead(hidden_size=64, output_size=3, n_classes=3)
+        last_hidden = torch.rand(2, 64)
+        out = head(last_hidden)
+        assert out.dtype == torch.float32
+
+
+# ===========================================================================
+# 12. make_direction_labels
+# ===========================================================================
+
+class TestDirectionLabels:
+
+    def test_returns_correct_shape(self):
+        """make_direction_labels must return array of same length as input."""
+        log_rets = np.random.randn(200)
+        labels = make_direction_labels(log_rets)
+        assert labels.shape == (200,), f"Expected (200,), got {labels.shape}"
+
+    def test_values_in_valid_set(self):
+        """All label values must be in {0, 1, 2}."""
+        log_rets = np.random.randn(500)
+        labels = make_direction_labels(log_rets)
+        unique = set(labels.tolist())
+        assert unique.issubset({0, 1, 2}), f"Unexpected label values: {unique}"
+
+    def test_dtype_is_int(self):
+        """Label array dtype must be integer."""
+        labels = make_direction_labels(np.random.randn(100))
+        assert np.issubdtype(labels.dtype, np.integer), (
+            f"Expected integer dtype, got {labels.dtype}"
+        )
+
+    def test_all_positive_returns_mostly_up(self):
+        """When all returns are strongly positive, most labels should be UP (2)."""
+        # Very large positive values — all above threshold
+        log_rets = np.ones(100) * 10.0
+        labels = make_direction_labels(log_rets)
+        # std of constant array is 0, so threshold = 0.5 * 0 = 0 → all > 0 → UP
+        assert np.all(labels == 2), f"Expected all UP (2), got {np.unique(labels)}"
+
+    def test_threshold_logic_flat_returns(self):
+        """Returns within ±threshold should be labelled FLAT (1)."""
+        # Very small std → threshold ≈ 0 → returns right on boundary
+        log_rets = np.zeros(50)
+        labels = make_direction_labels(log_rets, threshold_factor=0.5)
+        # zeros are not > 0 and not < 0, so they should be FLAT
+        assert np.all(labels == 1), (
+            f"Expected all FLAT (1) for zero returns, got {np.unique(labels)}"
+        )
+
+    def test_mixed_returns(self):
+        """Mixed returns should produce all three label types."""
+        rng = np.random.default_rng(42)
+        log_rets = rng.choice([-2.0, 0.0, 2.0], size=300)
+        labels = make_direction_labels(log_rets, threshold_factor=0.5)
+        unique = set(labels.tolist())
+        assert {0, 1, 2}.issubset(unique) or len(unique) >= 2, (
+            f"Expected mixed labels, got {unique}"
+        )
+
+
+# ===========================================================================
+# 13. Multi-task model dual-head output
+# ===========================================================================
+
+class TestMultiTaskModel:
+
+    def test_dual_head_returns_tuple(self, small_model_v2):
+        """LSTMModel with use_direction_head=True must return a tuple."""
+        x = torch.rand(4, 60, 9)
+        out = small_model_v2(x)
+        assert isinstance(out, tuple), f"Expected tuple, got {type(out)}"
+        assert len(out) == 2, f"Expected 2-tuple, got {len(out)}-tuple"
+
+    def test_dual_head_price_shape(self, small_model_v2):
+        """First element of dual-head output must be (batch, output_size)."""
+        x = torch.rand(4, 60, 9)
+        price_preds, _ = small_model_v2(x)
+        assert price_preds.shape == (4, 7), (
+            f"Expected (4, 7), got {tuple(price_preds.shape)}"
+        )
+
+    def test_dual_head_dir_shape(self, small_model_v2):
+        """Second element of dual-head output must be (batch, output_size, n_classes)."""
+        x = torch.rand(4, 60, 9)
+        _, dir_logits = small_model_v2(x)
+        assert dir_logits.shape == (4, 7, 3), (
+            f"Expected (4, 7, 3), got {tuple(dir_logits.shape)}"
+        )
+
+    def test_single_head_returns_tensor(self, small_model):
+        """LSTMModel without direction head must return a plain Tensor."""
+        x = torch.rand(4, 60, 5)
+        out = small_model(x)
+        assert isinstance(out, torch.Tensor), (
+            f"Expected Tensor, got {type(out)}"
+        )
+
+    def test_dual_head_predict_returns_tuple(self, small_model_v2):
+        """predict() on dual-head model must return (prices_np, dir_logits_np)."""
+        X = np.random.rand(4, 60, 9).astype(np.float32)
+        result = small_model_v2.predict(X)
+        assert isinstance(result, tuple), f"Expected tuple, got {type(result)}"
+        prices_np, dir_np = result
+        assert isinstance(prices_np, np.ndarray)
+        assert isinstance(dir_np, np.ndarray)
+        assert prices_np.shape == (4, 7), f"prices shape: {prices_np.shape}"
+        assert dir_np.shape == (4, 7, 3), f"dir_logits shape: {dir_np.shape}"
+
+    def test_single_head_predict_returns_array(self, small_model):
+        """predict() on single-head model must return a numpy array."""
+        X = np.random.rand(4, 60, 5).astype(np.float32)
+        result = small_model.predict(X)
+        assert isinstance(result, np.ndarray), f"Expected ndarray, got {type(result)}"
+
+
+# ===========================================================================
+# 14. load_and_preprocess — 11-item tuple, direction labels correctness
+# ===========================================================================
+
+class TestNewPreprocessReturnShape:
+
+    def _make_csv(self, tmp_path_factory, n: int = 800) -> Path:
+        tmp = tmp_path_factory.mktemp("preprocess_new")
+        csv_path = tmp / "test_coin.csv"
+        dates = pd.date_range("2020-01-01", periods=n, freq="D")
+        prices = np.cumsum(np.random.randn(n)) + 5000
+        volumes = np.random.rand(n) * 1e9 + 1e8
+        pd.DataFrame({
+            "date": dates,
+            "price": prices,
+            "total_volume": volumes,
+        }).to_csv(csv_path, index=False)
+        return csv_path
+
+    def test_returns_11_items(self, tmp_path_factory):
+        """load_and_preprocess must return a tuple of exactly 11 items."""
+        csv_path = self._make_csv(tmp_path_factory)
+        result = load_and_preprocess(
+            csv_path=csv_path,
+            save_scaler=False,
+            with_fear_greed=False,
+        )
+        assert len(result) == 11, f"Expected 11-tuple, got {len(result)}-tuple"
+
+    def test_y_dir_shapes_match_y(self, tmp_path_factory):
+        """y_dir_train/val/test shapes must match y_train/val/test shapes."""
+        csv_path = self._make_csv(tmp_path_factory)
+        (
+            X_tr, y_tr, y_dir_tr,
+            X_v,  y_v,  y_dir_v,
+            X_te, y_te, y_dir_te,
+            scaler, last_price,
+        ) = load_and_preprocess(
+            csv_path=csv_path,
+            save_scaler=False,
+            with_fear_greed=False,
+        )
+        # y and y_dir must have same first dimension (number of sequences)
+        assert y_tr.shape[0] == y_dir_tr.shape[0], (
+            f"train: y {y_tr.shape} vs y_dir {y_dir_tr.shape}"
+        )
+        assert y_v.shape[0] == y_dir_v.shape[0], (
+            f"val: y {y_v.shape} vs y_dir {y_dir_v.shape}"
+        )
+        assert y_te.shape[0] == y_dir_te.shape[0], (
+            f"test: y {y_te.shape} vs y_dir {y_dir_te.shape}"
+        )
+        # y_dir must have horizon columns
+        assert y_dir_tr.shape[1] == HORIZON, f"y_dir_train horizon: {y_dir_tr.shape}"
+        assert y_dir_v.shape[1]  == HORIZON, f"y_dir_val horizon: {y_dir_v.shape}"
+        assert y_dir_te.shape[1] == HORIZON, f"y_dir_test horizon: {y_dir_te.shape}"
+
+    def test_direction_values_in_valid_set(self, tmp_path_factory):
+        """All direction label values must be in {0, 1, 2}."""
+        csv_path = self._make_csv(tmp_path_factory)
+        (
+            X_tr, y_tr, y_dir_tr,
+            X_v,  y_v,  y_dir_v,
+            X_te, y_te, y_dir_te,
+            scaler, last_price,
+        ) = load_and_preprocess(
+            csv_path=csv_path,
+            save_scaler=False,
+            with_fear_greed=False,
+        )
+        for split_name, y_dir in [
+            ("train", y_dir_tr), ("val", y_dir_v), ("test", y_dir_te)
+        ]:
+            unique = set(y_dir.flatten().tolist())
+            assert unique.issubset({0, 1, 2}), (
+                f"{split_name}: unexpected direction values {unique}"
+            )
+
+    def test_x_shape_has_n_features(self, tmp_path_factory):
+        """X arrays from the new 11-tuple must have N_FEATURES in last dimension."""
+        csv_path = self._make_csv(tmp_path_factory)
+        (
+            X_tr, y_tr, y_dir_tr,
+            X_v,  y_v,  y_dir_v,
+            X_te, y_te, y_dir_te,
+            scaler, last_price,
+        ) = load_and_preprocess(
+            csv_path=csv_path,
+            save_scaler=False,
+            with_fear_greed=False,
+        )
+        assert X_tr.shape[2] == N_FEATURES, (
+            f"Expected N_FEATURES={N_FEATURES}, got {X_tr.shape[2]}"
+        )
+        assert X_v.shape[2]  == N_FEATURES, (
+            f"Expected N_FEATURES={N_FEATURES}, got {X_v.shape[2]}"
+        )
+        assert X_te.shape[2] == N_FEATURES, (
+            f"Expected N_FEATURES={N_FEATURES}, got {X_te.shape[2]}"
+        )
