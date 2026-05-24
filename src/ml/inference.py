@@ -6,11 +6,15 @@ Usage
 -----
     python src/ml/inference.py [--coin bitcoin|dogecoin]
 
+Model version priority
+-----------------------
+1. lstm_{coin}_v2.pt  (multi-task: price + direction head)
+2. lstm_{coin}_v1.pt  (price-only, backward compat)
+
 Data source priority
 --------------------
 1. MongoDB  live_prices  collection — directly written by producer on every
-   CoinGecko API call. Requires ≥ SEQ_LEN+31 = 91 rows to be useful.
-   Accumulates at 10-min poll interval → ~15 hours to reach threshold.
+   CoinGecko API call.
 2. MongoDB  historical_sma  collection — batch-layer daily avg_close.
 3. CSV fallback — data/sample/{coin}.csv  last SEQ_LEN+31 rows.
 
@@ -21,16 +25,22 @@ log_return_1d values at once, eliminating error compounding from autoregressive
 chaining. USD prices are reconstructed as:
     price[k] = last_price_usd * exp( cumsum(log_returns)[k] )
 
+For v2 model: direction is derived from the direction head (softmax argmax).
+Trend strength is derived from predicted log_return magnitude vs scaler scale.
+
 MongoDB document written per prediction
 ----------------------------------------
 {
     "coin":             "BTC" | "DOGE",
     "predicted_price":  float,
     "prediction_date":  datetime (future date, UTC),
-    "confidence":       0.8,           # placeholder
-    "model_version":    "lstm_v1",
+    "confidence":       0.8,
+    "model_version":    "lstm_v2",
     "seed_source":      "live_prices" | "historical_sma" | "csv",
-    "created_at":       datetime.utcnow()
+    "created_at":       datetime.utcnow(),
+    "direction":        "UP" | "FLAT" | "DOWN",       # v2 only
+    "direction_prob":   float in [0, 1],              # v2 only
+    "trend_strength":   "STRONG" | "MODERATE" | "WEAK"  # v2 only
 }
 
 Upsert key: (coin, prediction_date)
@@ -67,11 +77,14 @@ _DATA_DIR = _HERE.parent.parent / "data" / "sample"
 # ── Constants ──────────────────────────────────────────────────────────────────
 SEQ_LEN = 60
 HORIZON = 7
-MODEL_VERSION = "lstm_v1"
+MODEL_VERSION = "lstm_v2"
 CONFIDENCE = 0.8
 
 _DEFAULT_URI = "mongodb://admin:password123@localhost:27017/crypto_db?authSource=admin"
 _DEFAULT_DB = "crypto_db"
+
+# Direction class mapping
+_DIR_CLASSES = {0: "DOWN", 1: "FLAT", 2: "UP"}
 
 # Coin id → symbol map
 _COIN_SYMBOL_MAP = {
@@ -91,11 +104,20 @@ def _db_name_from_uri(uri: str) -> str:
 
 
 def _model_path(coin: str) -> Path:
+    """Return path for v2 model; kept for backward compat with old tests."""
     return _MODEL_DIR / f"lstm_{coin}_v1.pt"
 
 
 def _scaler_path(coin: str) -> Path:
     return _MODEL_DIR / f"scaler_{coin}.pkl"
+
+
+def _model_path_v2(coin: str) -> Path:
+    return _MODEL_DIR / f"lstm_{coin}_v2.pt"
+
+
+def _model_path_v1(coin: str) -> Path:
+    return _MODEL_DIR / f"lstm_{coin}_v1.pt"
 
 
 # ── Data loading ───────────────────────────────────────────────────────────────
@@ -128,7 +150,6 @@ def _load_last_n_from_mongo(
                 len(docs), coin_symbol, n,
             )
             return None
-        # Reverse so chronological order (oldest first)
         prices = np.array([d["avg_close"] for d in reversed(docs)], dtype=np.float32)
         logger.info("Loaded %d close prices from MongoDB historical_sma.", n)
         return prices
@@ -145,9 +166,6 @@ def _load_last_n_from_live_prices(
     """
     Query  live_prices  for the last *n* price_usd values for *coin_symbol*.
     Returns a 1-D numpy array sorted chronologically, or None when insufficient data.
-
-    live_prices is written directly by the producer on every CoinGecko poll —
-    it accumulates faster than historical_sma (which requires a Spark batch run).
     """
     uri = mongo_uri or os.environ.get("MONGO_URI", _DEFAULT_URI)
     try:
@@ -168,7 +186,6 @@ def _load_last_n_from_live_prices(
                 len(docs), n, coin_symbol,
             )
             return None
-        # Reverse to chronological order (oldest first)
         prices = np.array([d["price_usd"] for d in reversed(docs)], dtype=np.float32)
         logger.info("Loaded %d prices from live_prices (freshest seed).", n)
         return prices
@@ -187,6 +204,29 @@ def _load_last_n_from_csv(coin: str, n: int) -> np.ndarray:
     return prices.astype(np.float32)
 
 
+# ── Strength derivation ────────────────────────────────────────────────────────
+
+def _derive_strength(log_ret: float, scale0: float) -> str:
+    """Map a log-return value to trend strength label.
+
+    Parameters
+    ----------
+    log_ret : the predicted log return for one step (un-scaled).
+    scale0  : scaler.scale_[0] — standard deviation of log_return_1d from training.
+
+    Returns
+    -------
+    "STRONG" | "MODERATE" | "WEAK"
+    """
+    abs_ret = abs(log_ret)
+    if abs_ret > 2 * scale0:
+        return "STRONG"
+    elif abs_ret > scale0:
+        return "MODERATE"
+    else:
+        return "WEAK"
+
+
 # ── MIMO forecast ──────────────────────────────────────────────────────────────
 
 @torch.no_grad()
@@ -200,25 +240,29 @@ def _mimo_predict(
     """
     Generate *horizon* future USD prices via a single MIMO forward pass.
 
+    Works with both v1 (price only) and v2 (dual-head) models.
+    Returns 1-D numpy array of *horizon* predicted prices in original USD scale.
+
     Parameters
     ----------
     model          : trained LSTMModel in eval mode.
-    seed_features  : ndarray (SEQ_LEN, 5) — already scaled feature window.
+    seed_features  : ndarray (SEQ_LEN, n_features) — already scaled feature window.
     scaler         : fitted StandardScaler.
     last_price_usd : raw USD close price at the last seed timestep.
-    horizon        : number of steps to forecast (should match output_size=7).
-
-    Returns
-    -------
-    1-D numpy array of *horizon* predicted prices in original USD scale.
+    horizon        : number of steps to forecast.
     """
     model.eval()
 
-    # Shape: (1, SEQ_LEN, 5)
+    n_features = seed_features.shape[1]
     x = torch.tensor(seed_features[np.newaxis, :, :], dtype=torch.float32)
 
-    # Single forward pass → (1, horizon) normalised log_return_1d values
-    log_rets_norm = model(x).squeeze(0).cpu().numpy()   # (horizon,)
+    result = model(x)
+
+    # Handle both single-head (tensor) and dual-head (tuple) outputs
+    if isinstance(result, tuple):
+        log_rets_norm = result[0].squeeze(0).cpu().numpy()   # (horizon,)
+    else:
+        log_rets_norm = result.squeeze(0).cpu().numpy()
 
     # Un-standardise feature-0 (log_return_1d): norm * scale + mean
     log_rets = log_rets_norm * scaler.scale_[0] + scaler.mean_[0]
@@ -228,6 +272,58 @@ def _mimo_predict(
     return prices_usd.astype(np.float32)
 
 
+@torch.no_grad()
+def _mimo_predict_full(
+    model: LSTMModel,
+    seed_features: np.ndarray,
+    scaler,
+    last_price_usd: float,
+    horizon: int = HORIZON,
+) -> tuple[np.ndarray, list[str], list[float], list[str]]:
+    """
+    Full v2 MIMO forward pass returning prices + direction + strength.
+
+    Returns
+    -------
+    prices_usd    : (horizon,) float32 array of USD prices
+    directions    : list of 'UP' | 'FLAT' | 'DOWN' per step
+    dir_probs     : list of float confidence in [0, 1] per step
+    strengths     : list of 'STRONG' | 'MODERATE' | 'WEAK' per step
+    """
+    model.eval()
+
+    x = torch.tensor(seed_features[np.newaxis, :, :], dtype=torch.float32)
+    result = model(x)
+
+    if isinstance(result, tuple):
+        price_tensor, dir_logit_tensor = result
+        log_rets_norm = price_tensor.squeeze(0).cpu().numpy()     # (horizon,)
+        dir_logits    = dir_logit_tensor.squeeze(0).cpu().numpy() # (horizon, 3)
+
+        # Softmax for probabilities
+        exp_logits = np.exp(dir_logits - dir_logits.max(axis=1, keepdims=True))
+        dir_probs_arr = exp_logits / exp_logits.sum(axis=1, keepdims=True)   # (horizon, 3)
+        dir_classes   = np.argmax(dir_probs_arr, axis=1)                      # (horizon,)
+
+        directions = [_DIR_CLASSES[int(c)] for c in dir_classes]
+        dir_probs  = [float(dir_probs_arr[i, dir_classes[i]]) for i in range(horizon)]
+    else:
+        # v1 fallback: no direction head
+        log_rets_norm = result.squeeze(0).cpu().numpy()
+        directions = ["FLAT"] * horizon
+        dir_probs  = [0.5] * horizon
+
+    # Un-standardise
+    log_rets   = log_rets_norm * scaler.scale_[0] + scaler.mean_[0]
+    prices_usd = last_price_usd * np.exp(np.cumsum(log_rets))
+
+    # Trend strength from magnitude of log_return per step
+    scale0 = float(scaler.scale_[0])
+    strengths = [_derive_strength(float(lr), scale0) for lr in log_rets]
+
+    return prices_usd.astype(np.float32), directions, dir_probs, strengths
+
+
 # ── MongoDB write ──────────────────────────────────────────────────────────────
 
 def _write_predictions(
@@ -235,14 +331,18 @@ def _write_predictions(
     coin_symbol: str,
     mongo_uri: str | None = None,
     seed_source: str = "unknown",
+    directions: list[str] | None = None,
+    dir_probs: list[float] | None = None,
+    strengths: list[str] | None = None,
 ) -> list[dict]:
     """
     Write 7-day forecast to  predictions  collection (upsert on coin + prediction_date).
 
     Parameters
     ----------
-    seed_source : which data source seeded this inference run
-                  ("live_prices" | "historical_sma" | "csv")
+    directions  : per-step direction labels ("UP"|"FLAT"|"DOWN"), length=HORIZON
+    dir_probs   : per-step confidence for predicted direction, length=HORIZON
+    strengths   : per-step trend strength ("STRONG"|"MODERATE"|"WEAK"), length=HORIZON
 
     Returns the list of documents written.
     """
@@ -262,14 +362,23 @@ def _write_predictions(
             + timedelta(days=offset)
         )
         doc = {
-            "coin": coin_symbol,
+            "coin":            coin_symbol,
             "predicted_price": float(price),
             "prediction_date": prediction_date,
-            "confidence": CONFIDENCE,
-            "model_version": MODEL_VERSION,
-            "seed_source": seed_source,
-            "created_at": now_utc,
+            "confidence":      CONFIDENCE,
+            "model_version":   MODEL_VERSION,
+            "seed_source":     seed_source,
+            "created_at":      now_utc,
         }
+        # Add v2 fields when available
+        idx = offset - 1
+        if directions is not None and idx < len(directions):
+            doc["direction"] = directions[idx]
+        if dir_probs is not None and idx < len(dir_probs):
+            doc["direction_prob"] = dir_probs[idx]
+        if strengths is not None and idx < len(strengths):
+            doc["trend_strength"] = strengths[idx]
+
         collection.update_one(
             {"coin": doc["coin"], "prediction_date": doc["prediction_date"]},
             {"$set": doc},
@@ -277,8 +386,11 @@ def _write_predictions(
         )
         docs_written.append(doc)
         logger.info(
-            "Upserted prediction: %s  date=%s  price=$%.4f  seed=%s",
-            coin_symbol, prediction_date.date(), price, seed_source,
+            "Upserted prediction: %s  date=%s  price=$%.4f  dir=%s  strength=%s  seed=%s",
+            coin_symbol, prediction_date.date(), price,
+            doc.get("direction", "—"),
+            doc.get("trend_strength", "—"),
+            seed_source,
         )
 
     client.close()
@@ -291,6 +403,8 @@ def run_inference(coin: str = "bitcoin", mongo_uri: str | None = None) -> list[d
     """
     Full inference pipeline: load model → build seed → forecast → write to MongoDB.
 
+    Tries to load v2 model first; falls back to v1 (no direction head) if v2 not found.
+
     Parameters
     ----------
     coin      : CoinGecko coin id — "bitcoin" or "dogecoin"
@@ -299,43 +413,63 @@ def run_inference(coin: str = "bitcoin", mongo_uri: str | None = None) -> list[d
     Returns list of prediction documents.
     """
     coin_symbol = _COIN_SYMBOL_MAP.get(coin, coin.upper())
-    model_path = _model_path(coin)
     scaler_path = _scaler_path(coin)
 
-    # ── 1. Load model ──────────────────────────────────────────────────────────
-    if not model_path.exists():
-        raise FileNotFoundError(
-            f"Trained model not found at {model_path}. "
-            f"Run  python src/ml/train_lstm.py --coin {coin}  first."
-        )
     if not scaler_path.exists():
         raise FileNotFoundError(
             f"Scaler not found at {scaler_path}. "
             f"Run  python src/ml/train_lstm.py --coin {coin}  first."
         )
 
-    model = LSTMModel(input_size=5, hidden_size=128, num_layers=2, dropout=0.2, output_size=7)
-    model.load_state_dict(torch.load(model_path, map_location="cpu"))
-    model.eval()
-    logger.info("Loaded model from %s", model_path)
+    # ── 1. Load model (v2 preferred, v1 fallback) ──────────────────────────────
+    path_v2 = _model_path_v2(coin)
+    path_v1 = _model_path_v1(coin)
+
+    use_v2 = path_v2.exists()
+    use_direction_head = use_v2
+
+    if use_v2:
+        model_path = path_v2
+        logger.info("Loading v2 model from %s", model_path)
+    elif path_v1.exists():
+        model_path = path_v1
+        logger.info("v2 model not found; falling back to v1 at %s", model_path)
+    else:
+        raise FileNotFoundError(
+            f"No trained model found. "
+            f"Run  python src/ml/train_lstm.py --coin {coin}  first."
+        )
 
     with open(scaler_path, "rb") as f:
         scaler = pickle.load(f)
     logger.info("Loaded scaler from %s", scaler_path)
 
-    # ── 2. Seed data — fetch SEQ_LEN + 31 rows for feature warmup ─────────────
-    n_fetch = SEQ_LEN + 31   # extra 31 rows to cover warmup (log_return_30d + RSI_14)
+    # Determine input_size from scaler (number of features)
+    n_features = len(scaler.mean_) if hasattr(scaler, "mean_") else 9
 
-    # Priority 1: live_prices (freshest — directly written by producer every poll cycle)
+    model = LSTMModel(
+        input_size=n_features,
+        hidden_size=128,
+        num_layers=2,
+        dropout=0.2,
+        output_size=7,
+        use_direction_head=use_direction_head,
+        n_classes=3,
+    )
+    model.load_state_dict(torch.load(model_path, map_location="cpu"))
+    model.eval()
+    logger.info("Loaded model from %s (direction_head=%s)", model_path, use_direction_head)
+
+    # ── 2. Seed data — fetch SEQ_LEN + 31 rows for feature warmup ─────────────
+    n_fetch = SEQ_LEN + 31
+
     raw_close = _load_last_n_from_live_prices(coin_symbol, n=n_fetch, mongo_uri=mongo_uri)
     seed_source = "live_prices"
 
-    # Priority 2: historical_sma (batch layer — reliable but updated less frequently)
     if raw_close is None:
         raw_close = _load_last_n_from_mongo(coin_symbol, n=n_fetch, mongo_uri=mongo_uri)
         seed_source = "historical_sma"
 
-    # Priority 3: CSV fallback (static file — always available)
     if raw_close is None:
         raw_close = _load_last_n_from_csv(coin, n=n_fetch)
         seed_source = "csv"
@@ -344,9 +478,8 @@ def run_inference(coin: str = "bitcoin", mongo_uri: str | None = None) -> list[d
 
     # ── 3. Build features from raw close prices ────────────────────────────────
     df_seed = pd.DataFrame({"close": raw_close.astype(np.float64)})
-    features = _build_features(df_seed)   # (n_fetch, 5); warmup rows have NaN
+    features = _build_features(df_seed)   # (n_fetch, n_features)
 
-    # Drop warmup rows
     valid = ~np.isnan(features).any(axis=1)
     features = features[valid]
     close_for_seed = raw_close[valid]
@@ -358,12 +491,27 @@ def run_inference(coin: str = "bitcoin", mongo_uri: str | None = None) -> list[d
         )
 
     # ── 4. Scale seed and take last SEQ_LEN rows ──────────────────────────────
+    # Pad/trim feature columns to match what scaler was trained on
+    n_scaler_feats = len(scaler.mean_)
+    if features.shape[1] > n_scaler_feats:
+        features = features[:, :n_scaler_feats]
+    elif features.shape[1] < n_scaler_feats:
+        pad = np.zeros((len(features), n_scaler_feats - features.shape[1]), dtype=np.float32)
+        features = np.concatenate([features, pad], axis=1)
+
     seed_scaled = scaler.transform(features)
-    seed = seed_scaled[-SEQ_LEN:]          # (SEQ_LEN, 5)
+    seed = seed_scaled[-SEQ_LEN:]          # (SEQ_LEN, n_features)
     last_price_usd = float(close_for_seed[-1])
 
     # ── 5. MIMO forecast ───────────────────────────────────────────────────────
-    predictions_usd = _mimo_predict(model, seed, scaler, last_price_usd, horizon=HORIZON)
+    if use_direction_head:
+        predictions_usd, directions, dir_probs, strengths = _mimo_predict_full(
+            model, seed, scaler, last_price_usd, horizon=HORIZON
+        )
+    else:
+        predictions_usd = _mimo_predict(model, seed, scaler, last_price_usd, horizon=HORIZON)
+        directions = dir_probs = strengths = None
+
     logger.info(
         "7-day forecast for %s (USD): %s",
         coin_symbol,
@@ -376,6 +524,9 @@ def run_inference(coin: str = "bitcoin", mongo_uri: str | None = None) -> list[d
         coin_symbol=coin_symbol,
         mongo_uri=mongo_uri,
         seed_source=seed_source,
+        directions=directions,
+        dir_probs=dir_probs,
+        strengths=strengths,
     )
     return docs
 
@@ -392,4 +543,7 @@ if __name__ == "__main__":
     docs = run_inference(coin=args.coin)
     print(f"\nWrote {len(docs)} predictions for {args.coin} to MongoDB predictions collection.")
     for d in docs:
-        print(f"  {d['prediction_date'].date()}  ${d['predicted_price']:,.4f}")
+        direction = d.get("direction", "—")
+        strength  = d.get("trend_strength", "—")
+        print(f"  {d['prediction_date'].date()}  ${d['predicted_price']:,.4f}  "
+              f"{direction}  {strength}")

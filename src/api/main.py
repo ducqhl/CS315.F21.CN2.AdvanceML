@@ -176,10 +176,19 @@ def get_predictions(coin: str) -> dict:
     model_version = docs[-1].get("model_version", "lstm_v1") if docs else "lstm_v1"
     prices = [d["predicted_price"] for d in docs]
 
+    serialized = []
+    for d in docs:
+        row = _serialize(d)
+        # Include v2 multi-task fields when present; omit when missing (v1 docs)
+        for field in ("direction", "direction_prob", "trend_strength"):
+            if field in d:
+                row[field] = d[field]
+        serialized.append(row)
+
     return {
         "coin": symbol,
         "model_version": model_version,
-        "predictions": [_serialize(d) for d in docs],
+        "predictions": serialized,
         "next_day_price": prices[0] if prices else None,
         "seven_day_high": max(prices) if prices else None,
         "seven_day_low": min(prices) if prices else None,
