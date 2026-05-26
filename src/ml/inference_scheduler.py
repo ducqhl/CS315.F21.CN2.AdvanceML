@@ -49,6 +49,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from inference import run_inference  # noqa: E402
+from intraday_inference import run_intraday_inference  # noqa: E402
 
 # ── Configuration ──────────────────────────────────────────────────────────────
 INFERENCE_INTERVAL_SECONDS = int(os.getenv("INFERENCE_INTERVAL_SECONDS", "300"))
@@ -107,10 +108,15 @@ def fetch_and_persist_latest_prices() -> bool:
 
         docs = []
         for coin_id, metrics in data.items():
+            price = metrics.get("usd", 0.0)
             docs.append({
-                "coin":       _COIN_SYMBOL_MAP.get(coin_id, coin_id.upper()),
+                "symbol":     _COIN_SYMBOL_MAP.get(coin_id, coin_id.upper()),
                 "coin_id":    coin_id,
-                "price_usd":  metrics.get("usd", 0.0),
+                "close":      price,
+                "open":       price,
+                "high":       price,
+                "low":        price,
+                "price_usd":  price,   # keep for backwards compat
                 "volume_24h": metrics.get("usd_24h_vol", 0.0),
                 "market_cap": metrics.get("usd_market_cap", 0.0),
                 "change_24h": metrics.get("usd_24h_change", 0.0),
@@ -122,7 +128,7 @@ def fetch_and_persist_latest_prices() -> bool:
             db["live_prices"].insert_many(docs, ordered=False)
             logger.info(
                 "Fetched live prices from CoinGecko: %s",
-                {d["coin"]: f"${d['price_usd']:,.2f}" for d in docs},
+                {d["symbol"]: f"${d['price_usd']:,.2f}" for d in docs},
             )
 
         client.close()
@@ -147,21 +153,56 @@ def run_cycle(consecutive_failures: int) -> int:
     else:
         logger.debug("CoinGecko fetch disabled (SCHEDULER_FETCH_COINGECKO=false).")
 
-    # Step 2: run inference for each coin
+    # Step 2: run 7-day daily inference for each coin
     any_success = False
+    import pymongo as _pymongo
+    _status_client = _pymongo.MongoClient(MONGO_URI, serverSelectionTimeoutMS=3000)
+    _status_db = _status_client["crypto_db"]
     for coin in COINS:
+        symbol = _COIN_SYMBOL_MAP.get(coin, coin.upper())
         try:
             docs = run_inference(coin=coin, mongo_uri=MONGO_URI)
             logger.info(
                 "Inference OK for %s — %d predictions written.", coin, len(docs)
             )
             any_success = True
+            _status_db.inference_status.update_one(
+                {"coin": symbol},
+                {"$set": {"coin": symbol, "status": "completed", "last_run": datetime.now(timezone.utc), "error": None}},
+                upsert=True,
+            )
         except FileNotFoundError as exc:
             logger.error(
                 "Model not trained for %s (run train_lstm.py first): %s", coin, exc
             )
+            _status_db.inference_status.update_one(
+                {"coin": symbol},
+                {"$set": {"coin": symbol, "status": "model_missing", "last_run": datetime.now(timezone.utc), "error": str(exc)}},
+                upsert=True,
+            )
         except Exception as exc:  # noqa: BLE001
             logger.exception("Inference failed for %s: %s", coin, exc)
+            _status_db.inference_status.update_one(
+                {"coin": symbol},
+                {"$set": {"coin": symbol, "status": "error", "last_run": datetime.now(timezone.utc), "error": str(exc)}},
+                upsert=True,
+            )
+    _status_client.close()
+
+    # Step 3: run 5-min next-step inference for each coin
+    for coin in COINS:
+        try:
+            doc = run_intraday_inference(coin=coin, mongo_uri=MONGO_URI)
+            if doc:
+                logger.info(
+                    "5-min inference OK for %s — target %s  $%.4f  %s",
+                    _COIN_SYMBOL_MAP.get(coin, coin.upper()),
+                    doc["target_timestamp"].strftime("%H:%M"),
+                    doc["predicted_close"],
+                    doc["direction"],
+                )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("5-min inference failed for %s (non-fatal): %s", coin, exc)
 
     if not any_success:
         consecutive_failures += 1

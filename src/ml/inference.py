@@ -186,6 +186,15 @@ def _load_last_n_from_live_prices(
                 len(docs), n, coin_symbol,
             )
             return None
+        # Validate canonical field is present before building the array
+        missing_field = [i for i, d in enumerate(docs) if "price_usd" not in d]
+        if missing_field:
+            logger.error(
+                "live_prices schema mismatch: %d/%d docs missing 'price_usd' for %s "
+                "— check producer field names. Falling back to historical_sma.",
+                len(missing_field), len(docs), coin_symbol,
+            )
+            return None
         prices = np.array([d["price_usd"] for d in reversed(docs)], dtype=np.float32)
         logger.info("Loaded %d prices from live_prices (freshest seed).", n)
         return prices
@@ -391,6 +400,25 @@ def _write_predictions(
             doc.get("direction", "—"),
             doc.get("trend_strength", "—"),
             seed_source,
+        )
+
+    # ── Append to prediction_runs (historical log) ─────────────────────────
+    # Keyed by (coin, run_date_day, prediction_date) so each calendar day
+    # produces at most one record per future date, regardless of how many
+    # times the scheduler fires. This lets users review model accuracy once
+    # enough days have passed for predicted dates to become actual dates.
+    run_date_day = now_utc.replace(hour=0, minute=0, second=0, microsecond=0)
+    runs_col = db["prediction_runs"]
+    for doc in docs_written:
+        run_doc = {**doc, "run_date": run_date_day}
+        runs_col.update_one(
+            {
+                "coin": run_doc["coin"],
+                "run_date": run_date_day,
+                "prediction_date": run_doc["prediction_date"],
+            },
+            {"$set": run_doc},
+            upsert=True,
         )
 
     client.close()

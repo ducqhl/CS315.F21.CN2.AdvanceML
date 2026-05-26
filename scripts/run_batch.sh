@@ -40,7 +40,7 @@ log_warn()  { echo -e "${YELLOW}[WARN]${NC}  $*"; }
 log_error() { echo -e "${RED}[ERROR]${NC} $*" >&2; }
 
 # ── Detect mode ───────────────────────────────────────────────────────────────
-SAMPLE_MODE="${SAMPLE_MODE:-0}"
+SAMPLE_MODE="${SAMPLE_MODE:-1}"
 if [[ "${SAMPLE_MODE}" == "1" || "${SAMPLE_MODE,,}" == "true" ]]; then
     DATA_PATH="/app/data/sample/*.csv"
     DATA_LABEL="sample CSVs"
@@ -79,7 +79,7 @@ docker exec \
     -e "DATA_PATH=${DATA_PATH}" \
     -e "MONGO_URI=${MONGO_URI:-mongodb://admin:password123@mongodb:27017/crypto_db?authSource=admin}" \
     "${SPARK_CONTAINER}" \
-    spark-submit \
+    /opt/spark/bin/spark-submit \
         --master "${SPARK_MASTER}" \
         --packages "${PACKAGES_STR}" \
         --conf "spark.sql.session.timeZone=UTC" \

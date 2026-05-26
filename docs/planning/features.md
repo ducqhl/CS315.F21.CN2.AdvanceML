@@ -1,0 +1,7 @@
+- real time price -> candle chart by trading view with technical enable (MA, Booling band)
+- prediction -> line chart, show current price and predict history along with each other + forecast predict for the next hours
+  - modal selection filter -> allow user to select modal saved during reforcement jobs 
+- model management: CRUD new models -> allow trigger re-train manually or a job run every days, disable, enable models in filter button in prediction page
+- background jobs: re-train new models every days and save to storage to be access to able to predict price and trends. every five minutes run predict for all enabled models -> save to DB
+- write all document for architecture, business logics, features design,... to support generate final report for the project
+- deploy to production use

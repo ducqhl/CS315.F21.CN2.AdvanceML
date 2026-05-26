@@ -8,7 +8,9 @@
 set -euo pipefail
 
 KAFKA_CONTAINER="${KAFKA_CONTAINER:-kafka}"
-BOOTSTRAP="localhost:9092"
+# Inside the Kafka container itself localhost:9092 works; override via
+# KAFKA_BOOTSTRAP_SERVERS when running from a different Docker service.
+BOOTSTRAP="${KAFKA_BOOTSTRAP_SERVERS:-localhost:9092}"
 
 # ── Colours for output ────────────────────────────────────────────────────────
 GREEN='\033[0;32m'

@@ -77,9 +77,10 @@ def _ensure_realtime_indexes(collection: Collection) -> None:
         collection.create_index(
             [("coin", 1), ("event_time", -1)],
             name="coin_event_time",
+            unique=True,
             background=True,
         )
-        logger.info("Created compound index coin_event_time on %s", coll_ns)
+        logger.info("Created unique compound index coin_event_time on %s", coll_ns)
 
     if "event_time_ttl" not in existing:
         collection.create_index(
@@ -138,12 +139,21 @@ def write_batch(df: DataFrame, collection_name: str) -> None:
     _coerce_dates(records)
     _add_created_at(records)
 
+    # Upsert keys for batch collections (makes batch job idempotent)
+    _BATCH_UPSERT_KEYS: dict[str, list[str]] = {
+        "daily_stats":    ["symbol", "date"],
+        "historical_sma": ["symbol", "date"],
+        "coin_correlation": ["coin_a", "coin_b"],
+    }
+
     client = _get_client()
     try:
         coll: Collection = client[MONGO_DB][collection_name]
         if collection_name == "realtime_prices":
             _ensure_realtime_indexes(coll)
             _upsert_realtime_prices(coll, records)
+        elif collection_name in _BATCH_UPSERT_KEYS:
+            _upsert_by_keys(coll, records, _BATCH_UPSERT_KEYS[collection_name])
         else:
             coll.insert_many(records, ordered=False)
         logger.info(
@@ -194,6 +204,29 @@ def upsert_alerts(records: list[dict[str, Any]]) -> None:
 # ── Internal helpers ──────────────────────────────────────────────────────────
 
 
+def _upsert_by_keys(
+    coll: Collection, records: list[dict[str, Any]], keys: list[str]
+) -> None:
+    """Generic bulk-upsert using the given fields as the match filter."""
+    operations = [
+        UpdateOne(
+            filter={k: r[k] for k in keys if k in r},
+            update={"$set": r},
+            upsert=True,
+        )
+        for r in records
+        if all(k in r for k in keys)
+    ]
+    if operations:
+        result = coll.bulk_write(operations, ordered=False)
+        logger.debug(
+            "_upsert_by_keys(%s): upserted=%d modified=%d",
+            coll.name,
+            result.upserted_count,
+            result.modified_count,
+        )
+
+
 def _upsert_realtime_prices(
     coll: Collection, records: list[dict[str, Any]]
 ) -> None:
@@ -203,6 +236,13 @@ def _upsert_realtime_prices(
     Upsert key: ``{coin, event_time}`` — the same coin can have many
     timestamps, but we do not want duplicate rows for the same (coin, minute).
     """
+    missing = [i for i, r in enumerate(records) if r.get("event_time") is None]
+    if missing:
+        logger.warning(
+            "_upsert_realtime_prices: %d record(s) missing 'event_time' field "
+            "(indices %s) — skipping to avoid silent duplicates",
+            len(missing), missing[:10],
+        )
     operations = [
         UpdateOne(
             filter={"coin": r["coin"], "event_time": r["event_time"]},

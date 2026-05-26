@@ -260,7 +260,11 @@ def produce_loop(producer: KafkaProducer) -> None:
                 sent += 1
 
             producer.flush()
-            # Persist directly to MongoDB live_prices — bypasses Kafka/Spark latency
+            # Dual-write: Kafka → Spark → realtime_prices  (aggregated, indicators)
+            #             direct  → live_prices             (raw tick, no aggregation)
+            # live_prices canonical schema: {symbol, coin_id, price_usd, volume_24h,
+            #   market_cap, change_24h, timestamp, source}.
+            # Inference and the API read `price_usd`; `close` is kept for OHLC compat.
             write_to_live_prices(records_this_cycle)
             logger.info(
                 "Cycle %d — produced %d records to '%s' at %s (ohlc=%s)",

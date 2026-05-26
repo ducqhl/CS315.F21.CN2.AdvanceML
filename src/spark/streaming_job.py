@@ -51,6 +51,7 @@ from pyspark.sql.functions import (
     avg,
     col,
     from_json,
+    last,
     lit,
     max as spark_max,
     min as spark_min,
@@ -187,6 +188,10 @@ def _write_window_agg(batch_df: DataFrame, batch_id: int) -> None:
         col("coin"),
         col("window.start").alias("event_time"),
         col("window.end").alias("window_end"),
+        col("price_usd"),
+        col("volume_24h"),
+        col("market_cap"),
+        col("change_24h"),
         col("sma_5"),
         col("sma_20"),
         col("high_window"),
@@ -221,6 +226,10 @@ def start_window_agg_query(watermarked_df: DataFrame) -> object:
             spark_min("price_usd").alias("low_window"),
             spark_sum("volume_24h").alias("total_volume"),
             avg("volume_24h").alias("avg_volume"),
+            last("price_usd").alias("price_usd"),
+            last("volume_24h").alias("volume_24h"),
+            last("market_cap").alias("market_cap"),
+            last("change_24h").alias("change_24h"),
         )
     )
 
