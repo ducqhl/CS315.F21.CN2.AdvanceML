@@ -226,3 +226,65 @@ export const fetchIntradayDates = (coin: string) =>
 
 export const fetchIntraday = (coin: string, params: { date?: string; range?: IntradayRange } = {}) =>
   api.get<IntradayResponse>(`/intraday/${coin}`, { params }).then(r => r.data);
+
+// ── Model Registry ─────────────────────────────────────────────────────────────
+export interface ModelMetrics {
+  rmse?: number;
+  mae?: number;
+  f1_macro?: number;
+  direction_accuracy_pct?: number;
+  [key: string]: unknown;
+}
+
+export interface ModelRegistryEntry {
+  model_id: string;
+  coin: string;
+  version_tag: string;
+  file_path: string;
+  trained_at: string;
+  metrics: ModelMetrics;
+  enabled: boolean;
+  epochs_trained?: number;
+  deleted_at?: string | null;
+}
+
+export interface TrainJobRequest {
+  coin: 'bitcoin' | 'dogecoin';
+  epochs?: number;
+  model_name?: string;
+}
+
+export interface TrainJobResponse {
+  job_id: string;
+  status: 'started' | 'error';
+  message?: string;
+}
+
+export interface TrainJobStatus {
+  job_id: string;
+  coin: string;
+  status: 'started' | 'running' | 'completed' | 'failed';
+  started_at: string;
+  completed_at?: string;
+  error?: string;
+  model_id?: string;
+}
+
+export const fetchModels = (coin?: string) =>
+  api.get<ModelRegistryEntry[]>('/models', { params: coin ? { coin } : {} }).then(r => r.data);
+
+export const triggerTrain = (req: TrainJobRequest) =>
+  api.post<TrainJobResponse>('/models/train', req).then(r => r.data);
+
+export const toggleModel = (modelId: string) =>
+  api.patch<ModelRegistryEntry>(`/models/${encodeURIComponent(modelId)}/toggle`).then(r => r.data);
+
+export const deleteModel = (modelId: string) =>
+  api.delete<{ ok: boolean }>(`/models/${encodeURIComponent(modelId)}`).then(r => r.data);
+
+export const fetchTrainJobStatus = (jobId: string) =>
+  api.get<TrainJobStatus>(`/models/train/${encodeURIComponent(jobId)}/status`).then(r => r.data);
+
+// ── Update fetchPredictions to accept optional modelId ────────────────────────
+export const fetchPredictionsForModel = (coin: string, modelId?: string) =>
+  api.get<PredictionsResponse>(`/predictions/${coin}`, { params: modelId ? { model_id: modelId } : {} }).then(r => r.data);

@@ -23,8 +23,12 @@ import hashlib
 import hmac
 import json
 import os
+import subprocess
+import sys
+import uuid
 from datetime import datetime, timedelta, timezone
-from typing import Any
+from pathlib import Path
+from typing import Any, Optional
 
 import numpy as np
 import pymongo
@@ -348,11 +352,18 @@ def get_historical(
 
 
 @app.get("/api/predictions/{coin}")
-def get_predictions(coin: str, _user: dict = Depends(get_current_user)) -> dict:
+def get_predictions(
+    coin: str,
+    model_id: Optional[str] = Query(default=None),
+    _user: dict = Depends(get_current_user),
+) -> dict:
     symbol = _resolve_symbol(coin)
     today = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+    query: dict = {"coin": symbol, "prediction_date": {"$gte": today}}
+    if model_id:
+        query["model_id"] = model_id
     cursor = db.predictions.find(
-        {"coin": symbol, "prediction_date": {"$gte": today}},
+        query,
         sort=[("prediction_date", 1)],
         projection={"_id": 0},
     )
@@ -364,14 +375,32 @@ def get_predictions(coin: str, _user: dict = Depends(get_current_user)) -> dict:
     serialized = []
     for d in docs:
         row = _serialize(d)
-        for field in ("direction", "direction_prob", "trend_strength"):
+        for field in ("direction", "direction_prob", "trend_strength", "confidence"):
             if field in d:
                 row[field] = d[field]
         serialized.append(row)
+
+    # ── Trend summary (primary signal) ──────────────────────────────────────────
+    directions = [d.get("direction") for d in docs if d.get("direction")]
+    dir_counts = {k: directions.count(k) for k in ("UP", "DOWN", "FLAT")}
+    dominant_direction = max(dir_counts, key=dir_counts.get) if directions else None
+    avg_confidence = (
+        float(np.mean([d["direction_prob"] for d in docs if d.get("direction_prob") is not None]))
+        if any(d.get("direction_prob") is not None for d in docs) else None
+    )
+    strengths = [d.get("trend_strength") for d in docs if d.get("trend_strength")]
+    dominant_strength = max(set(strengths), key=strengths.count) if strengths else None
+
     return {
         "coin": symbol,
         "model_version": model_version,
         "predictions": serialized,
+        # Trend-first summary fields
+        "dominant_direction": dominant_direction,
+        "direction_counts": dir_counts,
+        "avg_confidence": round(avg_confidence, 4) if avg_confidence is not None else None,
+        "dominant_strength": dominant_strength,
+        # Price fields (secondary)
         "next_day_price": prices[0] if prices else None,
         "seven_day_high": max(prices) if prices else None,
         "seven_day_low": min(prices) if prices else None,
@@ -426,7 +455,29 @@ def get_prediction_history(
     )
     actual_map: dict = {doc["date"]: doc["avg_close"] for doc in actuals_cursor}
 
-    # ── Enrich each run record with actual price + error ─────────────────────
+    # ── Build actual direction lookup from historical_sma ───────────────────
+    # Compute actual direction: sign of log_return between consecutive closes
+    # Needed to check if predicted direction matched reality
+    actual_sma_docs = list(db.historical_sma.find(
+        {"symbol": symbol},
+        sort=[("date", 1)],
+        projection={"_id": 0, "date": 1, "avg_close": 1},
+    ))
+    actual_direction_map: dict = {}
+    for i in range(1, len(actual_sma_docs)):
+        prev_close = actual_sma_docs[i - 1]["avg_close"]
+        curr_close = actual_sma_docs[i]["avg_close"]
+        if prev_close and curr_close and prev_close > 0:
+            import math
+            lr = math.log(curr_close / prev_close)
+            if lr > 0.01:
+                actual_direction_map[actual_sma_docs[i]["date"]] = "UP"
+            elif lr < -0.01:
+                actual_direction_map[actual_sma_docs[i]["date"]] = "DOWN"
+            else:
+                actual_direction_map[actual_sma_docs[i]["date"]] = "FLAT"
+
+    # ── Enrich each run record with actual price + error + direction accuracy ─
     enriched = []
     for r in runs:
         d = _serialize(r)
@@ -437,6 +488,13 @@ def get_prediction_history(
             predicted = r.get("predicted_price")
             if predicted:
                 d["error_pct"] = round((predicted - actual) / actual * 100, 4)
+        # Direction accuracy for this step
+        actual_dir = actual_direction_map.get(pred_date)
+        if actual_dir is not None:
+            d["actual_direction"] = actual_dir
+            pred_dir = r.get("direction")
+            if pred_dir:
+                d["direction_correct"] = (pred_dir == actual_dir)
         enriched.append(d)
 
     return enriched
@@ -662,3 +720,111 @@ def get_inference_status(_user: dict = Depends(get_current_user)) -> dict:
         "interval_seconds": interval,
         "timestamp": datetime.now(timezone.utc).isoformat(),
     }
+
+
+# ── Model Registry ────────────────────────────────────────────────────────────
+
+@app.get("/api/models")
+def list_models(
+    coin: Optional[str] = Query(default=None),
+    _user: dict = Depends(get_current_user),
+) -> list[dict]:
+    """List model registry entries, optionally filtered by coin id ('bitcoin' or 'dogecoin')."""
+    query: dict = {}
+    if coin:
+        # Accept both coin_id ('bitcoin') and symbol ('BTC')
+        sym = COIN_SYMBOL_MAP.get(coin.lower())
+        if sym:
+            query["coin"] = sym
+        else:
+            raise HTTPException(status_code=400, detail=f"Unknown coin: {coin}")
+    docs = list(db.model_registry.find(query, {"_id": 0}, sort=[("trained_at", -1)]))
+    return [_serialize(d) for d in docs]
+
+
+class TrainRequest(BaseModel):
+    coin: str  # 'bitcoin' or 'dogecoin'
+    epochs: int = 30
+    model_name: Optional[str] = None
+
+
+@app.post("/api/models/train")
+def trigger_train(req: TrainRequest, _user: dict = Depends(get_current_user)) -> dict:
+    """Trigger an asynchronous LSTM training job."""
+    _resolve_symbol(req.coin)  # validate coin
+
+    job_id = str(uuid.uuid4())[:8]
+    now = datetime.now(timezone.utc)
+
+    # Write initial job status
+    db.training_jobs.insert_one({
+        "job_id": job_id,
+        "coin": req.coin,
+        "status": "started",
+        "started_at": now,
+        "completed_at": None,
+        "error": None,
+        "model_id": None,
+    })
+
+    # Resolve path to train_lstm.py — works both in container and locally
+    _ml_dir = Path(os.environ.get("ML_SRC_DIR", "/app"))
+    train_script = _ml_dir / "train_lstm.py"
+    if not train_script.exists():
+        # Fallback: look relative to this file
+        train_script = Path(__file__).resolve().parent.parent / "ml" / "train_lstm.py"
+
+    cmd = [
+        sys.executable, str(train_script),
+        "--coin", req.coin,
+        "--epochs", str(req.epochs),
+        "--mongo-uri", os.environ.get("MONGO_URI", "mongodb://admin:password123@localhost:27017/crypto_db?authSource=admin"),
+        "--job-id", job_id,
+    ]
+    if req.model_name:
+        cmd += ["--model-name", req.model_name]
+
+    try:
+        subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except Exception as exc:
+        db.training_jobs.update_one(
+            {"job_id": job_id},
+            {"$set": {"status": "failed", "error": str(exc), "completed_at": datetime.now(timezone.utc)}},
+        )
+        raise HTTPException(status_code=500, detail=f"Failed to start training process: {exc}") from exc
+
+    return {"job_id": job_id, "status": "started"}
+
+
+@app.get("/api/models/train/{job_id}/status")
+def get_train_status(job_id: str, _user: dict = Depends(get_current_user)) -> dict:
+    doc = db.training_jobs.find_one({"job_id": job_id}, {"_id": 0})
+    if not doc:
+        raise HTTPException(status_code=404, detail=f"Training job {job_id} not found")
+    return _serialize(doc)
+
+
+@app.patch("/api/models/{model_id}/toggle")
+def toggle_model(model_id: str, _user: dict = Depends(get_current_user)) -> dict:
+    doc = db.model_registry.find_one({"model_id": model_id}, {"_id": 0})
+    if not doc:
+        raise HTTPException(status_code=404, detail=f"Model {model_id} not found")
+    new_enabled = not doc.get("enabled", True)
+    db.model_registry.update_one(
+        {"model_id": model_id},
+        {"$set": {"enabled": new_enabled, "updated_at": datetime.now(timezone.utc)}},
+    )
+    doc["enabled"] = new_enabled
+    return _serialize(doc)
+
+
+@app.delete("/api/models/{model_id}")
+def delete_model(model_id: str, _user: dict = Depends(get_current_user)) -> dict:
+    doc = db.model_registry.find_one({"model_id": model_id}, {"_id": 0})
+    if not doc:
+        raise HTTPException(status_code=404, detail=f"Model {model_id} not found")
+    db.model_registry.update_one(
+        {"model_id": model_id},
+        {"$set": {"deleted_at": datetime.now(timezone.utc), "enabled": False}},
+    )
+    return {"ok": True, "model_id": model_id}

@@ -1,0 +1,121 @@
+# docker/docker-compose.prod.yml
+# Production overlay — apply on top of docker-compose.yml:
+#
+#   docker compose \
+#     -f docker/docker-compose.yml \
+#     -f docker/docker-compose.prod.yml \
+#     up -d --build
+#
+# Changes from base:
+#   - restart: always for all services
+#   - Resource limits (CPU + memory)
+#   - Nginx reverse proxy on port 80 (routes /api → FastAPI, / → React)
+#   - Dev volume mounts removed from api + frontend
+#   - ML_SRC_DIR env var for train_lstm.py path resolution
+
+services:
+
+  # ── Overrides: restart policy + resource limits ────────────────────────────
+
+  zookeeper:
+    restart: always
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: "512m"
+
+  kafka:
+    restart: always
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: "1g"
+
+  kafka-ui:
+    restart: always
+
+  mongodb:
+    restart: always
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: "1g"
+
+  producer:
+    restart: always
+    deploy:
+      resources:
+        limits:
+          cpus: "0.25"
+          memory: "256m"
+
+  spark-master:
+    restart: always
+
+  spark-worker:
+    restart: always
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: "2g"
+
+  dashboard:
+    restart: always
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: "512m"
+
+  inference_scheduler:
+    restart: always
+    environment:
+      ML_SRC_DIR: /app
+      RETRAIN_INTERVAL_DAYS: "7"
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: "1g"
+
+  api:
+    restart: always
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: "512m"
+
+  frontend:
+    restart: always
+    # In production, the frontend is served by Nginx below,
+    # so we don't need to expose port 3000 directly.
+    ports: !reset []
+    expose:
+      - "80"
+
+  # ── Nginx reverse proxy ────────────────────────────────────────────────────
+  nginx:
+    image: nginx:1.27-alpine
+    container_name: crypto-nginx
+    restart: always
+    depends_on:
+      - api
+      - frontend
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ../nginx/nginx.prod.conf:/etc/nginx/nginx.conf:ro
+      - ../nginx/certbot/conf:/etc/letsencrypt:ro
+      - ../nginx/certbot/www:/var/www/certbot:ro
+    healthcheck:
+      test: ["CMD-SHELL", "nginx -t && curl -sf http://localhost/api/health > /dev/null"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s

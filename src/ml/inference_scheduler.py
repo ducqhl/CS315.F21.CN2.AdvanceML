@@ -59,9 +59,13 @@ MONGO_URI = os.getenv(
 )
 COINGECKO_API_KEY = os.getenv("COINGECKO_API_KEY", "")
 SCHEDULER_FETCH_COINGECKO = os.getenv("SCHEDULER_FETCH_COINGECKO", "true").lower() == "true"
+RETRAIN_INTERVAL_DAYS = int(os.getenv("RETRAIN_INTERVAL_DAYS", "7"))
 
 COINS = ["bitcoin", "dogecoin"]
 _COIN_SYMBOL_MAP = {"bitcoin": "BTC", "dogecoin": "DOGE"}
+
+# Track which cycle last triggered retrain check (avoid hammering every 5-min cycle)
+_last_retrain_check: dict[str, datetime] = {}
 
 # ── Logging ────────────────────────────────────────────────────────────────────
 logging.basicConfig(
@@ -139,6 +143,80 @@ def fetch_and_persist_latest_prices() -> bool:
         return False
 
 
+# ── Auto-retrain ───────────────────────────────────────────────────────────────
+
+def check_and_retrain(coin: str) -> None:
+    """
+    Check whether the latest enabled model for *coin* is older than
+    RETRAIN_INTERVAL_DAYS days.  If so, trigger a new training run.
+
+    The retrain check is rate-limited to at most once per 6 hours per coin
+    to avoid flooding the scheduler with repeated checks during frequent cycles.
+    """
+    global _last_retrain_check
+
+    # Rate-limit: skip if last check was < 6h ago
+    now = datetime.now(timezone.utc)
+    last_check = _last_retrain_check.get(coin)
+    if last_check and (now - last_check).total_seconds() < 21_600:
+        return
+    _last_retrain_check[coin] = now
+
+    symbol = _COIN_SYMBOL_MAP.get(coin, coin.upper())
+    try:
+        import pymongo as _pymongo
+        client = _pymongo.MongoClient(MONGO_URI, serverSelectionTimeoutMS=3000)
+        db = client["crypto_db"]
+
+        # Find newest enabled model for this coin
+        doc = db.model_registry.find_one(
+            {"coin": symbol, "enabled": True, "deleted_at": None},
+            sort=[("trained_at", -1)],
+        )
+        client.close()
+
+        needs_retrain = False
+        if doc is None:
+            logger.info("No registered model found for %s — triggering initial training.", coin)
+            needs_retrain = True
+        else:
+            trained_at = doc.get("trained_at")
+            if trained_at and (now - trained_at).days >= RETRAIN_INTERVAL_DAYS:
+                logger.info(
+                    "Model for %s is %d days old (threshold=%d) — triggering retrain.",
+                    coin, (now - trained_at).days, RETRAIN_INTERVAL_DAYS,
+                )
+                needs_retrain = True
+            else:
+                days_old = (now - trained_at).days if trained_at else "?"
+                logger.debug("Model for %s is %s days old — no retrain needed.", coin, days_old)
+
+        if needs_retrain:
+            _trigger_background_train(coin)
+
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Retrain check failed for %s (non-fatal): %s", coin, exc)
+
+
+def _trigger_background_train(coin: str) -> None:
+    """Spawn a background training subprocess."""
+    import subprocess as _sp
+    from pathlib import Path as _Path
+
+    train_script = _Path(__file__).resolve().parent / "train_lstm.py"
+    cmd = [
+        sys.executable, str(train_script),
+        "--coin", coin,
+        "--epochs", "50",
+        "--mongo-uri", MONGO_URI,
+    ]
+    logger.info("Spawning background training for %s: %s", coin, " ".join(cmd))
+    try:
+        _sp.Popen(cmd, stdout=_sp.DEVNULL, stderr=_sp.DEVNULL)
+    except Exception as exc:  # noqa: BLE001
+        logger.error("Failed to spawn training process for %s: %s", coin, exc)
+
+
 # ── Inference cycle ────────────────────────────────────────────────────────────
 
 def run_cycle(consecutive_failures: int) -> int:
@@ -154,39 +232,66 @@ def run_cycle(consecutive_failures: int) -> int:
         logger.debug("CoinGecko fetch disabled (SCHEDULER_FETCH_COINGECKO=false).")
 
     # Step 2: run 7-day daily inference for each coin
+    # Fan out across all enabled models in the registry (+ default if registry empty)
     any_success = False
     import pymongo as _pymongo
     _status_client = _pymongo.MongoClient(MONGO_URI, serverSelectionTimeoutMS=3000)
     _status_db = _status_client["crypto_db"]
+
     for coin in COINS:
         symbol = _COIN_SYMBOL_MAP.get(coin, coin.upper())
+        # Fetch all enabled models for this coin
         try:
-            docs = run_inference(coin=coin, mongo_uri=MONGO_URI)
-            logger.info(
-                "Inference OK for %s — %d predictions written.", coin, len(docs)
-            )
-            any_success = True
-            _status_db.inference_status.update_one(
-                {"coin": symbol},
-                {"$set": {"coin": symbol, "status": "completed", "last_run": datetime.now(timezone.utc), "error": None}},
-                upsert=True,
-            )
-        except FileNotFoundError as exc:
-            logger.error(
-                "Model not trained for %s (run train_lstm.py first): %s", coin, exc
-            )
-            _status_db.inference_status.update_one(
-                {"coin": symbol},
-                {"$set": {"coin": symbol, "status": "model_missing", "last_run": datetime.now(timezone.utc), "error": str(exc)}},
-                upsert=True,
-            )
-        except Exception as exc:  # noqa: BLE001
-            logger.exception("Inference failed for %s: %s", coin, exc)
-            _status_db.inference_status.update_one(
-                {"coin": symbol},
-                {"$set": {"coin": symbol, "status": "error", "last_run": datetime.now(timezone.utc), "error": str(exc)}},
-                upsert=True,
-            )
+            enabled_models = list(_status_db.model_registry.find(
+                {"coin": symbol, "enabled": True, "deleted_at": None},
+                {"model_id": 1, "file_path": 1, "_id": 0},
+                sort=[("trained_at", -1)],
+            ))
+        except Exception:
+            enabled_models = []
+
+        if not enabled_models:
+            # No registry entries — run default inference (loads v2/v1 from disk)
+            enabled_models = [{"model_id": None, "file_path": None}]
+
+        for model_entry in enabled_models:
+            mid = model_entry.get("model_id")
+            fp  = model_entry.get("file_path")
+            try:
+                from pathlib import Path as _Path
+                docs = run_inference(
+                    coin=coin,
+                    mongo_uri=MONGO_URI,
+                    model_path=_Path(fp) if fp else None,
+                    model_id=mid,
+                )
+                logger.info(
+                    "Inference OK for %s (model=%s) — %d predictions written.",
+                    coin, mid or "default", len(docs),
+                )
+                any_success = True
+                _status_db.inference_status.update_one(
+                    {"coin": symbol},
+                    {"$set": {"coin": symbol, "status": "completed", "last_run": datetime.now(timezone.utc), "error": None}},
+                    upsert=True,
+                )
+            except FileNotFoundError as exc:
+                logger.error(
+                    "Model not trained for %s (run train_lstm.py first): %s", coin, exc
+                )
+                _status_db.inference_status.update_one(
+                    {"coin": symbol},
+                    {"$set": {"coin": symbol, "status": "model_missing", "last_run": datetime.now(timezone.utc), "error": str(exc)}},
+                    upsert=True,
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.exception("Inference failed for %s (model=%s): %s", coin, mid, exc)
+                _status_db.inference_status.update_one(
+                    {"coin": symbol},
+                    {"$set": {"coin": symbol, "status": "error", "last_run": datetime.now(timezone.utc), "error": str(exc)}},
+                    upsert=True,
+                )
+
     _status_client.close()
 
     # Step 3: run 5-min next-step inference for each coin
@@ -203,6 +308,10 @@ def run_cycle(consecutive_failures: int) -> int:
                 )
         except Exception as exc:  # noqa: BLE001
             logger.warning("5-min inference failed for %s (non-fatal): %s", coin, exc)
+
+    # Step 4: check whether any model needs re-training (rate-limited to ~once/6h)
+    for coin in COINS:
+        check_and_retrain(coin)
 
     if not any_success:
         consecutive_failures += 1
@@ -222,8 +331,9 @@ def run_cycle(consecutive_failures: int) -> int:
 
 if __name__ == "__main__":
     logger.info(
-        "Starting inference scheduler — interval=%ds, coins=%s, fetch_coingecko=%s, mongo=%s",
+        "Starting inference scheduler — interval=%ds, retrain_days=%d, coins=%s, fetch_coingecko=%s, mongo=%s",
         INFERENCE_INTERVAL_SECONDS,
+        RETRAIN_INTERVAL_DAYS,
         COINS,
         SCHEDULER_FETCH_COINGECKO,
         MONGO_URI.split("@")[-1] if "@" in MONGO_URI else MONGO_URI,  # hide credentials

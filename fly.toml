@@ -1,0 +1,53 @@
+# fly.toml — Fly.io deployment configuration for the FastAPI backend
+# Deploy with: fly deploy
+#
+# Prerequisites:
+#   1. fly launch --name crypto-api --no-deploy  (first time)
+#   2. fly secrets set JWT_SECRET_KEY=$(openssl rand -hex 32)
+#   3. fly secrets set MONGO_URI="mongodb+srv://..."
+#   4. fly secrets set ADMIN_PASSWORD="<strong-password>"
+#   5. fly deploy
+
+app = "crypto-api"
+primary_region = "sin"  # Singapore — change to nearest region
+
+[build]
+  dockerfile = "src/api/Dockerfile"
+  build_target = ""
+
+[env]
+  PORT = "8000"
+  ADMIN_USERNAME = "admin"
+  INFERENCE_INTERVAL_SECONDS = "300"
+  RETRAIN_INTERVAL_DAYS = "7"
+
+[http_service]
+  internal_port = 8000
+  force_https = true
+  auto_stop_machines = true
+  auto_start_machines = true
+  min_machines_running = 0
+  processes = ["app"]
+
+  [[http_service.checks]]
+    interval = "30s"
+    timeout = "5s"
+    grace_period = "10s"
+    method = "GET"
+    path = "/api/health"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "512mb"
+
+# ── Frontend deployment (separate app) ────────────────────────────────────────
+# To deploy the React frontend to Fly.io as a second app:
+#
+#   cd src/frontend
+#   fly launch --name crypto-frontend --no-deploy
+#   # Set VITE_API_URL to your API fly app URL:
+#   fly secrets set VITE_API_URL=https://crypto-api.fly.dev/api
+#   fly deploy
+#
+# Alternatively, use Vercel (simpler for static sites):
+#   cd src/frontend && npx vercel --prod

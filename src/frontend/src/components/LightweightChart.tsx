@@ -178,19 +178,36 @@ export interface SmaPoint {
   value: number;
 }
 
+export interface BBBands {
+  upper: SmaPoint[];
+  middle: SmaPoint[];
+  lower: SmaPoint[];
+}
+
 interface CandlestickChartProps {
   data: CandlePoint[];
   sma20?: SmaPoint[];
   sma50?: SmaPoint[];
+  bb?: BBBands;
+  showSma20?: boolean;
+  showSma50?: boolean;
+  showBB?: boolean;
   height?: number;
 }
 
-export function CandlestickChart({ data, sma20, sma50, height = 400 }: CandlestickChartProps) {
+export function CandlestickChart({
+  data, sma20, sma50, bb,
+  showSma20 = true, showSma50 = true, showBB = false,
+  height = 400,
+}: CandlestickChartProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const chartRef     = useRef<IChartApi | null>(null);
   const candleRef    = useRef<ISeriesApi<'Candlestick'> | null>(null);
   const sma20Ref     = useRef<ISeriesApi<'Line'> | null>(null);
   const sma50Ref     = useRef<ISeriesApi<'Line'> | null>(null);
+  const bbUpperRef   = useRef<ISeriesApi<'Line'> | null>(null);
+  const bbMiddleRef  = useRef<ISeriesApi<'Line'> | null>(null);
+  const bbLowerRef   = useRef<ISeriesApi<'Line'> | null>(null);
 
   useEffect(() => {
     const el = containerRef.current;
@@ -218,6 +235,20 @@ export function CandlestickChart({ data, sma20, sma50, height = 400 }: Candlesti
       crosshairMarkerVisible: false, lastValueVisible: true, priceLineVisible: false,
     });
 
+    // Bollinger Bands — upper/lower use same red-ish tint, middle is gold dashed
+    bbUpperRef.current = chart.addLineSeries({
+      color: '#FF386480', lineWidth: 1, lineStyle: LineStyle.Dashed,
+      crosshairMarkerVisible: false, lastValueVisible: false, priceLineVisible: false,
+    });
+    bbMiddleRef.current = chart.addLineSeries({
+      color: '#FFB02060', lineWidth: 1, lineStyle: LineStyle.Dotted,
+      crosshairMarkerVisible: false, lastValueVisible: false, priceLineVisible: false,
+    });
+    bbLowerRef.current = chart.addLineSeries({
+      color: '#FF386480', lineWidth: 1, lineStyle: LineStyle.Dashed,
+      crosshairMarkerVisible: false, lastValueVisible: false, priceLineVisible: false,
+    });
+
     const ro = new ResizeObserver(entries => {
       const w = entries[0]?.contentRect.width;
       if (w && chartRef.current) chartRef.current.applyOptions({ width: w });
@@ -227,6 +258,7 @@ export function CandlestickChart({ data, sma20, sma50, height = 400 }: Candlesti
     return () => { ro.disconnect(); chart.remove(); chartRef.current = null; };
   }, [height]);
 
+  // Update data
   useEffect(() => {
     if (!candleRef.current) return;
     if (data.length) candleRef.current.setData(data.map(d => ({ ...d, time: d.time as Time })));
@@ -234,8 +266,27 @@ export function CandlestickChart({ data, sma20, sma50, height = 400 }: Candlesti
       sma20Ref.current.setData(sma20.map(d => ({ time: d.time as Time, value: d.value })));
     if (sma50?.length && sma50Ref.current)
       sma50Ref.current.setData(sma50.map(d => ({ time: d.time as Time, value: d.value })));
+    if (bb?.upper.length && bbUpperRef.current)
+      bbUpperRef.current.setData(bb.upper.map(d => ({ time: d.time as Time, value: d.value })));
+    if (bb?.middle.length && bbMiddleRef.current)
+      bbMiddleRef.current.setData(bb.middle.map(d => ({ time: d.time as Time, value: d.value })));
+    if (bb?.lower.length && bbLowerRef.current)
+      bbLowerRef.current.setData(bb.lower.map(d => ({ time: d.time as Time, value: d.value })));
     chartRef.current?.timeScale().fitContent();
-  }, [data, sma20, sma50]);
+  }, [data, sma20, sma50, bb]);
+
+  // Toggle visibility
+  useEffect(() => {
+    sma20Ref.current?.applyOptions({ visible: showSma20 });
+  }, [showSma20]);
+  useEffect(() => {
+    sma50Ref.current?.applyOptions({ visible: showSma50 });
+  }, [showSma50]);
+  useEffect(() => {
+    bbUpperRef.current?.applyOptions({ visible: showBB });
+    bbMiddleRef.current?.applyOptions({ visible: showBB });
+    bbLowerRef.current?.applyOptions({ visible: showBB });
+  }, [showBB]);
 
   return <div ref={containerRef} style={{ width: '100%', height }} />;
 }
