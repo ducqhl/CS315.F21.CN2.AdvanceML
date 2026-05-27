@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import {
   LayoutDashboard, Activity, BarChart2, Brain, GitBranch,
-  Zap, LogOut,
+  Zap, LogOut, Settings2,
 } from 'lucide-react';
 import { AuthProvider, useAuth } from './auth/AuthContext';
 import LoginPage from './pages/LoginPage';
@@ -10,10 +10,11 @@ import RealtimePage from './pages/RealtimePage';
 import TechnicalPage from './pages/TechnicalPage';
 import PredictionsPage from './pages/PredictionsPage';
 import CorrelationPage from './pages/CorrelationPage';
+import ModelManagementPage from './pages/ModelManagementPage';
 import { fetchStats } from './api/client';
 import './index.css';
 
-type Page = 'dashboard' | 'realtime' | 'technical' | 'predictions' | 'correlation';
+type Page = 'dashboard' | 'realtime' | 'technical' | 'predictions' | 'correlation' | 'models';
 type Coin = 'bitcoin' | 'dogecoin';
 
 const NAV_ITEMS: { id: Page; label: string; icon: React.ReactNode; badge?: string }[] = [
@@ -22,6 +23,7 @@ const NAV_ITEMS: { id: Page; label: string; icon: React.ReactNode; badge?: strin
   { id: 'technical',    label: 'Technical',        icon: <BarChart2 size={16} /> },
   { id: 'predictions',  label: 'Predictions',      icon: <Brain size={16} />, badge: 'v2' },
   { id: 'correlation',  label: 'Correlation',      icon: <GitBranch size={16} /> },
+  { id: 'models',       label: 'Model Mgmt',       icon: <Settings2 size={16} /> },
 ];
 
 function AppShell() {
@@ -231,6 +233,7 @@ function AppShell() {
         {page === 'technical'    && <TechnicalPage coin={coin} />}
         {page === 'predictions'  && <PredictionsPage coin={coin} />}
         {page === 'correlation'  && <CorrelationPage />}
+        {page === 'models'       && <ModelManagementPage coin={coin} />}
       </main>
     </div>
   );

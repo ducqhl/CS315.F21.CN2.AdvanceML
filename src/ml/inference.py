@@ -215,22 +215,23 @@ def _load_last_n_from_csv(coin: str, n: int) -> np.ndarray:
 
 # ── Strength derivation ────────────────────────────────────────────────────────
 
-def _derive_strength(log_ret: float, scale0: float) -> str:
-    """Map a log-return value to trend strength label.
+def _derive_strength_from_margin(margin: float) -> str:
+    """Map the softmax probability margin (top1 − top2) to trend strength.
+
+    A large margin means the model is confident in its direction call.
 
     Parameters
     ----------
-    log_ret : the predicted log return for one step (un-scaled).
-    scale0  : scaler.scale_[0] — standard deviation of log_return_1d from training.
+    margin : float in [0, 1] — difference between the highest and second-highest
+             class probability from the direction head softmax output.
 
     Returns
     -------
     "STRONG" | "MODERATE" | "WEAK"
     """
-    abs_ret = abs(log_ret)
-    if abs_ret > 2 * scale0:
+    if margin > 0.4:
         return "STRONG"
-    elif abs_ret > scale0:
+    elif margin > 0.2:
         return "MODERATE"
     else:
         return "WEAK"
@@ -316,19 +317,21 @@ def _mimo_predict_full(
 
         directions = [_DIR_CLASSES[int(c)] for c in dir_classes]
         dir_probs  = [float(dir_probs_arr[i, dir_classes[i]]) for i in range(horizon)]
+
+        # Trend strength from probability margin (top1 − top2 probability)
+        sorted_probs = np.sort(dir_probs_arr, axis=1)   # (horizon, 3) ascending
+        margins = sorted_probs[:, -1] - sorted_probs[:, -2]  # top1 - top2
+        strengths = [_derive_strength_from_margin(float(m)) for m in margins]
     else:
         # v1 fallback: no direction head
         log_rets_norm = result.squeeze(0).cpu().numpy()
         directions = ["FLAT"] * horizon
-        dir_probs  = [0.5] * horizon
+        dir_probs  = [1 / 3] * horizon   # random-chance confidence for 3-class
+        strengths  = ["WEAK"] * horizon
 
     # Un-standardise
     log_rets   = log_rets_norm * scaler.scale_[0] + scaler.mean_[0]
     prices_usd = last_price_usd * np.exp(np.cumsum(log_rets))
-
-    # Trend strength from magnitude of log_return per step
-    scale0 = float(scaler.scale_[0])
-    strengths = [_derive_strength(float(lr), scale0) for lr in log_rets]
 
     return prices_usd.astype(np.float32), directions, dir_probs, strengths
 
@@ -343,6 +346,7 @@ def _write_predictions(
     directions: list[str] | None = None,
     dir_probs: list[float] | None = None,
     strengths: list[str] | None = None,
+    model_id: str | None = None,
 ) -> list[dict]:
     """
     Write 7-day forecast to  predictions  collection (upsert on coin + prediction_date).
@@ -370,17 +374,27 @@ def _write_predictions(
             now_utc.replace(hour=0, minute=0, second=0, microsecond=0)
             + timedelta(days=offset)
         )
+        # confidence comes from the direction head's softmax probability;
+        # fall back to CONFIDENCE constant only when no direction head (v1 model).
+        idx = offset - 1
+        confidence = (
+            dir_probs[idx]
+            if dir_probs is not None and idx < len(dir_probs)
+            else CONFIDENCE
+        )
         doc = {
             "coin":            coin_symbol,
             "predicted_price": float(price),
             "prediction_date": prediction_date,
-            "confidence":      CONFIDENCE,
+            "confidence":      confidence,
             "model_version":   MODEL_VERSION,
             "seed_source":     seed_source,
             "created_at":      now_utc,
         }
+        # Tag with model_id if provided (enables per-model filtering on the API)
+        if model_id:
+            doc["model_id"] = model_id
         # Add v2 fields when available
-        idx = offset - 1
         if directions is not None and idx < len(directions):
             doc["direction"] = directions[idx]
         if dir_probs is not None and idx < len(dir_probs):
@@ -388,11 +402,11 @@ def _write_predictions(
         if strengths is not None and idx < len(strengths):
             doc["trend_strength"] = strengths[idx]
 
-        collection.update_one(
-            {"coin": doc["coin"], "prediction_date": doc["prediction_date"]},
-            {"$set": doc},
-            upsert=True,
-        )
+        # Upsert key: when model_id present, allow multiple models' predictions to coexist
+        upsert_filter = {"coin": doc["coin"], "prediction_date": doc["prediction_date"]}
+        if model_id:
+            upsert_filter["model_id"] = model_id
+        collection.update_one(upsert_filter, {"$set": doc}, upsert=True)
         docs_written.append(doc)
         logger.info(
             "Upserted prediction: %s  date=%s  price=$%.4f  dir=%s  strength=%s  seed=%s",
@@ -427,7 +441,12 @@ def _write_predictions(
 
 # ── Main entry-point ───────────────────────────────────────────────────────────
 
-def run_inference(coin: str = "bitcoin", mongo_uri: str | None = None) -> list[dict]:
+def run_inference(
+    coin: str = "bitcoin",
+    mongo_uri: str | None = None,
+    model_path: Path | None = None,
+    model_id: str | None = None,
+) -> list[dict]:
     """
     Full inference pipeline: load model → build seed → forecast → write to MongoDB.
 
@@ -435,8 +454,10 @@ def run_inference(coin: str = "bitcoin", mongo_uri: str | None = None) -> list[d
 
     Parameters
     ----------
-    coin      : CoinGecko coin id — "bitcoin" or "dogecoin"
-    mongo_uri : optional MongoDB URI override
+    coin       : CoinGecko coin id — "bitcoin" or "dogecoin"
+    mongo_uri  : optional MongoDB URI override
+    model_path : optional explicit path to a .pt file (overrides default discovery)
+    model_id   : optional model registry id — tagged on every prediction doc written
 
     Returns list of prediction documents.
     """
@@ -449,24 +470,31 @@ def run_inference(coin: str = "bitcoin", mongo_uri: str | None = None) -> list[d
             f"Run  python src/ml/train_lstm.py --coin {coin}  first."
         )
 
-    # ── 1. Load model (v2 preferred, v1 fallback) ──────────────────────────────
-    path_v2 = _model_path_v2(coin)
-    path_v1 = _model_path_v1(coin)
-
-    use_v2 = path_v2.exists()
-    use_direction_head = use_v2
-
-    if use_v2:
-        model_path = path_v2
-        logger.info("Loading v2 model from %s", model_path)
-    elif path_v1.exists():
-        model_path = path_v1
-        logger.info("v2 model not found; falling back to v1 at %s", model_path)
+    # ── 1. Load model (explicit path > v2 > v1) ───────────────────────────────
+    if model_path is not None:
+        if not Path(model_path).exists():
+            raise FileNotFoundError(f"Specified model_path not found: {model_path}")
+        model_path = Path(model_path)
+        use_direction_head = True
+        logger.info("Loading model from explicit path: %s", model_path)
     else:
-        raise FileNotFoundError(
-            f"No trained model found. "
-            f"Run  python src/ml/train_lstm.py --coin {coin}  first."
-        )
+        path_v2 = _model_path_v2(coin)
+        path_v1 = _model_path_v1(coin)
+
+        use_v2 = path_v2.exists()
+        use_direction_head = use_v2
+
+        if use_v2:
+            model_path = path_v2
+            logger.info("Loading v2 model from %s", model_path)
+        elif path_v1.exists():
+            model_path = path_v1
+            logger.info("v2 model not found; falling back to v1 at %s", model_path)
+        else:
+            raise FileNotFoundError(
+                f"No trained model found. "
+                f"Run  python src/ml/train_lstm.py --coin {coin}  first."
+            )
 
     with open(scaler_path, "rb") as f:
         scaler = pickle.load(f)
@@ -545,6 +573,14 @@ def run_inference(coin: str = "bitcoin", mongo_uri: str | None = None) -> list[d
         coin_symbol,
         [f"${p:.4f}" for p in predictions_usd],
     )
+    if directions:
+        dir_summary = {d: directions.count(d) for d in ["UP", "DOWN", "FLAT"]}
+        avg_conf = sum(dir_probs) / len(dir_probs) if dir_probs else 0.0
+        dominant = max(dir_summary, key=dir_summary.get)
+        logger.info(
+            "7-day trend summary: %s  (UP=%d DOWN=%d FLAT=%d)  avg_confidence=%.3f",
+            dominant, dir_summary["UP"], dir_summary["DOWN"], dir_summary["FLAT"], avg_conf,
+        )
 
     # ── 6. Write to MongoDB ────────────────────────────────────────────────────
     docs = _write_predictions(
@@ -555,6 +591,7 @@ def run_inference(coin: str = "bitcoin", mongo_uri: str | None = None) -> list[d
         directions=directions,
         dir_probs=dir_probs,
         strengths=strengths,
+        model_id=model_id,
     )
     return docs
 

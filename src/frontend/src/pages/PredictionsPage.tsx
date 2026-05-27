@@ -1,11 +1,5 @@
 /**
- * PredictionsPage — redesigned layout
- *
- * Changes from v1:
- *   - Single ReactApexChart replaced with two lightweight-charts components
- *     (IntradayCandlestickChart for OHLCV, IntradayCompareChart for predicted vs actual)
- *   - Custom DateNavigator replaced with react-datepicker with dark theme
- *   - "Last prediction" badge shows timestamp of the most recent intraday prediction
+ * PredictionsPage — trend-first layout with model selector
  */
 import { useEffect, useState, useMemo, useCallback } from 'react';
 import DatePicker from 'react-datepicker';
@@ -13,14 +7,15 @@ import 'react-datepicker/dist/react-datepicker.css';
 import {
   TrendingUp, TrendingDown, Minus, Brain,
   ChevronDown, ChevronUp, Activity, Calendar, Clock,
-  ChevronLeft, ChevronRight,
+  ChevronLeft, ChevronRight, Layers,
 } from 'lucide-react';
 import {
-  fetchIntraday, fetchIntradayDates, fetchPredictions, fetchPredictionHistory,
+  fetchIntraday, fetchIntradayDates, fetchPredictionsForModel, fetchPredictionHistory, fetchModels,
 } from '../api/client';
 import type {
   IntradayResponse, IntradayDateEntry,
   PredictionsResponse, PredictionPoint,
+  ModelRegistryEntry,
 } from '../api/client';
 import { C } from '../components/apexTheme';
 import {
@@ -228,26 +223,42 @@ export default function PredictionsPage({ coin }: Props) {
   const [chartLoading, setChartLoading] = useState(false);
   const [showHistory, setShowHistory] = useState(false);
 
+  // Model selection
+  const [models, setModels]                   = useState<ModelRegistryEntry[]>([]);
+  const [selectedModelId, setSelectedModelId] = useState<string | null>(null);
+
   const symbol   = coin === 'bitcoin' ? 'BTC' : 'DOGE';
   const decimals = coin === 'bitcoin' ? 2 : 6;
   const fmt = (n: number | null | undefined) =>
     n != null ? `$${n.toLocaleString('en-US', { minimumFractionDigits: decimals, maximumFractionDigits: decimals })}` : '—';
 
-  // Load available dates + 7-day forecast once
+  // Load available dates + 7-day forecast + models once
   useEffect(() => {
     setLoading(true);
     Promise.all([
       fetchIntradayDates(coin),
-      fetchPredictions(coin),
+      fetchPredictionsForModel(coin),
       fetchPredictionHistory(coin, 60).catch(() => [] as PredictionPoint[]),
-    ]).then(([datesResp, pred, hist]) => {
+      fetchModels(coin).catch(() => [] as ModelRegistryEntry[]),
+    ]).then(([datesResp, pred, hist, mods]) => {
       setAvailDates(datesResp.dates);
       setPredictions(pred);
       setPredHistory(hist);
+      setModels(mods.filter((m: ModelRegistryEntry) => m.enabled && !m.deleted_at));
+      setSelectedModelId(null);
       const lastDate = datesResp.dates[datesResp.dates.length - 1]?.date ?? today;
       setSelDate(lastDate);
     }).finally(() => setLoading(false));
   }, [coin]);
+
+  // Reload predictions when model selection changes
+  useEffect(() => {
+    if (loading) return; // avoid double-fetch on initial load
+    fetchPredictionsForModel(coin, selectedModelId ?? undefined)
+      .then(setPredictions)
+      .catch(() => {});
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedModelId]);
 
   // Load intraday data for selected date
   const loadIntraday = useCallback(() => {
@@ -353,14 +364,14 @@ export default function PredictionsPage({ coin }: Props) {
   return (
     <div>
       {/* ── Page header ───────────────────────────────────────────────────────── */}
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '20px' }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '16px', flexWrap: 'wrap', gap: '12px' }}>
         <div>
           <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '4px' }}>
             <div
               className="font-display"
               style={{ fontSize: '18px', fontWeight: 700, color: 'var(--text-primary)', letterSpacing: '0.06em' }}
             >
-              LSTM PREDICTIONS
+              TREND FORECAST
             </div>
             <span style={{
               padding: '3px 10px', borderRadius: '12px', fontSize: '10px', fontWeight: 700,
@@ -371,7 +382,7 @@ export default function PredictionsPage({ coin }: Props) {
             </span>
           </div>
           <div style={{ color: 'var(--text-secondary)', fontSize: '12px', fontFamily: 'Manrope' }}>
-            {symbol} · 5-min intraday predictions + 7-day daily outlook
+            {symbol} · day-ahead trend prediction + 7-day outlook
           </div>
         </div>
         {accuracyStats && (
@@ -389,6 +400,45 @@ export default function PredictionsPage({ coin }: Props) {
           </div>
         )}
       </div>
+
+      {/* ── Model selector ────────────────────────────────────────────────────── */}
+      {models.length > 0 && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '16px', flexWrap: 'wrap' }}>
+          <Layers size={13} color={C.textSec} />
+          <span style={{ fontSize: '11px', color: C.textSec, fontFamily: 'Manrope', marginRight: '4px' }}>Model:</span>
+
+          {/* All models (default) */}
+          <button
+            onClick={() => setSelectedModelId(null)}
+            style={{
+              padding: '4px 12px', borderRadius: '20px', fontSize: '10px', fontWeight: 700,
+              fontFamily: 'Space Mono, monospace', cursor: 'pointer',
+              border: `1px solid ${selectedModelId === null ? 'rgba(139,92,246,0.5)' : 'var(--border)'}`,
+              background: selectedModelId === null ? 'var(--violet-10)' : 'transparent',
+              color: selectedModelId === null ? 'var(--violet)' : C.textSec,
+            }}
+          >
+            LATEST
+          </button>
+
+          {models.map(m => (
+            <button
+              key={m.model_id}
+              onClick={() => setSelectedModelId(m.model_id)}
+              title={`F1: ${m.metrics?.f1_macro?.toFixed(3) ?? '—'}  RMSE: $${m.metrics?.rmse?.toFixed(0) ?? '—'}`}
+              style={{
+                padding: '4px 12px', borderRadius: '20px', fontSize: '10px', fontWeight: 700,
+                fontFamily: 'Space Mono, monospace', cursor: 'pointer',
+                border: `1px solid ${selectedModelId === m.model_id ? `${C.cyan}60` : 'var(--border)'}`,
+                background: selectedModelId === m.model_id ? `${C.cyan}12` : 'transparent',
+                color: selectedModelId === m.model_id ? C.cyan : C.textSec,
+              }}
+            >
+              {m.version_tag}
+            </button>
+          ))}
+        </div>
+      )}
 
       {/* ── Metric cards ──────────────────────────────────────────────────────── */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '12px', marginBottom: '20px' }}>

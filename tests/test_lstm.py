@@ -366,9 +366,31 @@ class TestMongoDocumentStructure:
         doc = self._make_fake_doc(1, 65000.0)
         assert doc["model_version"] == "lstm_v2"
 
-    def test_confidence_is_placeholder(self):
+    def test_confidence_from_softmax_range(self):
+        """For v1 fallback (no dir_probs), confidence falls back to CONFIDENCE constant."""
         doc = self._make_fake_doc(1, 65000.0)
-        assert doc["confidence"] == pytest.approx(0.8)
+        # _make_fake_doc uses the old CONFIDENCE constant (v1 fallback path)
+        assert doc["confidence"] == pytest.approx(CONFIDENCE)
+
+    def test_v2_confidence_from_softmax(self):
+        """v2 inference confidence must come from softmax probabilities (≥ 1/3)."""
+        from inference import _mimo_predict_full
+        import pickle
+
+        model = LSTMModel(
+            input_size=9, hidden_size=32, num_layers=1,
+            dropout=0.0, output_size=7, use_direction_head=True, n_classes=3,
+        )
+        from sklearn.preprocessing import StandardScaler
+        scaler = StandardScaler()
+        scaler.fit(np.random.randn(100, 9))
+
+        seed = np.random.randn(60, 9).astype(np.float32)
+        _, _, dir_probs, _ = _mimo_predict_full(model, seed, scaler, last_price_usd=50000.0)
+        for prob in dir_probs:
+            assert 1 / 3 <= prob <= 1.0, (
+                f"Softmax confidence must be ≥ 1/3 for 3-class, got {prob}"
+            )
 
     def test_prediction_date_in_future(self):
         """prediction_date must be strictly in the future (offset >= 1)."""
@@ -551,20 +573,31 @@ class TestDirectionLabels:
             f"Expected integer dtype, got {labels.dtype}"
         )
 
-    def test_all_positive_returns_mostly_up(self):
-        """When all returns are strongly positive, most labels should be UP (2)."""
-        # Very large positive values — all above threshold
+    def test_constant_array_all_flat(self):
+        """Constant returns → quantile thresholds equal the constant → all FLAT."""
         log_rets = np.ones(100) * 10.0
         labels = make_direction_labels(log_rets)
-        # std of constant array is 0, so threshold = 0.5 * 0 = 0 → all > 0 → UP
-        assert np.all(labels == 2), f"Expected all UP (2), got {np.unique(labels)}"
+        # quantile(constant, 0.67) == quantile(constant, 0.33) == 10.0
+        # 10.0 > 10.0 is False; 10.0 < 10.0 is False → all FLAT
+        assert np.all(labels == 1), f"Expected all FLAT (1), got {np.unique(labels)}"
 
-    def test_threshold_logic_flat_returns(self):
-        """Returns within ±threshold should be labelled FLAT (1)."""
-        # Very small std → threshold ≈ 0 → returns right on boundary
+    def test_balanced_class_distribution(self):
+        """Quantile-based thresholds should yield roughly equal class proportions."""
+        rng = np.random.default_rng(0)
+        log_rets = rng.normal(0, 0.02, size=3000)
+        labels = make_direction_labels(log_rets, target_pct=0.33)
+        counts = np.bincount(labels, minlength=3)
+        fracs  = counts / len(labels)
+        # Each class should be within [0.28, 0.40] for target_pct=0.33
+        for cls_frac in fracs:
+            assert 0.28 <= cls_frac <= 0.40, (
+                f"Class fractions {fracs} outside expected range"
+            )
+
+    def test_flat_returns_all_flat(self):
+        """Zero log-returns → quantile thresholds are 0 → all FLAT."""
         log_rets = np.zeros(50)
-        labels = make_direction_labels(log_rets, threshold_factor=0.5)
-        # zeros are not > 0 and not < 0, so they should be FLAT
+        labels = make_direction_labels(log_rets)
         assert np.all(labels == 1), (
             f"Expected all FLAT (1) for zero returns, got {np.unique(labels)}"
         )
@@ -573,7 +606,7 @@ class TestDirectionLabels:
         """Mixed returns should produce all three label types."""
         rng = np.random.default_rng(42)
         log_rets = rng.choice([-2.0, 0.0, 2.0], size=300)
-        labels = make_direction_labels(log_rets, threshold_factor=0.5)
+        labels = make_direction_labels(log_rets, target_pct=0.33)
         unique = set(labels.tolist())
         assert {0, 1, 2}.issubset(unique) or len(unique) >= 2, (
             f"Expected mixed labels, got {unique}"

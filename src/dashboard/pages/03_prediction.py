@@ -34,8 +34,8 @@ logger = logging.getLogger(__name__)
 # Auto-refresh every 5 minutes — picks up new predictions from the scheduler
 st_autorefresh(interval=300_000, key="pred_refresh")
 
-st.title("LSTM Price Predictions")
-st.caption("Model: 2-layer LSTM · seq_len=60 · 7-day MIMO forecast · refreshes every 5 min")
+st.title("LSTM Trend Predictions")
+st.caption("Model: 2-layer LSTM · seq_len=60 · 7-day MIMO forecast · primary signal: trend direction · refreshes every 5 min")
 
 coin = st.session_state.get("selected_coin", "BTC")
 coin = st.selectbox(
@@ -343,15 +343,13 @@ else:
 
 st.markdown("---")
 
-# ── Trend Direction & Strength (v2 model only) ────────────────────────────────
-st.subheader("Trend Direction & Strength")
+# ── PRIMARY: Trend Direction & Strength ───────────────────────────────────────
+st.subheader("Trend Direction — 7-Day Outlook")
 
-# Direction emoji mapping
 _DIR_EMOJI = {"UP": "↑", "FLAT": "→", "DOWN": "↓"}
-# Strength colour indicator (using coloured squares)
+_DIR_COLOR = {"UP": "#69ff47", "DOWN": "#ff6b6b", "FLAT": "#ffa726"}
 _STRENGTH_EMOJI = {"STRONG": "🟩", "MODERATE": "🟨", "WEAK": "🟥"}
 
-# Check if any prediction doc has direction fields (v2 model)
 _has_direction_fields = (
     has_predictions
     and "direction" in pred_df.columns
@@ -360,10 +358,9 @@ _has_direction_fields = (
 
 if not _has_direction_fields:
     st.info(
-        "Direction & strength predictions require the v2 multi-task model.  \n"
-        "Retrain with:  \n"
+        "Direction predictions require the v2 multi-task model (retrained with trend focus).  \n"
         "```bash\n"
-        "python src/ml/train_lstm.py --coin bitcoin\n"
+        "python src/ml/train_lstm.py --coin bitcoin --alpha 0.3 --beta 1.0\n"
         "python src/ml/inference.py --coin bitcoin\n"
         "```"
     )
@@ -374,39 +371,122 @@ else:
     if future_dir_df.empty:
         st.warning("All direction predictions are in the past. Waiting for next inference run...")
     else:
-        # Build display table
+        # ── Top-level trend summary cards ─────────────────────────────────────
+        dir_counts = future_dir_df["direction"].value_counts()
+        dominant = dir_counts.idxmax() if not dir_counts.empty else "—"
+        avg_conf = (
+            future_dir_df["direction_prob"].mean()
+            if "direction_prob" in future_dir_df.columns
+            else None
+        )
+        dominant_strength = (
+            future_dir_df["trend_strength"].mode().iloc[0]
+            if "trend_strength" in future_dir_df.columns and not future_dir_df["trend_strength"].isna().all()
+            else "—"
+        )
+
+        col1, col2, col3, col4 = st.columns(4)
+        col1.metric(
+            "7-Day Dominant Trend",
+            f"{_DIR_EMOJI.get(dominant, '—')} {dominant}",
+        )
+        col2.metric(
+            "Avg Confidence",
+            f"{avg_conf * 100:.1f}%" if avg_conf is not None else "—",
+            help="Softmax probability of predicted direction class",
+        )
+        col3.metric(
+            "Trend Strength",
+            f"{_STRENGTH_EMOJI.get(dominant_strength, '')} {dominant_strength}",
+            help="Based on probability margin (top1 − top2 class probability)",
+        )
+        col4.metric(
+            "UP / DOWN / FLAT days",
+            f"{dir_counts.get('UP', 0)} / {dir_counts.get('DOWN', 0)} / {dir_counts.get('FLAT', 0)}",
+        )
+
+        # ── Confidence bar chart (per horizon day) ─────────────────────────────
+        st.subheader("Direction Confidence per Day")
+        if "direction_prob" in future_dir_df.columns:
+            conf_fig = go.Figure()
+            for direction in ["UP", "DOWN", "FLAT"]:
+                mask = future_dir_df["direction"] == direction
+                subset = future_dir_df[mask]
+                if not subset.empty:
+                    conf_fig.add_trace(go.Bar(
+                        x=subset["prediction_date"].dt.strftime("%b %d"),
+                        y=subset["direction_prob"] * 100,
+                        name=f"{_DIR_EMOJI.get(direction, direction)} {direction}",
+                        marker_color=_DIR_COLOR.get(direction, "#aaa"),
+                    ))
+            conf_fig.update_layout(
+                template="plotly_dark",
+                height=260,
+                yaxis_title="Softmax Confidence (%)",
+                xaxis_title="Date",
+                barmode="stack",
+                margin=dict(l=0, r=0, t=10, b=0),
+                legend=dict(orientation="h", yanchor="bottom", y=1.02),
+            )
+            st.plotly_chart(conf_fig, use_container_width=True)
+
+        # ── Direction + Strength table ─────────────────────────────────────────
         rows = []
         for _, row in future_dir_df.iterrows():
-            date_str   = row["prediction_date"].strftime("%Y-%m-%d")
-            direction  = row.get("direction", None)
-            dir_prob   = row.get("direction_prob", None)
-            strength   = row.get("trend_strength", None)
-
-            dir_display      = _DIR_EMOJI.get(direction, "—") if direction else "—"
-            strength_display = (
-                f"{_STRENGTH_EMOJI.get(strength, '')} {strength}"
-                if strength else "—"
-            )
-            confidence_pct = (
-                f"{dir_prob * 100:.1f}%" if dir_prob is not None else "—"
-            )
+            direction = row.get("direction")
+            dir_prob  = row.get("direction_prob")
+            strength  = row.get("trend_strength")
             rows.append({
-                "Date":         date_str,
-                "Direction":    dir_display,
-                "Strength":     strength_display,
-                "Confidence %": confidence_pct,
+                "Date":         row["prediction_date"].strftime("%Y-%m-%d"),
+                "Direction":    f"{_DIR_EMOJI.get(direction, '—')} {direction}" if direction else "—",
+                "Confidence":   f"{dir_prob * 100:.1f}%" if dir_prob is not None else "—",
+                "Strength":     f"{_STRENGTH_EMOJI.get(strength, '')} {strength}" if strength else "—",
+                "Price (ref)":  f"${row['predicted_price']:,.2f}",
             })
+        with st.expander("Full 7-Day Detail Table", expanded=True):
+            st.dataframe(pd.DataFrame(rows).reset_index(drop=True), use_container_width=True)
 
-        direction_table_df = pd.DataFrame(rows)
-        with st.expander("Trend Direction & Strength Detail", expanded=True):
-            st.dataframe(direction_table_df.reset_index(drop=True), use_container_width=True)
+st.markdown("---")
 
-        # Summary metrics
-        dir_counts = future_dir_df["direction"].value_counts()
-        col1, col2, col3 = st.columns(3)
-        col1.metric("UP days",   str(dir_counts.get("UP",   0)))
-        col2.metric("FLAT days", str(dir_counts.get("FLAT", 0)))
-        col3.metric("DOWN days", str(dir_counts.get("DOWN", 0)))
+# ── SECONDARY: Price Forecast Chart ───────────────────────────────────────────
+st.subheader(f"{coin} Price — Historical + LSTM Forecast (reference only)")
+st.caption("Price is the auxiliary output — use trend direction as the primary signal")
+
+# ── Predictions section ────────────────────────────────────────────────────────
+if not has_predictions:
+    st.info(
+        "LSTM model not trained yet.  \n"
+        "```bash\n"
+        "bash scripts/run_inference.sh\n"
+        "```"
+    )
+else:
+    now_utc = datetime.now(timezone.utc)
+    future_df = pred_df[pred_df["prediction_date"] >= now_utc]
+
+    if not future_df.empty:
+        col1, col2 = st.columns(2)
+        col1.metric("Next-day reference price", f"${future_df.iloc[0]['predicted_price']:,.2f}")
+        col2.metric("7-day range",
+                    f"${future_df['predicted_price'].min():,.0f} – "
+                    f"${future_df['predicted_price'].max():,.0f}")
+
+        forecast_fig = go.Figure()
+        forecast_fig.add_trace(go.Bar(
+            x=future_df["prediction_date"].dt.strftime("%b %d"),
+            y=future_df["predicted_price"],
+            marker_color=[_DIR_COLOR.get(d, "#00e5ff")
+                          for d in future_df.get("direction", [""] * len(future_df))],
+            name="Predicted price (colour = direction)",
+        ))
+        forecast_fig.update_layout(
+            template="plotly_dark",
+            height=260,
+            xaxis_title="Date",
+            yaxis_title="Predicted Price (USD)",
+            margin=dict(l=0, r=0, t=10, b=0),
+        )
+        st.plotly_chart(forecast_fig, use_container_width=True)
 
 st.markdown("---")
 
@@ -415,9 +495,8 @@ st.subheader("Prediction Accuracy (Historical)")
 
 if accuracy_df.empty:
     st.info(
-        "No past predictions with matching actual prices yet.  \n"
         "Accuracy data appears once prediction dates have passed "
-        "and the producer has written live price data for those dates."
+        "and actual prices are available in historical_sma."
     )
 else:
     mae = accuracy_df["abs_error"].mean()
@@ -425,8 +504,8 @@ else:
     n_evaluated = len(accuracy_df)
 
     col1, col2, col3 = st.columns(3)
-    col1.metric("Mean Abs Error", f"${mae:,.2f}")
-    col2.metric("Mean Abs % Error", f"{mape:.1f}%" if mape is not None else "—")
+    col1.metric("Price MAE (reference)", f"${mae:,.2f}")
+    col2.metric("Price MAPE (reference)", f"{mape:.1f}%" if mape is not None else "—")
     col3.metric("Predictions evaluated", str(n_evaluated))
 
     acc_display = accuracy_df.copy()
