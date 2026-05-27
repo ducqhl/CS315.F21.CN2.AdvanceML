@@ -476,3 +476,78 @@ body {
 .react-datepicker-popper {
   z-index: 100;
 }
+
+/* ── Ticker Strip ────────────────────────────────────────────────────────────── */
+.ticker-strip {
+  display: flex;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.ticker-inner {
+  display: flex;
+  animation: ticker 40s linear infinite;
+}
+
+.ticker-inner:hover { animation-play-state: paused; }
+
+/* ── Chart Pane ──────────────────────────────────────────────────────────────── */
+.chart-pane {
+  border-radius: 10px;
+  overflow: hidden;
+  position: relative;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+}
+
+/* ── Nav hover lift ──────────────────────────────────────────────────────────── */
+.nav-item:hover {
+  transform: translateX(2px);
+}
+
+.nav-item {
+  transition: all 0.15s ease, transform 0.15s ease;
+}
+
+/* ── Metric card lift ────────────────────────────────────────────────────────── */
+.metric-card {
+  transition: border-color 0.15s, transform 0.15s, box-shadow 0.15s;
+}
+
+.metric-card:hover {
+  border-color: var(--border-bright);
+  transform: translateY(-1px);
+  box-shadow: 0 4px 16px rgba(0,0,0,0.3);
+}
+
+/* ── Sidebar collapsed ───────────────────────────────────────────────────────── */
+.sidebar-collapsed .nav-label { display: none; }
+.sidebar-collapsed .coin-price { display: none; }
+.sidebar-collapsed .logo-text { display: none; }
+.sidebar-collapsed .section-label { display: none; }
+.sidebar-collapsed .user-info { display: none; }
+.sidebar-collapsed .active-market-label { display: none; }
+
+/* ── Fade-in animation ───────────────────────────────────────────────────────── */
+.animate-fade-in { animation: fadeIn 0.2s ease; }
+.animate-slide-up { animation: slideUp 0.25s ease; }
+
+/* ── Tooltip ─────────────────────────────────────────────────────────────────── */
+[data-tooltip] { position: relative; }
+[data-tooltip]:hover::after {
+  content: attr(data-tooltip);
+  position: absolute;
+  left: calc(100% + 10px);
+  top: 50%;
+  transform: translateY(-50%);
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-bright);
+  color: var(--text-primary);
+  font-size: 12px;
+  font-family: 'Manrope', sans-serif;
+  padding: 5px 10px;
+  border-radius: 6px;
+  white-space: nowrap;
+  z-index: 9999;
+  pointer-events: none;
+}

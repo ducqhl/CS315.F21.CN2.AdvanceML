@@ -12,15 +12,17 @@
   "dependencies": {
     "apexcharts": "^3.54.0",
     "axios": "^1.16.1",
+    "clsx": "^2.1.1",
     "jwt-decode": "^4.0.0",
     "lightweight-charts": "^4.2.2",
     "lucide-react": "^1.16.0",
     "react": "^19.2.6",
     "react-apexcharts": "^1.4.0",
+    "react-datepicker": "^7.0.0",
     "react-dom": "^19.2.6",
     "react-is": "^19.2.6",
-    "react-datepicker": "^7.0.0",
-    "recharts": "^3.8.1"
+    "recharts": "^3.8.1",
+    "tailwind-merge": "^3.6.0"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",

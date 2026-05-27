@@ -15,7 +15,8 @@ export const C = {
   textPri:   '#D0DDF5',
 } as const;
 
-export function baseApexOptions(height = 300): ApexCharts.ApexOptions {
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export function baseApexOptions(height = 300): any {
   return {
     chart: {
       background: 'transparent',

@@ -1,21 +1,16 @@
 import { useEffect, useState, useMemo } from 'react';
+import { TrendingUp, TrendingDown, Minus, Clock, Cpu, Wifi, WifiOff } from 'lucide-react';
 import {
-  TrendingUp, TrendingDown, Minus, Clock, Cpu, Wifi, WifiOff,
-} from 'lucide-react';
-import {
-  fetchStats, fetchPredictions, fetchRealtime, fetchHistorical,
-  fetchInferenceStatus,
+  fetchStats, fetchPredictions, fetchRealtime, fetchHistorical, fetchInferenceStatus,
 } from '../api/client';
 import type {
-  StatsResponse, PredictionsResponse, RealtimeResponse, HistoricalPoint,
-  InferenceStatusResponse,
+  StatsResponse, PredictionsResponse, RealtimeResponse, HistoricalPoint, InferenceStatusResponse,
 } from '../api/client';
 import { Sparkline } from '../components/LightweightChart';
 import type { AreaPoint } from '../components/LightweightChart';
+import { Card, Badge, MetricCard, Skeleton } from '../components/ui';
 
-interface Props {
-  coin: 'bitcoin' | 'dogecoin';
-}
+interface Props { coin: 'bitcoin' | 'dogecoin' }
 
 function formatPrice(p: number | null | undefined, decimals = 2) {
   if (p == null) return '—';
@@ -39,16 +34,22 @@ function inferenceStatusColor(status: string | undefined, lastRun: string | unde
   return 'red';
 }
 
+const dotColorMap: Record<string, string> = {
+  green: '#00F0A0',
+  amber: '#FFB020',
+  red:   '#FF3864',
+};
+
 export default function DashboardPage({ coin }: Props) {
-  const [stats, setStats] = useState<StatsResponse | null>(null);
-  const [btcPrediction, setBtcPrediction] = useState<PredictionsResponse | null>(null);
-  const [dogePrediction, setDogePrediction] = useState<PredictionsResponse | null>(null);
-  const [btcRealtime, setBtcRealtime] = useState<RealtimeResponse | null>(null);
-  const [dogeRealtime, setDogeRealtime] = useState<RealtimeResponse | null>(null);
-  const [btcHistory, setBtcHistory] = useState<HistoricalPoint[]>([]);
-  const [dogeHistory, setDogeHistory] = useState<HistoricalPoint[]>([]);
+  const [stats, setStats]                     = useState<StatsResponse | null>(null);
+  const [btcPrediction, setBtcPrediction]     = useState<PredictionsResponse | null>(null);
+  const [dogePrediction, setDogePrediction]   = useState<PredictionsResponse | null>(null);
+  const [btcRealtime, setBtcRealtime]         = useState<RealtimeResponse | null>(null);
+  const [dogeRealtime, setDogeRealtime]       = useState<RealtimeResponse | null>(null);
+  const [btcHistory, setBtcHistory]           = useState<HistoricalPoint[]>([]);
+  const [dogeHistory, setDogeHistory]         = useState<HistoricalPoint[]>([]);
   const [inferenceStatus, setInferenceStatus] = useState<InferenceStatusResponse | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading]                 = useState(true);
 
   useEffect(() => {
     const load = () => {
@@ -78,215 +79,172 @@ export default function DashboardPage({ coin }: Props) {
     return () => clearInterval(interval);
   }, []);
 
-  const btcSparkline = useMemo<AreaPoint[]>(
-    () => btcHistory.map(d => ({ time: d.date.split('T')[0], value: d.avg_close })),
-    [btcHistory]
-  );
-  const dogeSparkline = useMemo<AreaPoint[]>(
-    () => dogeHistory.map(d => ({ time: d.date.split('T')[0], value: d.avg_close })),
-    [dogeHistory]
-  );
+  const btcSparkline  = useMemo<AreaPoint[]>(() => btcHistory.map(d => ({ time: d.date.split('T')[0], value: d.avg_close })), [btcHistory]);
+  const dogeSparkline = useMemo<AreaPoint[]>(() => dogeHistory.map(d => ({ time: d.date.split('T')[0], value: d.avg_close })), [dogeHistory]);
 
   const activePred = coin === 'bitcoin' ? btcPrediction : dogePrediction;
   const outlook = useMemo(() => {
     if (!activePred?.predictions) return null;
-    const up = activePred.predictions.filter(p => p.direction === 'UP').length;
+    const up   = activePred.predictions.filter(p => p.direction === 'UP').length;
     const down = activePred.predictions.filter(p => p.direction === 'DOWN').length;
-    if (up > down) return { label: 'BULLISH', color: 'var(--green)', Icon: TrendingUp, count: `${up}/7` };
-    if (down > up) return { label: 'BEARISH', color: 'var(--red)', Icon: TrendingDown, count: `${down}/7` };
-    return { label: 'NEUTRAL', color: 'var(--gold)', Icon: Minus, count: '—' };
+    if (up > down)   return { label: 'BULLISH', color: '#00F0A0', Icon: TrendingUp,   count: `${up}/7` };
+    if (down > up)   return { label: 'BEARISH', color: '#FF3864', Icon: TrendingDown, count: `${down}/7` };
+    return               { label: 'NEUTRAL', color: '#FFB020', Icon: Minus,         count: '—' };
   }, [activePred]);
 
-  const symbol = coin === 'bitcoin' ? 'BTC' : 'DOGE';
+  const symbol   = coin === 'bitcoin' ? 'BTC' : 'DOGE';
   const decimals = coin === 'bitcoin' ? 2 : 6;
-  const btcPrice = btcRealtime?.price ?? btcRealtime?.avg_close;
+  const btcPrice  = btcRealtime?.price  ?? btcRealtime?.avg_close;
   const dogePrice = dogeRealtime?.price ?? dogeRealtime?.avg_close;
-  const btcJob = inferenceStatus?.jobs?.['BTC'];
+  const btcJob  = inferenceStatus?.jobs?.['BTC'];
   const dogeJob = inferenceStatus?.jobs?.['DOGE'];
 
   if (loading) {
     return (
-      <div style={{ padding: '32px' }}>
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px', marginBottom: '20px' }}>
-          {[1, 2].map(i => (
-            <div key={i} className="skeleton" style={{ height: '160px', borderRadius: '12px' }} />
-          ))}
+      <div>
+        <div className="grid grid-cols-2 gap-4 mb-4">
+          {[1, 2].map(i => <Skeleton key={i} style={{ height: '160px', borderRadius: '12px' }} />)}
         </div>
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '16px', marginBottom: '20px' }}>
-          {[1, 2, 3].map(i => (
-            <div key={i} className="skeleton" style={{ height: '100px', borderRadius: '12px' }} />
-          ))}
+        <div className="grid grid-cols-3 gap-4 mb-4">
+          {[1, 2, 3].map(i => <Skeleton key={i} style={{ height: '100px', borderRadius: '12px' }} />)}
         </div>
-        <div className="skeleton" style={{ height: '320px', borderRadius: '12px' }} />
+        <Skeleton style={{ height: '120px', borderRadius: '12px' }} />
       </div>
     );
   }
 
   return (
-    <div style={{ padding: '0' }}>
+    <div>
       {/* Page header */}
-      <div style={{ marginBottom: '28px' }}>
-        <h1 className="font-display" style={{
-          margin: 0, fontSize: '18px', fontWeight: 700,
-          color: 'var(--text-primary)', letterSpacing: '0.06em',
-        }}>
-          MARKET OVERVIEW
-        </h1>
-        <div style={{ color: 'var(--text-secondary)', fontSize: '12px', marginTop: '4px', fontFamily: 'Manrope, sans-serif' }}>
+      <div className="mb-7">
+        <h1 className="font-display text-lg font-bold text-text-primary tracking-wider m-0">MARKET OVERVIEW</h1>
+        <p className="text-text-secondary text-xs mt-1 font-body">
           Real-time prices · LSTM predictions · Inference engine status
-        </div>
+        </p>
       </div>
 
       {/* Price cards row */}
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px', marginBottom: '16px' }}>
+      <div className="grid grid-cols-2 gap-4 mb-4">
         {[
-          {
-            symbol: 'BTC', name: 'Bitcoin', price: btcPrice,
-            sparkline: btcSparkline, decimals: 2,
-            pred: btcPrediction, realtime: btcRealtime,
-            job: btcJob,
-          },
-          {
-            symbol: 'DOGE', name: 'Dogecoin', price: dogePrice,
-            sparkline: dogeSparkline, decimals: 6,
-            pred: dogePrediction, realtime: dogeRealtime,
-            job: dogeJob,
-          },
+          { symbol: 'BTC', name: 'Bitcoin',  price: btcPrice,  sparkline: btcSparkline,  decimals: 2,  realtime: btcRealtime  },
+          { symbol: 'DOGE', name: 'Dogecoin', price: dogePrice, sparkline: dogeSparkline, decimals: 6,  realtime: dogeRealtime },
         ].map(({ symbol: sym, name, price, sparkline, decimals: dec, realtime }) => {
           const isLive = realtime?.source === 'realtime';
           return (
-            <div key={sym} className="card" style={{ padding: '20px', overflow: 'hidden', position: 'relative' }}>
-              {/* Glow accent top-right */}
-              <div style={{
-                position: 'absolute', top: 0, right: 0,
-                width: '120px', height: '120px',
-                background: 'radial-gradient(circle at top right, rgba(0,229,255,0.06) 0%, transparent 70%)',
-                pointerEvents: 'none',
-              }} />
+            <Card key={sym} className="p-5 overflow-hidden relative">
+              {/* Glow corner */}
+              <div
+                className="absolute top-0 right-0 w-32 h-32 pointer-events-none"
+                style={{ background: 'radial-gradient(circle at top right, rgba(0,229,255,0.06) 0%, transparent 70%)' }}
+              />
 
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '12px' }}>
+              <div className="flex justify-between items-start mb-3">
                 <div>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '4px' }}>
-                    <span className="font-display" style={{
-                      fontSize: '13px', fontWeight: 700, color: 'var(--cyan)', letterSpacing: '0.08em',
-                    }}>
-                      {sym}
-                    </span>
-                    <span style={{ fontSize: '11px', color: 'var(--text-secondary)', fontFamily: 'Manrope' }}>
-                      {name}
-                    </span>
+                  <div className="flex items-center gap-2 mb-1">
+                    <span className="font-display text-[13px] font-bold text-cyan tracking-widest">{sym}</span>
+                    <span className="text-[11px] text-text-secondary font-body">{name}</span>
                   </div>
-                  <div className="font-mono" style={{
-                    fontSize: '26px', fontWeight: 700, color: 'var(--text-primary)',
-                    lineHeight: 1, letterSpacing: '-0.02em',
-                  }}>
+                  <div className="font-mono text-[26px] font-bold text-text-primary leading-none tracking-tight">
                     {formatPrice(price, dec)}
                   </div>
                 </div>
-                <div style={{
-                  display: 'flex', alignItems: 'center', gap: '5px',
-                  padding: '4px 10px', borderRadius: '20px', fontSize: '10px',
-                  background: isLive ? 'var(--green-10)' : 'rgba(255,255,255,0.03)',
-                  border: `1px solid ${isLive ? 'rgba(0,240,160,0.25)' : 'var(--border)'}`,
-                  color: isLive ? 'var(--green)' : 'var(--text-secondary)',
-                  fontFamily: 'Manrope',
-                  fontWeight: 600,
-                  letterSpacing: '0.04em',
-                  textTransform: 'uppercase',
-                }}>
-                  {isLive ? <Wifi size={10} /> : <WifiOff size={10} />}
+                <Badge variant={isLive ? 'live' : 'batch'}>
+                  {isLive ? <Wifi size={9} /> : <WifiOff size={9} />}
                   {isLive ? 'LIVE' : 'BATCH'}
-                </div>
+                </Badge>
               </div>
 
               <div style={{ height: '60px', marginLeft: '-4px', marginRight: '-4px' }}>
                 <Sparkline data={sparkline} height={60} positive />
               </div>
-            </div>
+            </Card>
           );
         })}
       </div>
 
-      {/* Prediction summary row */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '16px', marginBottom: '16px' }}>
+      {/* Prediction + inference row */}
+      <div className="grid grid-cols-3 gap-4 mb-4">
         {/* Next-day prediction */}
-        <div className="metric-card">
-          <div className="metric-label">Next-Day Forecast · {symbol}</div>
-          <div className="metric-value" style={{ color: 'var(--cyan)', fontSize: '20px' }}>
-            {formatPrice(activePred?.next_day_price, decimals)}
-          </div>
-          {activePred?.model_version && (
-            <div className="metric-sub">{activePred.model_version}</div>
-          )}
-        </div>
+        <MetricCard
+          label={`Next-Day Forecast · ${symbol}`}
+          value={formatPrice(activePred?.next_day_price, decimals)}
+          valueColor="var(--cyan)"
+          sub={activePred?.model_version ?? undefined}
+        />
 
         {/* 7-day outlook */}
-        <div className="metric-card" style={{
-          borderColor: outlook ? `rgba(0,0,0,0)` : 'var(--border)',
-          background: outlook ? `linear-gradient(135deg, var(--bg-card) 60%, ${outlook.color}08)` : 'var(--bg-card)',
-        }}>
-          <div className="metric-label">7-Day Outlook · {symbol}</div>
-          {outlook ? (
-            <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-              <outlook.Icon size={20} color={outlook.color} />
-              <span className="metric-value" style={{ color: outlook.color }}>
-                {outlook.label}
-              </span>
-            </div>
-          ) : (
-            <div className="metric-value" style={{ color: 'var(--text-secondary)' }}>—</div>
-          )}
-          {outlook && (
-            <div className="metric-sub">{outlook.count} days confirmed</div>
-          )}
-        </div>
-
-        {/* Inference status */}
-        <div className="metric-card">
-          <div className="metric-label" style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-            <Cpu size={10} />
-            Inference Engine
+        <Card
+          variant="highlight"
+          accent={outlook?.label === 'BULLISH' ? 'green' : outlook?.label === 'BEARISH' ? 'red' : 'gold'}
+          className="p-5"
+        >
+          <div className="metric-label text-[10px] font-semibold text-text-secondary uppercase tracking-widest font-body mb-2.5">
+            7-Day Outlook · {symbol}
           </div>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', marginTop: '4px' }}>
-            {['BTC', 'DOGE'].map(sym => {
-              const job = sym === 'BTC' ? btcJob : dogeJob;
+          {outlook ? (
+            <>
+              <div className="flex items-center gap-2.5 mb-1">
+                <outlook.Icon size={20} color={outlook.color} />
+                <span className="font-mono text-[20px] font-bold leading-none" style={{ color: outlook.color }}>
+                  {outlook.label}
+                </span>
+              </div>
+              <div className="text-[11px] text-text-secondary font-body mt-1.5">{outlook.count} days confirmed</div>
+            </>
+          ) : (
+            <div className="font-mono text-[20px] font-bold text-text-secondary">—</div>
+          )}
+        </Card>
+
+        {/* Inference engine */}
+        <Card className="p-5">
+          <div className="flex items-center gap-1.5 mb-3">
+            <Cpu size={10} className="text-text-secondary" />
+            <span className="metric-label text-[10px] font-semibold text-text-secondary uppercase tracking-widest font-body">
+              Inference Engine
+            </span>
+          </div>
+          <div className="flex flex-col gap-2">
+            {(['BTC', 'DOGE'] as const).map(sym => {
+              const job      = sym === 'BTC' ? btcJob : dogeJob;
               const dotColor = inferenceStatusColor(job?.status, job?.last_run_at);
               return (
-                <div key={sym} style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '12px' }}>
-                  <div className={`pulse-dot ${dotColor}`} style={{ width: '7px', height: '7px', flexShrink: 0 }} />
-                  <span className="font-mono" style={{ color: 'var(--cyan)', fontSize: '11px', fontWeight: 700, minWidth: '36px' }}>{sym}</span>
-                  <span style={{ color: 'var(--text-secondary)', fontFamily: 'Manrope' }}>
+                <div key={sym} className="flex items-center gap-2 text-xs">
+                  <div
+                    className="w-1.5 h-1.5 rounded-full flex-shrink-0 animate-pulse-slow"
+                    style={{ background: dotColorMap[dotColor] }}
+                  />
+                  <span className="font-mono text-[11px] font-bold text-cyan min-w-[36px]">{sym}</span>
+                  <span className="text-text-secondary font-body text-[11px]">
                     {job?.last_run_at ? timeAgo(job.last_run_at) : 'no data'}
                   </span>
                 </div>
               );
             })}
           </div>
-          <div className="metric-sub" style={{ marginTop: '6px' }}>
-            <Clock size={9} style={{ display: 'inline', verticalAlign: 'middle', marginRight: '4px' }} />
+          <div className="flex items-center gap-1.5 mt-3 text-[10px] text-text-secondary font-body">
+            <Clock size={9} />
             Every {inferenceStatus?.interval_seconds ?? 300}s
           </div>
-        </div>
+        </Card>
       </div>
 
-      {/* System stats */}
-      <div className="card" style={{ padding: '20px' }}>
-        <div style={{ fontSize: '11px', fontWeight: 600, color: 'var(--text-secondary)', letterSpacing: '0.08em', textTransform: 'uppercase', marginBottom: '14px', fontFamily: 'Manrope' }}>
+      {/* Collection stats */}
+      <Card className="p-5">
+        <div className="text-[11px] font-semibold text-text-secondary uppercase tracking-widest font-body mb-4">
           Collection Stats
         </div>
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: '12px' }}>
+        <div className="grid gap-3" style={{ gridTemplateColumns: `repeat(${Object.keys(stats?.doc_counts ?? {}).length || 5}, 1fr)` }}>
           {Object.entries(stats?.doc_counts ?? {}).map(([name, count]) => (
-            <div key={name} style={{ textAlign: 'center' }}>
-              <div className="font-mono" style={{ fontSize: '20px', fontWeight: 700, color: 'var(--text-primary)' }}>
-                {count.toLocaleString()}
-              </div>
-              <div style={{ fontSize: '10px', color: 'var(--text-secondary)', marginTop: '4px', fontFamily: 'Manrope', letterSpacing: '0.04em' }}>
+            <div key={name} className="text-center">
+              <div className="font-mono text-[20px] font-bold text-text-primary">{count.toLocaleString()}</div>
+              <div className="text-[10px] text-text-secondary mt-1 font-body tracking-wide">
                 {name.replace('_', ' ')}
               </div>
             </div>
           ))}
         </div>
-      </div>
+      </Card>
     </div>
   );
 }
