@@ -59,8 +59,14 @@ class DirectionHead(nn.Module):
         self.output_size = output_size
         self.n_classes = n_classes
 
+        # Deeper head: direction is the primary task, so it gets more capacity
+        # than the auxiliary price head (which is 128 → 64 → output_size).
         self.net = nn.Sequential(
-            nn.Linear(hidden_size, 64),
+            nn.Linear(hidden_size, 128),
+            nn.LayerNorm(128),
+            nn.ReLU(),
+            nn.Dropout(0.2),
+            nn.Linear(128, 64),
             nn.ReLU(),
             nn.Dropout(0.1),
             nn.Linear(64, output_size * n_classes),
