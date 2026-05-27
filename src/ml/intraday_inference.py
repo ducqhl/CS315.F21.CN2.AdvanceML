@@ -160,28 +160,30 @@ def run_intraday_inference(coin: str = "bitcoin", mongo_uri: str | None = None) 
 
     x = torch.tensor(feat[np.newaxis], dtype=torch.float32)   # (1, SEQ_5M, n_features)
 
+    _DIR_CLASSES = {0: "DOWN", 1: "FLAT", 2: "UP"}
+
     with torch.no_grad():
         out = model(x)
-        price_out = out[0] if isinstance(out, tuple) else out  # (1, 7)
-        pred_lr_norm = float(price_out[0, 0].item())           # first step only
+        if isinstance(out, tuple):
+            price_out, dir_logits = out            # (1, 7), (1, 7, 3)
+            # Use the direction head's softmax for confidence — step 0 only
+            logits_step0 = dir_logits[0, 0].cpu().numpy()             # (3,)
+            exp_l = np.exp(logits_step0 - logits_step0.max())
+            dir_probs_step0 = exp_l / exp_l.sum()                     # (3,) softmax
+            dir_idx   = int(dir_probs_step0.argmax())
+            direction = _DIR_CLASSES[dir_idx]
+            confidence = float(dir_probs_step0[dir_idx])
+        else:
+            price_out  = out
+            direction  = "FLAT"
+            confidence = 1 / 3   # random-chance confidence for 3-class, v1 fallback
+        pred_lr_norm = float(price_out[0, 0].item())                  # first step only
 
     # 5. Un-scale using the daily scaler (feature 0 = log_return_1d).
     #    Using the daily scaler here (not local 5-min stats) is correct because
     #    the model outputs predictions calibrated to the training normalization.
     pred_lr = pred_lr_norm * float(daily_scaler.scale_[0]) + float(daily_scaler.mean_[0])
     predicted_close = last_price * np.exp(pred_lr)
-
-    # Direction and confidence from log-return magnitude relative to training scale
-    scale0 = float(daily_scaler.scale_[0])
-    if pred_lr > 0.5 * scale0:
-        direction = "UP"
-        confidence = min(0.95, 0.6 + abs(pred_lr) / scale0 * 0.1)
-    elif pred_lr < -0.5 * scale0:
-        direction = "DOWN"
-        confidence = min(0.95, 0.6 + abs(pred_lr) / scale0 * 0.1)
-    else:
-        direction = "FLAT"
-        confidence = 0.6
 
     # 7. Compute target timestamp (next 5-min candle)
     now_utc = datetime.now(timezone.utc)
