@@ -58,8 +58,41 @@ WEIGHT_DECAY = 1e-5
 PATIENCE = 10        # early-stopping patience
 
 # Loss combination weights
-DEFAULT_ALPHA = 1.0   # weight for price (Huber) loss
-DEFAULT_BETA  = 0.5   # weight for direction (CrossEntropy) loss
+DEFAULT_ALPHA = 0.3   # weight for price (Huber) loss — auxiliary task
+DEFAULT_BETA  = 1.0   # weight for direction (CrossEntropy) loss — primary task
+
+# Direction-weighted loss penalty: wrong-direction predictions get 1 + PENALTY_FACTOR weight
+DIRECTION_PENALTY = 2.0
+
+
+def _compute_class_weights(y_dir: np.ndarray, n_classes: int = 3) -> torch.Tensor:
+    """Compute inverse-frequency class weights for CrossEntropyLoss.
+
+    Handles remaining class imbalance after adaptive-threshold labelling.
+    """
+    counts = np.bincount(y_dir.flatten(), minlength=n_classes).astype(np.float64)
+    counts = np.maximum(counts, 1)
+    weights = 1.0 / counts
+    weights /= weights.sum()
+    return torch.tensor(weights, dtype=torch.float32)
+
+
+def _direction_weighted_huber(
+    pred: torch.Tensor,
+    target: torch.Tensor,
+    penalty_factor: float = DIRECTION_PENALTY,
+    delta: float = 1.0,
+) -> torch.Tensor:
+    """Huber loss penalised for wrong-direction predictions.
+
+    Samples where sign(pred) != sign(target) receive weight
+    ``1 + penalty_factor``, pushing the regression head to care about
+    trend direction in addition to magnitude accuracy.
+    """
+    base = nn.functional.huber_loss(pred, target, reduction="none", delta=delta)
+    direction_correct = (pred.sign() == target.sign()).float()
+    weight = 1.0 + (1.0 - direction_correct) * penalty_factor
+    return (base * weight).mean()
 
 
 def _model_path(coin: str, version: int = 2) -> Path:
@@ -83,8 +116,9 @@ def compute_metrics(
     y_dir_pred_logits: np.ndarray | None,  # (M, 7, 3) logits or None
     scaler,
     last_price_usd: float,
-) -> dict[str, float]:
-    """Return RMSE, MAE, directional accuracy, direction_accuracy_pct, f1_macro.
+) -> dict:
+    """Return RMSE, MAE, directional accuracy, direction_accuracy_pct, f1_macro,
+    per_class_accuracy (dict) and confusion_matrix (list[list[int]]).
 
     Un-standardises feature-0 (log_return_1d) using the scaler's mean/scale,
     then reconstructs cumulative USD price paths from last_price_usd.
@@ -114,9 +148,11 @@ def compute_metrics(
     else:
         dir_acc_price = 0.0
 
-    # Direction head accuracy + F1 (multi-class {0,1,2})
+    # Direction head accuracy + F1 (multi-class {0=DOWN, 1=FLAT, 2=UP})
     direction_accuracy_pct = 0.0
     f1_macro = 0.0
+    per_class_accuracy: dict[str, float] = {}
+    confusion: list[list[int]] = []
 
     if y_dir_pred_logits is not None and len(y_dir_true) > 0:
         # y_dir_pred_logits: (M, 7, 3) — argmax over class dim
@@ -129,10 +165,23 @@ def compute_metrics(
         direction_accuracy_pct = float(np.mean(true_flat == pred_flat) * 100)
 
         try:
-            from sklearn.metrics import f1_score
+            from sklearn.metrics import f1_score, confusion_matrix
             f1_macro = float(f1_score(true_flat, pred_flat, average="macro", zero_division=0))
+
+            # Per-class accuracy for DOWN / FLAT / UP
+            _labels = {0: "DOWN", 1: "FLAT", 2: "UP"}
+            for cls_idx, cls_name in _labels.items():
+                mask = true_flat == cls_idx
+                if mask.sum() > 0:
+                    per_class_accuracy[cls_name] = float(
+                        (pred_flat[mask] == cls_idx).mean() * 100
+                    )
+
+            # Confusion matrix (3×3)
+            cm = confusion_matrix(true_flat, pred_flat, labels=[0, 1, 2])
+            confusion = cm.tolist()
         except ImportError:
-            logger.warning("sklearn not available; skipping f1_macro.")
+            logger.warning("sklearn not available; skipping f1_macro and confusion matrix.")
 
     return {
         "rmse": rmse,
@@ -140,6 +189,8 @@ def compute_metrics(
         "directional_accuracy_pct": dir_acc_price,
         "direction_accuracy_pct": direction_accuracy_pct,
         "f1_macro": f1_macro,
+        "per_class_accuracy": per_class_accuracy,
+        "confusion_matrix": confusion,
     }
 
 
@@ -153,19 +204,24 @@ def train(
     dry_run: bool = False,
     alpha: float = DEFAULT_ALPHA,
     beta: float = DEFAULT_BETA,
+    loss_type: str = "direction_weighted",
 ) -> dict[str, float]:
     """
     Main training entry-point.
 
     Parameters
     ----------
-    coin      : coin id — "bitcoin" or "dogecoin"
-    csv_path  : override CSV path (defaults to data/sample/{coin}.csv)
-    epochs    : maximum training epochs.
-    batch_size: DataLoader batch size.
-    dry_run   : if True, run only 2 epochs and skip saving (for CI/testing).
-    alpha     : weight for Huber price loss.
-    beta      : weight for CrossEntropy direction loss.
+    coin       : coin id — "bitcoin" or "dogecoin"
+    csv_path   : override CSV path (defaults to data/sample/{coin}.csv)
+    epochs     : maximum training epochs.
+    batch_size : DataLoader batch size.
+    dry_run    : if True, run only 2 epochs and skip saving (for CI/testing).
+    alpha      : weight for price loss.
+    beta       : weight for direction (CrossEntropy) loss.
+    loss_type  : "direction_weighted" (default) — Huber penalised for wrong
+                 direction; or "standard" — plain HuberLoss.
+                 Both modes use class-weighted CrossEntropyLoss for the
+                 direction head.
 
     Returns
     -------
@@ -226,8 +282,15 @@ def train(
         n_classes=3,
     ).to(device)
 
-    price_criterion = nn.HuberLoss(delta=1.0)
-    dir_criterion   = nn.CrossEntropyLoss()
+    # Class weights from training labels to handle residual imbalance
+    class_weights = _compute_class_weights(y_dir_train, n_classes=3).to(device)
+    logger.info(
+        "Direction class weights — DOWN: %.4f  FLAT: %.4f  UP: %.4f",
+        class_weights[0].item(), class_weights[1].item(), class_weights[2].item(),
+    )
+
+    price_criterion = nn.HuberLoss(delta=1.0)   # used only for 'standard' mode
+    dir_criterion   = nn.CrossEntropyLoss(weight=class_weights)
     optimizer = torch.optim.Adam(
         model.parameters(), lr=LEARNING_RATE, weight_decay=WEIGHT_DECAY
     )
@@ -254,8 +317,11 @@ def train(
             optimizer.zero_grad()
             price_preds, dir_logits = model(X_batch)   # (B,7), (B,7,3)
 
-            # Price loss (Huber)
-            p_loss = price_criterion(price_preds, y_batch)
+            # Price loss — direction_weighted penalises wrong-sign predictions
+            if loss_type == "direction_weighted":
+                p_loss = _direction_weighted_huber(price_preds, y_batch)
+            else:
+                p_loss = price_criterion(price_preds, y_batch)
 
             # Direction loss: CrossEntropy expects (B*7, 3) logits and (B*7,) targets
             B = dir_logits.size(0)
@@ -283,7 +349,10 @@ def train(
                 y_dir_batch = y_dir_batch.to(device)
                 price_preds, dir_logits = model(X_batch)
                 B = dir_logits.size(0)
-                p_loss = price_criterion(price_preds, y_batch)
+                if loss_type == "direction_weighted":
+                    p_loss = _direction_weighted_huber(price_preds, y_batch)
+                else:
+                    p_loss = price_criterion(price_preds, y_batch)
                 d_loss = dir_criterion(
                     dir_logits.view(B * 7, 3),
                     y_dir_batch.view(B * 7),
@@ -343,11 +412,21 @@ def train(
     )
 
     logger.info("── Test Metrics (%s) ─────────────────────────────────────", coin)
-    logger.info("  RMSE:                     $%.2f", metrics["rmse"])
-    logger.info("  MAE:                      $%.2f", metrics["mae"])
-    logger.info("  Directional accuracy:     %.1f%%", metrics["directional_accuracy_pct"])
-    logger.info("  Direction head accuracy:  %.1f%%", metrics["direction_accuracy_pct"])
-    logger.info("  F1 macro:                 %.4f",   metrics["f1_macro"])
+    logger.info("  [PRIMARY]  F1 macro:              %.4f  (chance=0.333)",
+                metrics["f1_macro"])
+    logger.info("  [PRIMARY]  Direction accuracy:    %.1f%%  (chance=33.3%%)",
+                metrics["direction_accuracy_pct"])
+    pca = metrics.get("per_class_accuracy", {})
+    logger.info("  [PRIMARY]  Per-class accuracy:    DOWN=%.1f%%  FLAT=%.1f%%  UP=%.1f%%",
+                pca.get("DOWN", 0), pca.get("FLAT", 0), pca.get("UP", 0))
+    cm = metrics.get("confusion_matrix", [])
+    if cm:
+        logger.info("  Confusion matrix (rows=true, cols=pred) [DOWN, FLAT, UP]:")
+        for i, row in enumerate(cm):
+            logger.info("    %s: %s", ["DOWN", "FLAT", "UP"][i], row)
+    logger.info("  [SECONDARY] RMSE:                 $%.2f", metrics["rmse"])
+    logger.info("  [SECONDARY] MAE:                  $%.2f", metrics["mae"])
+    logger.info("  [SECONDARY] Price dir accuracy:   %.1f%%", metrics["directional_accuracy_pct"])
 
     # ── 5. Save metrics ───────────────────────────────────────────────────────
     if not dry_run:
@@ -357,6 +436,7 @@ def train(
         metrics["last_price_usd"] = last_price_usd
         metrics["alpha"] = alpha
         metrics["beta"] = beta
+        metrics["loss_type"] = loss_type
         with open(metrics_path, "w") as f:
             json.dump(metrics, f, indent=2)
         logger.info("Metrics saved to %s", metrics_path)
@@ -382,11 +462,19 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--alpha", type=float, default=DEFAULT_ALPHA,
-        help="Weight for price (Huber) loss (default: 1.0)"
+        help="Weight for price loss (default: 1.0)"
     )
     parser.add_argument(
         "--beta", type=float, default=DEFAULT_BETA,
         help="Weight for direction (CrossEntropy) loss (default: 0.5)"
+    )
+    parser.add_argument(
+        "--loss-type", type=str, default="direction_weighted",
+        choices=["direction_weighted", "standard"],
+        help=(
+            "Price loss variant: 'direction_weighted' (default) penalises wrong-sign "
+            "predictions; 'standard' uses plain HuberLoss."
+        ),
     )
     args = parser.parse_args()
 
@@ -397,4 +485,5 @@ if __name__ == "__main__":
         dry_run=args.dry_run,
         alpha=args.alpha,
         beta=args.beta,
+        loss_type=args.loss_type,
     )

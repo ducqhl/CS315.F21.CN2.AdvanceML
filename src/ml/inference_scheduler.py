@@ -60,6 +60,11 @@ MONGO_URI = os.getenv(
 COINGECKO_API_KEY = os.getenv("COINGECKO_API_KEY", "")
 SCHEDULER_FETCH_COINGECKO = os.getenv("SCHEDULER_FETCH_COINGECKO", "true").lower() == "true"
 
+# Daily inference: run once per UTC day at DAILY_INFERENCE_HOUR (default midnight).
+# This produces a properly anchored daily forecast and evaluates yesterday's accuracy.
+# The 5-min cycle continues independently for intraday predictions.
+DAILY_INFERENCE_HOUR = int(os.getenv("DAILY_INFERENCE_HOUR", "0"))
+
 COINS = ["bitcoin", "dogecoin"]
 _COIN_SYMBOL_MAP = {"bitcoin": "BTC", "dogecoin": "DOGE"}
 
@@ -220,18 +225,94 @@ def run_cycle(consecutive_failures: int) -> int:
 
 # ── Entry point ────────────────────────────────────────────────────────────────
 
+def run_daily_cycle() -> None:
+    """
+    Run the daily inference + accuracy evaluation cycle.
+
+    Called once per UTC day when the scheduler clock reaches DAILY_INFERENCE_HOUR.
+
+    Steps:
+      1. Re-run full 7-day inference for each coin — anchored to the latest
+         available closing price (post-midnight, so yesterday's close is current).
+      2. Evaluate yesterday's prediction against actual prices and write the
+         result to the prediction_accuracy collection.
+    """
+    logger.info(
+        "Daily inference cycle starting (DAILY_INFERENCE_HOUR=%d UTC).",
+        DAILY_INFERENCE_HOUR,
+    )
+
+    # Step 1: Daily 7-day forecast for each coin
+    for coin in COINS:
+        symbol = _COIN_SYMBOL_MAP.get(coin, coin.upper())
+        try:
+            docs = run_inference(coin=coin, mongo_uri=MONGO_URI)
+            logger.info(
+                "Daily inference OK for %s — %d predictions written.", coin, len(docs)
+            )
+        except FileNotFoundError as exc:
+            logger.error(
+                "Model not trained for %s (run train_lstm.py first): %s", coin, exc
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("Daily inference failed for %s: %s", coin, exc)
+
+    # Step 2: Accuracy evaluation — compare yesterday's predictions to actual prices
+    try:
+        from accuracy_tracker import evaluate_yesterday  # noqa: PLC0415
+        acc_results = evaluate_yesterday(COINS, mongo_uri=MONGO_URI)
+        for coin_id, metrics in acc_results.items():
+            if metrics.get("skipped"):
+                logger.info(
+                    "Accuracy skipped for %s: %s",
+                    coin_id, metrics["skipped"],
+                )
+            else:
+                logger.info(
+                    "Accuracy for %s yesterday — MAE=$%.2f  MAPE=%.2f%%  dir=%s→%s  correct=%s",
+                    coin_id,
+                    metrics.get("mae") or 0,
+                    metrics.get("mape") or 0,
+                    metrics.get("direction_predicted", "?"),
+                    metrics.get("direction_actual", "?"),
+                    metrics.get("direction_correct"),
+                )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Accuracy evaluation failed (non-fatal): %s", exc)
+
+    logger.info("Daily inference cycle complete.")
+
+
 if __name__ == "__main__":
     logger.info(
-        "Starting inference scheduler — interval=%ds, coins=%s, fetch_coingecko=%s, mongo=%s",
+        "Starting inference scheduler — interval=%ds, daily_hour=%d UTC, "
+        "coins=%s, fetch_coingecko=%s, mongo=%s",
         INFERENCE_INTERVAL_SECONDS,
+        DAILY_INFERENCE_HOUR,
         COINS,
         SCHEDULER_FETCH_COINGECKO,
         MONGO_URI.split("@")[-1] if "@" in MONGO_URI else MONGO_URI,  # hide credentials
     )
     consecutive_failures = 0
+    _last_daily_run_date: str = ""   # "YYYY-MM-DD" of last completed daily cycle
+
     while True:
         cycle_start = time.monotonic()
         consecutive_failures = run_cycle(consecutive_failures)
+
+        # ── Daily trigger: fires once per UTC day at DAILY_INFERENCE_HOUR ──────
+        now_utc    = datetime.now(timezone.utc)
+        today_str  = now_utc.strftime("%Y-%m-%d")
+        at_daily_hour = now_utc.hour == DAILY_INFERENCE_HOUR
+
+        if at_daily_hour and today_str != _last_daily_run_date:
+            try:
+                run_daily_cycle()
+            except Exception as exc:  # noqa: BLE001
+                logger.exception("run_daily_cycle raised unexpectedly: %s", exc)
+            _last_daily_run_date = today_str
+        # ── End daily trigger ─────────────────────────────────────────────────
+
         elapsed = time.monotonic() - cycle_start
         sleep_for = max(0.0, INFERENCE_INTERVAL_SECONDS - elapsed)
         logger.info(
