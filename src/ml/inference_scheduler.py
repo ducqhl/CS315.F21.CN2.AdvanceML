@@ -4,9 +4,13 @@ inference_scheduler.py — Periodic LSTM inference daemon with live CoinGecko fe
 Each cycle (default every 5 minutes):
   1. Fetch latest BTC + DOGE prices directly from CoinGecko (1 API call for both).
   2. Persist each coin's price to MongoDB  live_prices  collection.
-  3. Run LSTM inference for BTC  (seed: live_prices → historical_sma → CSV).
-  4. Run LSTM inference for DOGE.
+  3. Run daily LSTM inference for BTC  (seed: live_prices → historical_sma → CSV).
+  4. Run daily LSTM inference for DOGE.
   5. Sleep until next cycle.
+
+Note: 5-min intraday ML inference has been removed. The LSTM is trained on daily
+data and cannot reliably predict at 5-min resolution (scale mismatch). Live 5-min
+OHLCV candles from live_prices are still displayed on the dashboard.
 
 Why the scheduler fetches CoinGecko directly
 ---------------------------------------------
@@ -49,7 +53,6 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from inference import run_inference  # noqa: E402
-from intraday_inference import run_intraday_inference  # noqa: E402
 
 # ── Configuration ──────────────────────────────────────────────────────────────
 INFERENCE_INTERVAL_SECONDS = int(os.getenv("INFERENCE_INTERVAL_SECONDS", "300"))
@@ -193,21 +196,6 @@ def run_cycle(consecutive_failures: int) -> int:
                 upsert=True,
             )
     _status_client.close()
-
-    # Step 3: run 5-min next-step inference for each coin
-    for coin in COINS:
-        try:
-            doc = run_intraday_inference(coin=coin, mongo_uri=MONGO_URI)
-            if doc:
-                logger.info(
-                    "5-min inference OK for %s — target %s  $%.4f  %s",
-                    _COIN_SYMBOL_MAP.get(coin, coin.upper()),
-                    doc["target_timestamp"].strftime("%H:%M"),
-                    doc["predicted_close"],
-                    doc["direction"],
-                )
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("5-min inference failed for %s (non-fatal): %s", coin, exc)
 
     if not any_success:
         consecutive_failures += 1

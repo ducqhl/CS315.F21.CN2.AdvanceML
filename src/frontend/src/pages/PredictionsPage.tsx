@@ -1,18 +1,21 @@
 /**
  * PredictionsPage — redesigned layout
  *
- * Changes from v1:
- *   - Single ReactApexChart replaced with two lightweight-charts components
- *     (IntradayCandlestickChart for OHLCV, IntradayCompareChart for predicted vs actual)
- *   - Custom DateNavigator replaced with react-datepicker with dark theme
- *   - "Last prediction" badge shows timestamp of the most recent intraday prediction
+ * Shows:
+ *   - 4 metric cards (Next-Day Forecast, 7-Day High, 7-Day Low, 7-Day Outlook)
+ *   - Intraday OHLCV candlestick chart with date picker navigation
+ *   - 7-day daily forecast table
+ *   - Prediction run history table
+ *
+ * The intraday predicted-vs-actual overlay has been removed: the LSTM model is
+ * trained on daily data and cannot reliably predict at 5-min resolution.
  */
 import { useEffect, useState, useMemo, useCallback } from 'react';
 import DatePicker from 'react-datepicker';
 import 'react-datepicker/dist/react-datepicker.css';
 import {
   TrendingUp, TrendingDown, Minus, Brain,
-  ChevronDown, ChevronUp, Activity, Calendar, Clock,
+  ChevronDown, ChevronUp, Activity, Calendar,
   ChevronLeft, ChevronRight,
 } from 'lucide-react';
 import {
@@ -22,12 +25,11 @@ import type {
   IntradayResponse, IntradayDateEntry,
   PredictionsResponse, PredictionPoint,
 } from '../api/client';
+
 import { C } from '../components/apexTheme';
 import {
   IntradayCandlestickChart,
-  IntradayCompareChart,
   type IntraCandle,
-  type IntraLine,
 } from '../components/LightweightChart';
 
 interface Props { coin: 'bitcoin' | 'dogecoin' }
@@ -35,11 +37,6 @@ interface Props { coin: 'bitcoin' | 'dogecoin' }
 // ── Helpers ─────────────────────────────────────────────────────────────────────
 function toUnixSeconds(isoString: string): number {
   return Math.floor(new Date(isoString).getTime() / 1000);
-}
-
-function formatLocalHHMM(isoString: string): string {
-  const d = new Date(isoString);
-  return d.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false });
 }
 
 // Parse "YYYY-MM-DD" without timezone shift (treat as local midnight).
@@ -194,27 +191,6 @@ function DatePickerNav({ dates, selected, onChange }: DatePickerNavProps) {
   );
 }
 
-// ── Last Prediction Badge ───────────────────────────────────────────────────────
-function LastPredictionBadge({ lastTs }: { lastTs: string | null }) {
-  if (!lastTs) {
-    return (
-      <div style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', padding: '4px 10px', borderRadius: '20px', background: 'var(--bg-elevated)', border: '1px solid var(--border)' }}>
-        <Clock size={11} color={C.textSec} />
-        <span className="font-mono" style={{ fontSize: '10px', color: C.textSec }}>No predictions yet</span>
-      </div>
-    );
-  }
-  return (
-    <div style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', padding: '4px 10px', borderRadius: '20px', background: `${C.gold}12`, border: `1px solid ${C.gold}40` }}>
-      <Clock size={11} color={C.gold} />
-      <span className="font-mono" style={{ fontSize: '10px', color: C.gold, fontWeight: 700 }}>
-        Last prediction: {formatLocalHHMM(lastTs)}
-      </span>
-      <span style={{ width: '6px', height: '6px', borderRadius: '50%', background: C.gold, boxShadow: `0 0 5px ${C.gold}` }} />
-    </div>
-  );
-}
-
 // ── Main Page ───────────────────────────────────────────────────────────────────
 export default function PredictionsPage({ coin }: Props) {
   const today = new Date().toISOString().slice(0, 10);
@@ -270,55 +246,15 @@ export default function PredictionsPage({ coin }: Props) {
   }, [loadIntraday, selDate, today]);
 
   // ── Derived chart data ────────────────────────────────────────────────────────
-  const { candleData, actualLineData, predictedLineData, hasPredictions, accuracyStats, lastPredTs } = useMemo(() => {
-    if (!intraday) {
-      return { candleData: [], actualLineData: [], predictedLineData: [], hasPredictions: false, accuracyStats: null, lastPredTs: null };
-    }
-
-    const candleData: IntraCandle[] = intraday.actual.map(d => ({
+  const candleData = useMemo((): IntraCandle[] => {
+    if (!intraday) return [];
+    return intraday.actual.map(d => ({
       time:  toUnixSeconds(d.t),
       open:  d.o ?? d.c,
       high:  d.h ?? d.c,
       low:   d.l ?? d.c,
       close: d.c,
     }));
-
-    const actualLineData: IntraLine[] = intraday.actual.map(d => ({
-      time:  toUnixSeconds(d.t),
-      value: d.c,
-    }));
-
-    const hasPredictions = intraday.predicted.length > 0;
-
-    const predictedLineData: IntraLine[] = intraday.predicted.map(p => ({
-      time:  toUnixSeconds(p.t),
-      value: p.close,
-    }));
-
-    const lastPredTs: string | null = hasPredictions
-      ? intraday.predicted[intraday.predicted.length - 1].t
-      : null;
-
-    // Accuracy: compare predictions against actual closes at matching timestamps
-    const actualMap = new Map<number, number>();
-    intraday.actual.forEach(d => {
-      actualMap.set(toUnixSeconds(d.t), d.c);
-    });
-
-    const pairs = intraday.predicted
-      .map(p => {
-        const ts  = toUnixSeconds(p.t);
-        const act = actualMap.get(ts);
-        return act != null ? { actual: act, pred: p.close } : null;
-      })
-      .filter((x): x is { actual: number; pred: number } => x !== null);
-
-    const accuracyStats = pairs.length >= 3 ? {
-      mae: pairs.reduce((s, p) => s + Math.abs((p.pred - p.actual) / p.actual) * 100, 0) / pairs.length,
-      n:   pairs.length,
-    } : null;
-
-    return { candleData, actualLineData, predictedLineData, hasPredictions, accuracyStats, lastPredTs };
   }, [intraday]);
 
   // ── 7-day outlook summary ─────────────────────────────────────────────────────
@@ -346,9 +282,6 @@ export default function PredictionsPage({ coin }: Props) {
   }
 
   const selEntry = availDates.find(d => d.date === selDate);
-  const maeBadgeColor = accuracyStats
-    ? (accuracyStats.mae < 0.5 ? C.green : accuracyStats.mae < 2 ? C.gold : C.red)
-    : C.textSec;
 
   return (
     <div>
@@ -371,23 +304,9 @@ export default function PredictionsPage({ coin }: Props) {
             </span>
           </div>
           <div style={{ color: 'var(--text-secondary)', fontSize: '12px', fontFamily: 'Manrope' }}>
-            {symbol} · 5-min intraday predictions + 7-day daily outlook
+            {symbol} · 7-day daily outlook
           </div>
         </div>
-        {accuracyStats && (
-          <div style={{
-            display: 'inline-flex', alignItems: 'center', gap: '8px',
-            padding: '5px 12px', borderRadius: '20px',
-            background: `${maeBadgeColor}18`,
-            border: `1px solid ${maeBadgeColor}40`,
-          }}>
-            <Activity size={12} color={maeBadgeColor} />
-            <span className="font-mono" style={{ fontSize: '11px', fontWeight: 700, color: maeBadgeColor }}>
-              MAE {accuracyStats.mae.toFixed(3)}%
-            </span>
-            <span style={{ fontSize: '10px', color: C.textSec, fontFamily: 'Manrope' }}>on {accuracyStats.n} pts</span>
-          </div>
-        )}
       </div>
 
       {/* ── Metric cards ──────────────────────────────────────────────────────── */}
@@ -435,12 +354,8 @@ export default function PredictionsPage({ coin }: Props) {
             <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)', fontFamily: 'Manrope', marginBottom: '3px' }}>
               5-Min Price — {selDate}
             </div>
-            <div style={{ fontSize: '11px', color: 'var(--text-secondary)', fontFamily: 'Manrope', display: 'flex', gap: '12px', alignItems: 'center' }}>
-              <span>{selEntry?.candle_count ?? intraday?.actual_count ?? 0} candles</span>
-              {hasPredictions
-                ? <span style={{ color: C.gold }}>· {intraday!.predicted_count} predictions</span>
-                : <span style={{ color: C.textSec }}>· no predictions for this day</span>
-              }
+            <div style={{ fontSize: '11px', color: 'var(--text-secondary)', fontFamily: 'Manrope' }}>
+              {selEntry?.candle_count ?? intraday?.actual_count ?? 0} candles
             </div>
           </div>
 
@@ -465,51 +380,6 @@ export default function PredictionsPage({ coin }: Props) {
           )}
         </div>
 
-        {/* Divider */}
-        <div style={{ height: '1px', background: 'var(--border)', margin: '16px 0' }} />
-
-        {/* Chart 2 header: legend + last prediction badge */}
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '10px', flexWrap: 'wrap', gap: '8px' }}>
-          <div style={{ display: 'flex', gap: '20px', fontSize: '11px', fontFamily: 'Manrope' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-              <div style={{ width: '16px', height: '2px', background: C.cyan, borderRadius: '1px' }} />
-              <span style={{ color: 'var(--text-secondary)' }}>Actual close</span>
-            </div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
-              <svg width="16" height="8">
-                <line x1="0" y1="4" x2="16" y2="4" stroke={C.gold} strokeWidth="2" strokeDasharray="4 2" />
-              </svg>
-              <span style={{ color: 'var(--text-secondary)' }}>Predicted close</span>
-            </div>
-          </div>
-          <LastPredictionBadge lastTs={lastPredTs} />
-        </div>
-
-        {/* Chart 2: Predicted vs actual comparison */}
-        <div style={{ position: 'relative', opacity: chartLoading ? 0.5 : 1, transition: 'opacity 0.2s' }}>
-          {intraday && (actualLineData.length > 0 || predictedLineData.length > 0) ? (
-            <IntradayCompareChart
-              actualLine={actualLineData}
-              predictedLine={predictedLineData}
-              height={220}
-            />
-          ) : (
-            <div style={{
-              height: '220px', display: 'flex', flexDirection: 'column',
-              alignItems: 'center', justifyContent: 'center', gap: '10px',
-              color: 'var(--text-secondary)', fontFamily: 'Manrope', fontSize: '12px',
-            }}>
-              <Minus size={22} style={{ opacity: 0.3 }} />
-              {chartLoading ? 'Loading…' : 'No comparison data available'}
-            </div>
-          )}
-        </div>
-
-        {/* Gold dot legend hint */}
-        <div style={{ marginTop: '12px', display: 'flex', alignItems: 'center', gap: '8px', fontSize: '10px', color: C.textSec, fontFamily: 'Manrope' }}>
-          <span style={{ width: '7px', height: '7px', borderRadius: '50%', background: C.gold, boxShadow: `0 0 5px ${C.gold}`, display: 'inline-block' }} />
-          Dates with a gold dot in the picker have prediction data available
-        </div>
       </div>
 
       {/* ── 7-Day Forecast Table ───────────────────────────────────────────────── */}

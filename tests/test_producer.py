@@ -125,7 +125,7 @@ class TestFetchPrices:
             coin: {"usd": 1.0, "usd_24h_vol": 0, "usd_market_cap": 0, "usd_24h_change": 0}
             for coin in cp.COINS
         }
-        with patch("crypto_producer.cg", self._mock_cg_response(payload)):
+        with patch("crypto_producer._get_cg", return_value=self._mock_cg_response(payload)):
             result = cp.fetch_prices()
         assert set(result.keys()) == set(cp.COINS)
 
@@ -138,10 +138,8 @@ class TestFetchPrices:
         payload = {}
         mock_cg = MagicMock()
         mock_cg.get_price.return_value = payload
-        with patch("crypto_producer.cg", mock_cg):
+        with patch("crypto_producer._get_cg", return_value=mock_cg):
             cp.fetch_prices()
-        _, kwargs = mock_cg.get_price.call_args
-        ids_param = kwargs.get("ids", "") or mock_cg.get_price.call_args[0][0] if mock_cg.get_price.call_args[0] else ""
         # Check via the actual call — ids is passed as kwarg
         call_kwargs = mock_cg.get_price.call_args[1]
         for coin in cp.COINS:
@@ -150,7 +148,7 @@ class TestFetchPrices:
     def test_sdk_called_with_correct_currencies(self):
         mock_cg = MagicMock()
         mock_cg.get_price.return_value = {}
-        with patch("crypto_producer.cg", mock_cg):
+        with patch("crypto_producer._get_cg", return_value=mock_cg):
             cp.fetch_prices()
         call_kwargs = mock_cg.get_price.call_args[1]
         assert call_kwargs.get("vs_currencies") == "usd"

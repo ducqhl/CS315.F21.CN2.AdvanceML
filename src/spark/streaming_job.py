@@ -11,8 +11,8 @@ Pipeline overview
       │
       ├── Query A: 5-min sliding window aggregation
       │     groupBy(coin, window 20min/5min)
-      │     → avg(price) as sma_5, sma_20, max/min, total_volume
-      │     → foreachBatch → mongo_writer.write_batch("realtime_prices")
+      │     → avg(price) as sma_20, max/min, total_volume
+      │     → foreachBatch → mongo_writer.write_batch("window_stats")
       │
       └── Query B: per-record enrichment (RSI, VWAP, Bollinger)
             foreachBatch:
@@ -183,7 +183,9 @@ def _write_window_agg(batch_df: DataFrame, batch_id: int) -> None:
     if batch_df.rdd.isEmpty():
         return
 
-    # Rename aggregated window columns to final schema names
+    # Rename aggregated window columns to final schema names.
+    # sma_5 (per-record) is written by Query B; this query stores the 20-min SMA
+    # and OHLCV window stats in a separate collection to avoid schema collisions.
     out = batch_df.select(
         col("coin"),
         col("window.start").alias("event_time"),
@@ -192,7 +194,6 @@ def _write_window_agg(batch_df: DataFrame, batch_id: int) -> None:
         col("volume_24h"),
         col("market_cap"),
         col("change_24h"),
-        col("sma_5"),
         col("sma_20"),
         col("high_window"),
         col("low_window"),
@@ -200,16 +201,18 @@ def _write_window_agg(batch_df: DataFrame, batch_id: int) -> None:
         col("avg_volume"),
     ).withColumn("created_at", current_timestamp())
 
-    write_batch(out, "realtime_prices")
+    write_batch(out, "window_stats")
 
 
 def start_window_agg_query(watermarked_df: DataFrame) -> object:
     """
     Start Query A: aggregate prices over a 20-min / 5-min sliding window.
 
-    Window size   20 minutes  → captures ≥ 20 data points at 60s poll rate
-    Slide         5  minutes  → SMA_5  = avg over the slide interval
-                                SMA_20 = avg over the full 20-min window
+    Window size   20 minutes  → SMA_20 = avg closing price over the window
+    Slide         5  minutes  → emitted every 5 min; written to ``window_stats``
+
+    Note: SMA_5 (per-record, row-based) is handled by Query B via add_sma.
+    Keeping these in separate collections avoids schema collisions on upsert.
 
     Output mode: ``append`` — results are only emitted once the watermark
     has passed the window end (safe for downstream consumers).
@@ -220,7 +223,6 @@ def start_window_agg_query(watermarked_df: DataFrame) -> object:
             window(col("event_time"), "20 minutes", "5 minutes"),
         )
         .agg(
-            avg("price_usd").alias("sma_5"),
             avg("price_usd").alias("sma_20"),
             spark_max("price_usd").alias("high_window"),
             spark_min("price_usd").alias("low_window"),
@@ -238,13 +240,38 @@ def start_window_agg_query(watermarked_df: DataFrame) -> object:
         .foreachBatch(_write_window_agg)
         .option(
             "checkpointLocation",
-            f"{CHECKPOINT_DIR}/window_agg",
+            f"{CHECKPOINT_DIR}/window_stats",
         )
         .trigger(processingTime="30 seconds")
         .start()
     )
     logger.info("Query A (window aggregation) started — id=%s", query.id)
     return query
+
+
+# ── Alert Kafka producer singleton ───────────────────────────────────────────
+# Created once per JVM process; reused across micro-batches to avoid the
+# overhead of opening/closing a producer connection every 30 seconds.
+
+_alert_producer = None
+
+
+def _get_alert_producer():
+    """Return (creating if needed) the module-level alert KafkaProducer."""
+    global _alert_producer
+    if _alert_producer is None:
+        from kafka import KafkaProducer as _KafkaProducer  # type: ignore[import]
+
+        _alert_producer = _KafkaProducer(
+            bootstrap_servers=KAFKA_BOOTSTRAP.split(","),
+            value_serializer=lambda v: json.dumps(v, default=str).encode("utf-8"),
+            key_serializer=lambda k: k.encode("utf-8"),
+            acks="all",
+            retries=3,
+            max_in_flight_requests_per_connection=1,
+        )
+        logger.info("Alert KafkaProducer initialised (bootstrap=%s)", KAFKA_BOOTSTRAP)
+    return _alert_producer
 
 
 # ── Query B: per-record enrichment + alerts ────────────────────────────────────
@@ -275,31 +302,21 @@ def _build_alert_records(batch_df: DataFrame) -> list[dict]:
     return alerts
 
 
-def _produce_alerts_to_kafka(alerts: list[dict], bootstrap: str, topic: str) -> None:
+def _produce_alerts_to_kafka(alerts: list[dict], topic: str) -> None:
     """
     Produce alert records to the ``crypto_alerts`` Kafka topic.
 
-    Uses kafka-python with the same reliability settings as the producer
-    (acks=all, retries=3, max_in_flight=1).
+    Uses the module-level singleton KafkaProducer so the connection is not
+    reopened on every micro-batch.
 
     Args:
-        alerts:    List of alert dicts.
-        bootstrap: Kafka bootstrap server string.
-        topic:     Target Kafka topic name.
+        alerts: List of alert dicts.
+        topic:  Target Kafka topic name.
     """
     if not alerts:
         return
     try:
-        from kafka import KafkaProducer  # type: ignore[import]
-
-        producer = KafkaProducer(
-            bootstrap_servers=bootstrap.split(","),
-            value_serializer=lambda v: json.dumps(v, default=str).encode("utf-8"),
-            key_serializer=lambda k: k.encode("utf-8"),
-            acks="all",
-            retries=3,
-            max_in_flight_requests_per_connection=1,
-        )
+        producer = _get_alert_producer()
         for alert in alerts:
             producer.send(
                 topic=topic,
@@ -307,7 +324,6 @@ def _produce_alerts_to_kafka(alerts: list[dict], bootstrap: str, topic: str) -> 
                 value=alert,
             )
         producer.flush()
-        producer.close()
         logger.info(
             "_produce_alerts_to_kafka: sent %d alert(s) to '%s'",
             len(alerts),
@@ -325,54 +341,61 @@ def _enrich_and_write(batch_df: DataFrame, batch_id: int) -> None:
 
     Steps:
       1. Skip empty batches.
-      2. Sort by (coin, event_time) so window functions are deterministic.
-      3. Apply SMA-5, SMA-20, RSI-14, VWAP-60, Bollinger-20.
-      4. Select final schema columns and write to MongoDB.
-      5. Build and send Kafka alerts for large price moves.
+      2. Cache the micro-batch so the alert scan doesn't trigger a second pass.
+      3. Sort by (coin, event_time) so window functions are deterministic.
+      4. Apply SMA-5, SMA-20, RSI-14, VWAP-60, Bollinger-20.
+      5. Select final schema columns and write to MongoDB.
+      6. Build and send Kafka alerts for large price moves.
     """
     if batch_df.rdd.isEmpty():
         return
 
-    # Sort the static micro-batch so window functions are meaningful
-    df = batch_df.orderBy("coin", "event_time")
+    # Cache so that the indicator pipeline and the alert scan below both
+    # read from memory rather than re-executing the Kafka source twice.
+    batch_df.cache()
+    try:
+        # Sort the static micro-batch so window functions are meaningful
+        df = batch_df.orderBy("coin", "event_time")
 
-    # ── Technical indicators ──────────────────────────────────────────────
-    df = add_sma(df, price_col="price_usd", window_rows=5,  alias="sma_5")
-    df = add_sma(df, price_col="price_usd", window_rows=20, alias="sma_20")
-    df = add_rsi(df, price_col="price_usd", periods=14)
-    df = add_vwap(df, price_col="price_usd", volume_col="volume_24h", window_rows=60)
-    df = add_bollinger(df, price_col="price_usd", window_rows=20)
+        # ── Technical indicators ──────────────────────────────────────────
+        df = add_sma(df, price_col="price_usd", window_rows=5,  alias="sma_5")
+        df = add_sma(df, price_col="price_usd", window_rows=20, alias="sma_20")
+        df = add_rsi(df, price_col="price_usd", periods=14)
+        df = add_vwap(df, price_col="price_usd", volume_col="volume_24h", window_rows=60)
+        df = add_bollinger(df, price_col="price_usd", window_rows=20)
 
-    # ── Final schema selection (Section 7.1 realtime_prices) ─────────────
-    out = df.select(
-        col("coin"),
-        col("price_usd"),
-        col("volume_24h"),
-        col("market_cap"),
-        col("change_24h"),
-        col("sma_5"),
-        col("sma_20"),
-        col("rsi_14"),
-        col("vwap"),
-        col("bb_mid"),
-        col("bb_upper"),
-        col("bb_lower"),
-        col("event_time"),
-        col("source"),
-        # OHLC from producer — null when OHLC not fetched this cycle
-        col("open"),
-        col("high"),
-        col("low"),
-        col("close"),
-    ).withColumn("created_at", current_timestamp())
+        # ── Final schema selection (Section 7.1 realtime_prices) ─────────
+        out = df.select(
+            col("coin"),
+            col("price_usd"),
+            col("volume_24h"),
+            col("market_cap"),
+            col("change_24h"),
+            col("sma_5"),
+            col("sma_20"),
+            col("rsi_14"),
+            col("vwap"),
+            col("bb_mid"),
+            col("bb_upper"),
+            col("bb_lower"),
+            col("event_time"),
+            col("source"),
+            # OHLC from producer — null when OHLC not fetched this cycle
+            col("open"),
+            col("high"),
+            col("low"),
+            col("close"),
+        ).withColumn("created_at", current_timestamp())
 
-    write_batch(out, "realtime_prices")
+        write_batch(out, "realtime_prices")
 
-    # ── Alert logic ───────────────────────────────────────────────────────
-    alerts = _build_alert_records(batch_df)
-    if alerts:
-        upsert_alerts(alerts)
-        _produce_alerts_to_kafka(alerts, KAFKA_BOOTSTRAP, KAFKA_TOPIC_ALERTS)
+        # ── Alert logic ───────────────────────────────────────────────────
+        alerts = _build_alert_records(batch_df)
+        if alerts:
+            upsert_alerts(alerts)
+            _produce_alerts_to_kafka(alerts, KAFKA_TOPIC_ALERTS)
+    finally:
+        batch_df.unpersist()
 
 
 def start_enrichment_query(watermarked_df: DataFrame) -> object:

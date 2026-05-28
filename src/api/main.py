@@ -598,12 +598,12 @@ def get_intraday_dates(
     _user: dict = Depends(get_current_user),
 ) -> dict:
     """
-    Return list of dates that have 5-min candle data, with prediction availability.
+    Return list of dates that have 5-min candle data.
     Response: { dates: [{date, candle_count, has_predictions}] }
+    has_predictions is always False — intraday ML predictions removed (scale mismatch).
     """
     symbol = _resolve_symbol(coin)
 
-    # Aggregate actual candle dates
     candle_dates = list(db.live_prices.aggregate([
         {"$match": {"symbol": symbol, "close": {"$gt": 0}}},
         {"$group": {
@@ -613,22 +613,8 @@ def get_intraday_dates(
         {"$sort": {"_id": 1}},
     ]))
 
-    # Aggregate prediction dates
-    pred_dates_raw = list(db.intraday_predictions.aggregate([
-        {"$match": {"symbol": symbol}},
-        {"$group": {
-            "_id": {"$dateToString": {"format": "%Y-%m-%d", "date": "$target_timestamp"}},
-            "count": {"$sum": 1},
-        }},
-    ]))
-    pred_date_set = {d["_id"] for d in pred_dates_raw}
-
     dates = [
-        {
-            "date": d["_id"],
-            "candle_count": d["count"],
-            "has_predictions": d["_id"] in pred_date_set,
-        }
+        {"date": d["_id"], "candle_count": d["count"], "has_predictions": False}
         for d in candle_dates
     ]
 
@@ -643,13 +629,16 @@ def get_intraday(
     _user: dict = Depends(get_current_user),
 ) -> dict:
     """
-    Return 5-min OHLCV candles from live_prices and matched intraday_predictions.
+    Return 5-min OHLCV candles from live_prices for the candlestick chart.
 
     date:  YYYY-MM-DD — return only that calendar day (takes priority over range)
     range: 24h | 3d | 7d | all  (used when date is not provided)
-    Response: { actual: [...], predicted: [...] }
-      actual    — {t, o, h, l, c, v}  (5-min candles, ISO timestamp strings)
-      predicted — {t, close, direction, confidence}  (matched by target_timestamp)
+    Response: { actual: [...] }
+      actual — {t, o, h, l, c, v}  (5-min candles, ISO timestamp strings)
+
+    Note: intraday ML predictions removed — the LSTM is trained on daily data
+    and cannot reliably predict at 5-min resolution (daily-scale vs 5-min-scale
+    mismatch). The candlestick chart displays real market data only.
     """
     symbol = _resolve_symbol(coin)
     now_utc = datetime.now(timezone.utc)
@@ -665,10 +654,6 @@ def get_intraday(
             "symbol": symbol, "close": {"$gt": 0},
             "timestamp": {"$gte": day_start, "$lt": day_end},
         }
-        pred_filter: dict = {
-            "symbol": symbol,
-            "target_timestamp": {"$gte": day_start, "$lt": day_end},
-        }
         effective_range = date
     else:
         range_map = {"24h": 1, "3d": 3, "7d": 7, "all": 999}
@@ -677,9 +662,6 @@ def get_intraday(
         candle_filter = {"symbol": symbol, "close": {"$gt": 0}}
         if range != "all":
             candle_filter["timestamp"] = {"$gte": since}
-        pred_filter = {"symbol": symbol}
-        if range != "all":
-            pred_filter["target_timestamp"] = {"$gte": since}
         effective_range = range
 
     # ── Actual 5-min candles ─────────────────────────────────────────────────
@@ -701,31 +683,11 @@ def get_intraday(
         for d in candles
     ]
 
-    # ── Intraday predictions by target_timestamp ──────────────────────────────
-    preds = list(db.intraday_predictions.find(
-        pred_filter,
-        sort=[("target_timestamp", 1)],
-        projection={"_id": 0, "target_timestamp": 1, "predicted_close": 1,
-                    "direction": 1, "confidence": 1},
-    ))
-
-    predicted = [
-        {
-            "t":          d["target_timestamp"].isoformat() if hasattr(d["target_timestamp"], "isoformat") else str(d["target_timestamp"]),
-            "close":      d.get("predicted_close"),
-            "direction":  d.get("direction"),
-            "confidence": d.get("confidence"),
-        }
-        for d in preds
-    ]
-
     return {
-        "symbol":          symbol,
-        "range":           effective_range,
-        "actual":          actual,
-        "predicted":       predicted,
-        "actual_count":    len(actual),
-        "predicted_count": len(predicted),
+        "symbol":       symbol,
+        "range":        effective_range,
+        "actual":       actual,
+        "actual_count": len(actual),
     }
 
 

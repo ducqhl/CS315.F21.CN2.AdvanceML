@@ -283,5 +283,4 @@ def _coerce_dates(records: list[dict[str, Any]]) -> None:
     for r in records:
         for k, v in list(r.items()):
             if type(v) is _dt.date:  # exact type check — datetime is a subclass
-                r[k] = datetime(_dt.date.year.__get__(v), v.month, v.day,
-                                tzinfo=timezone.utc)
+                r[k] = datetime(v.year, v.month, v.day, tzinfo=timezone.utc)

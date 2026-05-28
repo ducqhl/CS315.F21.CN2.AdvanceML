@@ -113,7 +113,7 @@ class TestProducerToKafka:
             request_timeout_ms=15_000,
         )
 
-        with patch("crypto_producer.cg", mock_cg), \
+        with patch("crypto_producer._get_cg", return_value=mock_cg), \
              patch("crypto_producer.TOPIC_RAW", kafka_topic), \
              patch("crypto_producer.KAFKA_BOOTSTRAP_SERVERS", kafka_bootstrap), \
              patch("crypto_producer.time.sleep", side_effect=KeyboardInterrupt):
@@ -160,7 +160,7 @@ class TestProducerToKafka:
             linger_ms=100, request_timeout_ms=15_000,
         )
 
-        with patch("crypto_producer.cg", mock_cg), \
+        with patch("crypto_producer._get_cg", return_value=mock_cg), \
              patch("crypto_producer.TOPIC_RAW", topic), \
              patch("crypto_producer.KAFKA_BOOTSTRAP_SERVERS", kafka_bootstrap), \
              patch("crypto_producer.time.sleep", side_effect=KeyboardInterrupt):
@@ -207,7 +207,7 @@ class TestProducerToKafka:
             linger_ms=100, request_timeout_ms=15_000,
         )
 
-        with patch("crypto_producer.cg", mock_cg), \
+        with patch("crypto_producer._get_cg", return_value=mock_cg), \
              patch("crypto_producer.TOPIC_RAW", topic), \
              patch("crypto_producer.KAFKA_BOOTSTRAP_SERVERS", kafka_bootstrap), \
              patch("crypto_producer.time.sleep", side_effect=KeyboardInterrupt):
@@ -255,7 +255,7 @@ class TestProducerToKafka:
         )
 
         # Force OHLC fetch on cycle 0 (OHLC_POLL_MULTIPLIER=1)
-        with patch("crypto_producer.cg", mock_cg), \
+        with patch("crypto_producer._get_cg", return_value=mock_cg), \
              patch("crypto_producer.TOPIC_RAW", topic), \
              patch("crypto_producer.KAFKA_BOOTSTRAP_SERVERS", kafka_bootstrap), \
              patch("crypto_producer.OHLC_POLL_MULTIPLIER", 1), \
@@ -306,7 +306,7 @@ class TestProducerToKafka:
             linger_ms=100, request_timeout_ms=15_000,
         )
 
-        with patch("crypto_producer.cg", mock_cg), \
+        with patch("crypto_producer._get_cg", return_value=mock_cg), \
              patch("crypto_producer.TOPIC_RAW", topic), \
              patch("crypto_producer.KAFKA_BOOTSTRAP_SERVERS", kafka_bootstrap), \
              patch("crypto_producer.time.sleep", side_effect=KeyboardInterrupt):

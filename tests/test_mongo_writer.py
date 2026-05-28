@@ -157,21 +157,51 @@ class TestWriteBatch:
         ops = mock_coll.bulk_write.call_args[0][0]
         assert len(ops) == 2
 
-    def test_non_realtime_collection_uses_insert_many(self):
+    def test_unknown_collection_uses_insert_many(self):
+        # Collections not in _BATCH_UPSERT_KEYS (and not realtime_prices) fall
+        # through to insert_many — e.g. an ad-hoc metrics collection.
         rows = [_make_spark_row("BTC")]
         df = _make_mock_df(rows)
 
         mock_client = MagicMock()
         mock_coll = MagicMock()
+        mock_coll.name = "other_metrics"
+        mock_coll.database.name = "crypto_db"
+        mock_client.__getitem__.return_value.__getitem__.return_value = mock_coll
+
+        with patch.object(mw, "_get_client", return_value=mock_client):
+            mw.write_batch(df, "other_metrics")
+
+        mock_coll.insert_many.assert_called_once()
+        mock_coll.bulk_write.assert_not_called()
+
+    def test_batch_collection_uses_bulk_write_upsert(self):
+        # Known batch collections (daily_stats, historical_sma, coin_correlation)
+        # use bulk_write with upsert=True for idempotent re-runs.
+        import datetime as _dt
+        row = MagicMock()
+        row.asDict.return_value = {
+            "symbol": "BTC",
+            "date": _dt.date(2025, 1, 1),
+            "avg_close": 67000.0,
+        }
+        df = _make_mock_df([row])
+
+        mock_client = MagicMock()
+        mock_coll = MagicMock()
         mock_coll.name = "daily_stats"
         mock_coll.database.name = "crypto_db"
+        bulk_result = MagicMock()
+        bulk_result.upserted_count = 1
+        bulk_result.modified_count = 0
+        mock_coll.bulk_write.return_value = bulk_result
         mock_client.__getitem__.return_value.__getitem__.return_value = mock_coll
 
         with patch.object(mw, "_get_client", return_value=mock_client):
             mw.write_batch(df, "daily_stats")
 
-        mock_coll.insert_many.assert_called_once()
-        mock_coll.bulk_write.assert_not_called()
+        mock_coll.bulk_write.assert_called_once()
+        mock_coll.insert_many.assert_not_called()
 
     def test_client_closed_after_write(self):
         rows = [_make_spark_row("BTC")]

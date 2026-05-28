@@ -6,8 +6,10 @@ Architecture
 - 2-layer LSTM  (input_size=9, hidden=128, dropout=0.2)
 - Price head: Linear(128 → 64) → ReLU → Dropout(0.1) → Linear(64 → output_size)
   Output: output_size-step MIMO forecast of log_return_1d (normalised)
-- Direction head (optional): Linear(128 → 64) → ReLU → Dropout(0.1) →
-  Linear(64 → output_size * n_classes), reshaped to (batch, output_size, n_classes)
+- Direction head (optional, primary task):
+  Linear(128 → 128) → LayerNorm(128) → ReLU → Dropout(0.2)
+  → Linear(128 → 64) → ReLU → Dropout(0.1)
+  → Linear(64 → output_size * n_classes), reshaped to (batch, output_size, n_classes)
   Classes: 0=DOWN, 1=FLAT, 2=UP
 
 Input features (N_FEATURES=9)
@@ -110,7 +112,7 @@ class LSTMModel(nn.Module):
         num_layers: int = 2,
         dropout: float = 0.2,
         output_size: int = 7,
-        use_direction_head: bool = False,
+        use_direction_head: bool = True,
         n_classes: int = 3,
     ) -> None:
         super().__init__()

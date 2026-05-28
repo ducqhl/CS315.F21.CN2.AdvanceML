@@ -192,20 +192,11 @@ export interface IntradayCandle {
   v: number;
 }
 
-export interface IntradayPrediction {
-  t: string;   // target_timestamp ISO
-  close: number;
-  direction?: 'UP' | 'FLAT' | 'DOWN';
-  confidence?: number;
-}
-
 export interface IntradayResponse {
   symbol: string;
   range: string;
   actual: IntradayCandle[];
-  predicted: IntradayPrediction[];
   actual_count: number;
-  predicted_count: number;
 }
 
 export type IntradayRange = '24h' | '3d' | '7d' | 'all';

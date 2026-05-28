@@ -8,10 +8,10 @@ official pycoingecko SDK.  Tracks Bitcoin (BTC) and Dogecoin (DOGE) only.
 Also fetches 4h OHLC candles via /coins/{id}/ohlc every OHLC_POLL_MULTIPLIER
 cycles (default every 3rd cycle = every 30 min) to stay within demo tier limits.
 
-Monthly call budget (demo tier = 10k/month):
-  Price cycles/month: 12 × 24 × 30 = 8,640  → 8,640 price calls
-  OHLC calls/month:   8,640 / 3 × 2 coins   = 5,760 OHLC calls
-  Total                                      ≈ 14,400  (requires demo key or paid plan)
+Monthly call budget (demo tier = 10k/month, default 600s interval):
+  Price cycles/month: 6/hr × 24hr × 30d = 4,320  → 4,320 price calls
+  OHLC calls/month:   4,320 / 3 × 2 coins        = 2,880 OHLC calls
+  Total                                           ≈ 7,200  (within demo tier)
 
 Producer config guarantees:
   - acks="all"  — wait for all ISR replicas
@@ -38,7 +38,7 @@ load_dotenv()
 
 KAFKA_BOOTSTRAP_SERVERS = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "localhost:9092")
 TOPIC_RAW               = os.getenv("KAFKA_TOPIC_RAW", "crypto_raw")
-POLL_INTERVAL_SECONDS   = int(os.getenv("POLL_INTERVAL_SECONDS", "300"))
+POLL_INTERVAL_SECONDS   = int(os.getenv("POLL_INTERVAL_SECONDS", "600"))
 COINGECKO_API_KEY       = os.getenv("COINGECKO_API_KEY", "")  # empty = no-key mode
 MONGO_URI               = os.getenv("MONGO_URI", "")          # empty = disable direct DB write
 
@@ -119,9 +119,17 @@ def write_to_live_prices(records: list) -> None:
             logger.info("Wrote %d docs to live_prices.", len(docs))
     except Exception as exc:  # noqa: BLE001
         logger.warning("live_prices write failed (non-fatal): %s", exc)
+        # Force reconnect on next call — the client may be in a broken state.
+        global _mongo_client
+        _mongo_client = None
 
 
 # ── CoinGecko SDK client ──────────────────────────────────────────────────────
+# Lazily initialised so that importing this module in tests does not require a
+# valid API key or an active network connection.
+_cg: CoinGeckoAPI | None = None
+
+
 def build_cg_client() -> CoinGeckoAPI:
     """Return a CoinGeckoAPI instance authenticated with the demo key when set."""
     if COINGECKO_API_KEY:
@@ -129,7 +137,12 @@ def build_cg_client() -> CoinGeckoAPI:
     return CoinGeckoAPI()
 
 
-cg = build_cg_client()
+def _get_cg() -> CoinGeckoAPI:
+    """Return the singleton CoinGeckoAPI client, creating it on first call."""
+    global _cg
+    if _cg is None:
+        _cg = build_cg_client()
+    return _cg
 
 
 # ── Producer factory ──────────────────────────────────────────────────────────
@@ -159,7 +172,7 @@ def fetch_prices() -> dict:
         {"bitcoin": {"usd": 67420.52, "usd_market_cap": ..., "usd_24h_vol": ...,
                      "usd_24h_change": ...}, ...}
     """
-    return cg.get_price(
+    return _get_cg().get_price(
         ids=",".join(COINS),
         vs_currencies="usd",
         include_market_cap="true",
@@ -176,7 +189,7 @@ def fetch_ohlc(coin_id: str, days: int = 30) -> list:
     Returns a list of [timestamp_ms, open, high, low, close] arrays.
     Called once per poll cycle per coin only every OHLC_POLL_MULTIPLIER cycles.
     """
-    return cg.get_coin_ohlc_by_id(id=coin_id, vs_currency="usd", days=days)
+    return _get_cg().get_coin_ohlc_by_id(id=coin_id, vs_currency="usd", days=days)
 
 
 def transform_to_record(
@@ -226,8 +239,14 @@ def produce_loop(producer: KafkaProducer) -> None:
 
     OHLC is fetched every OHLC_POLL_MULTIPLIER cycles to stay within the
     10k calls/month demo tier limit.
+
+    Consecutive non-HTTP errors trigger exponential backoff (30s → 60s → …
+    capped at 3600s) so a persistently broken upstream doesn't spin at full
+    poll rate.  The backoff resets to zero on any successful cycle.
     """
     cycle = 0
+    consecutive_errors = 0
+
     while True:
         try:
             data = fetch_prices()
@@ -270,6 +289,7 @@ def produce_loop(producer: KafkaProducer) -> None:
                 "Cycle %d — produced %d records to '%s' at %s (ohlc=%s)",
                 cycle, sent, TOPIC_RAW, ts, fetch_ohlc_this_cycle,
             )
+            consecutive_errors = 0  # reset backoff on success
 
         except requests.exceptions.HTTPError as exc:
             if exc.response is not None and exc.response.status_code == 429:
@@ -278,7 +298,13 @@ def produce_loop(producer: KafkaProducer) -> None:
             else:
                 logger.error("CoinGecko HTTP error: %s", exc)
         except Exception as exc:  # noqa: BLE001
-            logger.exception("Unexpected error: %s", exc)
+            consecutive_errors += 1
+            backoff = min(30 * (2 ** (consecutive_errors - 1)), 3600)
+            logger.exception(
+                "Unexpected error (consecutive=%d, backoff=%ds): %s",
+                consecutive_errors, backoff, exc,
+            )
+            time.sleep(backoff)
 
         cycle += 1
         time.sleep(POLL_INTERVAL_SECONDS)

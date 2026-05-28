@@ -60,6 +60,13 @@ from pyspark.sql.functions import (
     sum as spark_sum,
     to_date,
 )
+from pyspark.sql.types import (
+    DoubleType,
+    StringType,
+    StructField,
+    StructType,
+    TimestampType,
+)
 from pyspark.sql.window import Window
 
 from utils.mongo_writer import write_batch
@@ -82,6 +89,18 @@ SAMPLE_COIN_MAP: dict[str, str] = {
 
 # SMA look-back periods
 SMA_PERIODS: list[int] = [20, 50, 200]
+
+# Explicit CSV schema — avoids inferSchema drift and guarantees types regardless
+# of how Spark parses the "2015-01-01 00:00:00.000" date strings.
+CSV_SCHEMA = StructType(
+    [
+        StructField("date",         TimestampType(), True),
+        StructField("price",        DoubleType(),    True),
+        StructField("total_volume", DoubleType(),    True),
+        StructField("market_cap",   DoubleType(),    True),
+        StructField("coin_name",    StringType(),    True),
+    ]
+)
 
 # Default data path (overridable via DATA_PATH env var)
 _DEFAULT_DATA_PATH = os.path.join(
@@ -157,7 +176,7 @@ def load_sample_csvs(spark: SparkSession, data_path: str) -> DataFrame:
 
     raw = (
         spark.read.option("header", "true")
-        .option("inferSchema", "true")
+        .schema(CSV_SCHEMA)
         .csv(data_path)
     )
 
@@ -232,7 +251,6 @@ def compute_daily_stats(df: DataFrame) -> DataFrame:
         .orderBy("symbol", "date")
     )
 
-    logger.info("daily_stats row count: %d", daily.count())
     return daily
 
 
@@ -314,8 +332,9 @@ def compute_coin_correlation(daily_stats: DataFrame) -> DataFrame:
     corr_records: list[dict] = []
 
     for coin_a, coin_b in combinations(symbols, 2):
-        # corr() returns None when there are fewer than 2 non-null overlapping rows
-        corr_val = pivot_df.select(corr(col(coin_a), col(coin_b))).first()[0]
+        # corr() returns None when there are fewer than 2 non-null overlapping rows.
+        # Backtick-quote column names so symbols with special characters are safe.
+        corr_val = pivot_df.select(corr(col(f"`{coin_a}`"), col(f"`{coin_b}`"))).first()[0]
         corr_records.append(
             {
                 "coin_a": coin_a,
@@ -407,6 +426,7 @@ def run(data_path: str | None = None) -> dict[str, int]:
     daily_stats.cache()
 
     historical_sma = compute_historical_sma(daily_stats)
+    historical_sma.cache()
     coin_correlation = compute_coin_correlation(daily_stats)
 
     # ── Persist ────────────────────────────────────────────────────────────────
@@ -421,6 +441,7 @@ def run(data_path: str | None = None) -> dict[str, int]:
 
     raw_df.unpersist()
     daily_stats.unpersist()
+    historical_sma.unpersist()
 
     return counts
 

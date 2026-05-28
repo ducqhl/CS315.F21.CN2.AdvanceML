@@ -97,13 +97,13 @@ class TestLstmTraining:
             assert key in trained_dogecoin, f"Missing metric key: {key}"
 
     def test_bitcoin_model_file_saved(self, trained_bitcoin, model_dir):
-        """lstm_bitcoin_v1.pt must exist on disk after training."""
-        model_file = model_dir / "lstm_bitcoin_v1.pt"
+        """lstm_bitcoin_v2.pt must exist on disk after training."""
+        model_file = model_dir / "lstm_bitcoin_v2.pt"
         assert model_file.exists(), f"Model file not found: {model_file}"
 
     def test_dogecoin_model_file_saved(self, trained_dogecoin, model_dir):
-        """lstm_dogecoin_v1.pt must exist on disk after training."""
-        model_file = model_dir / "lstm_dogecoin_v1.pt"
+        """lstm_dogecoin_v2.pt must exist on disk after training."""
+        model_file = model_dir / "lstm_dogecoin_v2.pt"
         assert model_file.exists(), f"Model file not found: {model_file}"
 
     def test_bitcoin_scaler_file_saved(self, trained_bitcoin, model_dir):
@@ -217,16 +217,16 @@ class TestInferenceToMongo:
         dates = [d["prediction_date"] for d in docs]
         assert len(dates) == len(set(dates)), f"Duplicate prediction dates: {dates}"
 
-    def test_model_version_is_lstm_v1(
+    def test_model_version_is_lstm_v2(
         self, trained_bitcoin, model_dir, mongo_uri, mongo_db
     ):
-        """model_version must be 'lstm_v1'."""
+        """model_version must be 'lstm_v2'."""
         mongo_db["predictions"].delete_many({"coin": "BTC"})
         self._run_inference_for_coin("bitcoin", model_dir, mongo_uri)
 
         docs = list(mongo_db["predictions"].find({"coin": "BTC"}, {"model_version": 1}))
         for doc in docs:
-            assert doc["model_version"] == "lstm_v1", (
+            assert doc["model_version"] == "lstm_v2", (
                 f"Unexpected model_version: {doc['model_version']}"
             )
 

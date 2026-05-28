@@ -74,8 +74,8 @@ from inference import (
 
 @pytest.fixture(scope="module")
 def small_model() -> LSTMModel:
-    """A LSTMModel instance with input_size=5, output_size=7 (old backward-compat)."""
-    return LSTMModel(input_size=5, hidden_size=128, num_layers=2, dropout=0.2, output_size=7)
+    """A LSTMModel instance with input_size=5, output_size=7 (old backward-compat, single-head)."""
+    return LSTMModel(input_size=5, hidden_size=128, num_layers=2, dropout=0.2, output_size=7, use_direction_head=False)
 
 
 @pytest.fixture(scope="module")
