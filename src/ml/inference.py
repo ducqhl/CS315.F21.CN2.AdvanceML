@@ -83,8 +83,8 @@ CONFIDENCE = 0.8
 _DEFAULT_URI = "mongodb://admin:password123@localhost:27017/crypto_db?authSource=admin"
 _DEFAULT_DB = "crypto_db"
 
-# Direction class mapping
-_DIR_CLASSES = {0: "DOWN", 1: "FLAT", 2: "UP"}
+# Direction class mapping (binary: 0=DOWN, 1=UP)
+_DIR_CLASSES = {0: "DOWN", 1: "UP"}
 
 # Coin id → symbol map
 _COIN_SYMBOL_MAP = {
@@ -104,12 +104,20 @@ def _db_name_from_uri(uri: str) -> str:
 
 
 def _model_path(coin: str) -> Path:
-    """Return path for v2 model; kept for backward compat with old tests."""
+    """Return path for v1 model; kept for backward compat with old tests."""
     return _MODEL_DIR / f"lstm_{coin}_v1.pt"
 
 
 def _scaler_path(coin: str) -> Path:
     return _MODEL_DIR / f"scaler_{coin}.pkl"
+
+
+def _model_path_v3(coin: str) -> Path:
+    return _MODEL_DIR / f"lstm_{coin}_v3.pt"
+
+
+def _scaler_path_v3(coin: str) -> Path:
+    return _MODEL_DIR / f"scaler_{coin}_v3.pkl"
 
 
 def _model_path_v2(coin: str) -> Path:
@@ -326,7 +334,7 @@ def _mimo_predict_full(
         # v1 fallback: no direction head
         log_rets_norm = result.squeeze(0).cpu().numpy()
         directions = ["FLAT"] * horizon
-        dir_probs  = [1 / 3] * horizon   # random-chance confidence for 3-class
+        dir_probs  = [0.5] * horizon   # random-chance confidence for binary
         strengths  = ["WEAK"] * horizon
 
     # Un-standardise
@@ -334,6 +342,42 @@ def _mimo_predict_full(
     prices_usd = last_price_usd * np.exp(np.cumsum(log_rets))
 
     return prices_usd.astype(np.float32), directions, dir_probs, strengths
+
+
+@torch.no_grad()
+def _mimo_predict_v3(
+    model: LSTMModel,
+    seed_features: np.ndarray,
+    scaler,
+    last_price_usd: float,
+    horizon: int = HORIZON,
+) -> tuple[np.ndarray, np.ndarray]:
+    """
+    MIMO forward pass for v3 model (price + volatility head).
+
+    Returns
+    -------
+    prices_usd    : (horizon,) float32 array of USD prices
+    vol_preds     : (horizon,) float32 array of predicted forward realized vol (scaled)
+    """
+    model.eval()
+    x = torch.tensor(seed_features[np.newaxis, :, :], dtype=torch.float32)
+    result = model(x)
+
+    if isinstance(result, tuple) and len(result) == 2:
+        price_tensor, vol_tensor = result
+    else:
+        # Unexpected shape — fallback to price only
+        price_tensor = result[0] if isinstance(result, tuple) else result
+        vol_tensor   = torch.zeros(1, horizon)
+
+    log_rets_norm = price_tensor.squeeze(0).cpu().numpy()   # (horizon,)
+    vol_raw       = vol_tensor.squeeze(0).cpu().numpy()     # (horizon,)
+
+    log_rets   = log_rets_norm * scaler.scale_[0] + scaler.mean_[0]
+    prices_usd = last_price_usd * np.exp(np.cumsum(log_rets))
+
+    return prices_usd.astype(np.float32), vol_raw.astype(np.float32)
 
 
 # ── MongoDB write ──────────────────────────────────────────────────────────────
@@ -346,15 +390,19 @@ def _write_predictions(
     directions: list[str] | None = None,
     dir_probs: list[float] | None = None,
     strengths: list[str] | None = None,
+    vol_predictions: np.ndarray | None = None,
+    model_version_str: str = MODEL_VERSION,
 ) -> list[dict]:
     """
     Write 7-day forecast to  predictions  collection (upsert on coin + prediction_date).
 
     Parameters
     ----------
-    directions  : per-step direction labels ("UP"|"FLAT"|"DOWN"), length=HORIZON
-    dir_probs   : per-step confidence for predicted direction, length=HORIZON
-    strengths   : per-step trend strength ("STRONG"|"MODERATE"|"WEAK"), length=HORIZON
+    directions        : per-step direction labels ("UP"|"FLAT"|"DOWN"), length=HORIZON
+    dir_probs         : per-step confidence for predicted direction, length=HORIZON
+    strengths         : per-step trend strength ("STRONG"|"MODERATE"|"WEAK"), length=HORIZON
+    vol_predictions   : (optional) per-step predicted forward realized vol from vol head
+    model_version_str : model version tag for the document (default MODEL_VERSION)
 
     Returns the list of documents written.
     """
@@ -386,17 +434,20 @@ def _write_predictions(
             "predicted_price": float(price),
             "prediction_date": prediction_date,
             "confidence":      confidence,
-            "model_version":   MODEL_VERSION,
+            "model_version":   model_version_str,
             "seed_source":     seed_source,
             "created_at":      now_utc,
         }
-        # Add v2 fields when available
+        # Add optional direction fields
         if directions is not None and idx < len(directions):
             doc["direction"] = directions[idx]
         if dir_probs is not None and idx < len(dir_probs):
             doc["direction_prob"] = dir_probs[idx]
         if strengths is not None and idx < len(strengths):
             doc["trend_strength"] = strengths[idx]
+        # Add v3 volatility field (optional — backward compat)
+        if vol_predictions is not None and idx < len(vol_predictions):
+            doc["predicted_volatility"] = float(vol_predictions[idx])
 
         collection.update_one(
             {"coin": doc["coin"], "prediction_date": doc["prediction_date"]},
@@ -451,7 +502,32 @@ def run_inference(coin: str = "bitcoin", mongo_uri: str | None = None) -> list[d
     Returns list of prediction documents.
     """
     coin_symbol = _COIN_SYMBOL_MAP.get(coin, coin.upper())
-    scaler_path = _scaler_path(coin)
+
+    # ── 1. Load model — version priority: v3 → v2 → v1 ───────────────────────
+    path_v3 = _model_path_v3(coin)
+    path_v2 = _model_path_v2(coin)
+    path_v1 = _model_path_v1(coin)
+
+    use_v3 = path_v3.exists() and _scaler_path_v3(coin).exists()
+    use_v2 = (not use_v3) and path_v2.exists()
+
+    if use_v3:
+        model_path  = path_v3
+        scaler_path = _scaler_path_v3(coin)
+        loaded_version = "v3"
+    elif use_v2:
+        model_path  = path_v2
+        scaler_path = _scaler_path(coin)
+        loaded_version = "v2"
+    elif path_v1.exists():
+        model_path  = path_v1
+        scaler_path = _scaler_path(coin)
+        loaded_version = "v1"
+    else:
+        raise FileNotFoundError(
+            f"No trained model found for {coin}. "
+            f"Run  python src/ml/train_lstm.py --coin {coin}  first."
+        )
 
     if not scaler_path.exists():
         raise FileNotFoundError(
@@ -459,30 +535,10 @@ def run_inference(coin: str = "bitcoin", mongo_uri: str | None = None) -> list[d
             f"Run  python src/ml/train_lstm.py --coin {coin}  first."
         )
 
-    # ── 1. Load model (v2 preferred, v1 fallback) ──────────────────────────────
-    path_v2 = _model_path_v2(coin)
-    path_v1 = _model_path_v1(coin)
-
-    use_v2 = path_v2.exists()
-    use_direction_head = use_v2
-
-    if use_v2:
-        model_path = path_v2
-        logger.info("Loading v2 model from %s", model_path)
-    elif path_v1.exists():
-        model_path = path_v1
-        logger.info("v2 model not found; falling back to v1 at %s", model_path)
-    else:
-        raise FileNotFoundError(
-            f"No trained model found. "
-            f"Run  python src/ml/train_lstm.py --coin {coin}  first."
-        )
-
     with open(scaler_path, "rb") as f:
         scaler = pickle.load(f)
     logger.info("Loaded scaler from %s", scaler_path)
 
-    # Determine input_size from scaler (number of features)
     n_features = len(scaler.mean_) if hasattr(scaler, "mean_") else 9
 
     model = LSTMModel(
@@ -491,12 +547,14 @@ def run_inference(coin: str = "bitcoin", mongo_uri: str | None = None) -> list[d
         num_layers=2,
         dropout=0.2,
         output_size=7,
-        use_direction_head=use_direction_head,
-        n_classes=3,
+        use_direction_head=False,
+        use_volatility_head=(loaded_version == "v3"),
     )
-    model.load_state_dict(torch.load(model_path, map_location="cpu"))
+    model.load_state_dict(
+        torch.load(model_path, map_location="cpu", weights_only=True)
+    )
     model.eval()
-    logger.info("Loaded model from %s (direction_head=%s)", model_path, use_direction_head)
+    logger.info("Loaded model from %s (%s)", model_path, loaded_version)
 
     # ── 2. Seed data — fetch SEQ_LEN + 31 rows for feature warmup ─────────────
     n_fetch = SEQ_LEN + 31
@@ -509,6 +567,11 @@ def run_inference(coin: str = "bitcoin", mongo_uri: str | None = None) -> list[d
         seed_source = "historical_sma"
 
     if raw_close is None:
+        logger.warning(
+            "MongoDB unavailable for %s — falling back to CSV seed data which may be stale. "
+            "Predictions may not reflect current market conditions.",
+            coin_symbol,
+        )
         raw_close = _load_last_n_from_csv(coin, n=n_fetch)
         seed_source = "csv"
 
@@ -534,37 +597,59 @@ def run_inference(coin: str = "bitcoin", mongo_uri: str | None = None) -> list[d
     if features.shape[1] > n_scaler_feats:
         features = features[:, :n_scaler_feats]
     elif features.shape[1] < n_scaler_feats:
-        pad = np.zeros((len(features), n_scaler_feats - features.shape[1]), dtype=np.float32)
-        features = np.concatenate([features, pad], axis=1)
+        raise ValueError(
+            f"Feature count mismatch at inference: _build_features returned "
+            f"{features.shape[1]} columns but scaler was trained on {n_scaler_feats}. "
+            f"Retrain the model after any feature engineering changes "
+            f"(python src/ml/train_lstm.py --coin {coin})."
+        )
 
     seed_scaled = scaler.transform(features)
     seed = seed_scaled[-SEQ_LEN:]          # (SEQ_LEN, n_features)
     last_price_usd = float(close_for_seed[-1])
 
     # ── 5. MIMO forecast ───────────────────────────────────────────────────────
-    if use_direction_head:
-        predictions_usd, directions, dir_probs, strengths = _mimo_predict_full(
+    vol_predictions: np.ndarray | None = None
+    if loaded_version == "v3":
+        predictions_usd, vol_predictions = _mimo_predict_v3(
             model, seed, scaler, last_price_usd, horizon=HORIZON
         )
     else:
         predictions_usd = _mimo_predict(model, seed, scaler, last_price_usd, horizon=HORIZON)
-        directions = dir_probs = strengths = None
 
+    # Derive direction and strength from the price forecast curve
+    directions: list[str] = []
+    dir_probs: list[float] = []
+    strengths: list[str] = []
+    sigma_daily = float(scaler.scale_[0])
+    for price in predictions_usd:
+        cum_log_ret = float(np.log(price / last_price_usd)) if last_price_usd > 0 else 0.0
+        directions.append("UP" if cum_log_ret > 0 else "DOWN")
+        confidence = float(1 / (1 + np.exp(-abs(cum_log_ret) / max(sigma_daily, 1e-8))))
+        dir_probs.append(confidence)
+        abs_ret = abs(cum_log_ret)
+        if abs_ret > 2 * sigma_daily:
+            strengths.append("STRONG")
+        elif abs_ret > sigma_daily:
+            strengths.append("MODERATE")
+        else:
+            strengths.append("WEAK")
+
+    dir_summary = {d: directions.count(d) for d in ["UP", "DOWN"]}
+    avg_conf = sum(dir_probs) / len(dir_probs)
+    dominant = max(dir_summary, key=dir_summary.get)
     logger.info(
         "7-day forecast for %s (USD): %s",
         coin_symbol,
         [f"${p:.4f}" for p in predictions_usd],
     )
-    if directions:
-        dir_summary = {d: directions.count(d) for d in ["UP", "DOWN", "FLAT"]}
-        avg_conf = sum(dir_probs) / len(dir_probs) if dir_probs else 0.0
-        dominant = max(dir_summary, key=dir_summary.get)
-        logger.info(
-            "7-day trend summary: %s  (UP=%d DOWN=%d FLAT=%d)  avg_confidence=%.3f",
-            dominant, dir_summary["UP"], dir_summary["DOWN"], dir_summary["FLAT"], avg_conf,
-        )
+    logger.info(
+        "7-day trend summary: %s  (UP=%d DOWN=%d)  avg_confidence=%.3f",
+        dominant, dir_summary["UP"], dir_summary["DOWN"], avg_conf,
+    )
 
     # ── 6. Write to MongoDB ────────────────────────────────────────────────────
+    mv_str = f"lstm_{loaded_version}"
     docs = _write_predictions(
         predictions_usd,
         coin_symbol=coin_symbol,
@@ -573,6 +658,8 @@ def run_inference(coin: str = "bitcoin", mongo_uri: str | None = None) -> list[d
         directions=directions,
         dir_probs=dir_probs,
         strengths=strengths,
+        vol_predictions=vol_predictions,
+        model_version_str=mv_str,
     )
     return docs
 

@@ -6,15 +6,18 @@ Architecture
 - 2-layer LSTM  (input_size=9, hidden=128, dropout=0.2)
 - Price head: Linear(128 → 64) → ReLU → Dropout(0.1) → Linear(64 → output_size)
   Output: output_size-step MIMO forecast of log_return_1d (normalised)
-- Direction head (optional, primary task):
+- Direction head (optional):
   Linear(128 → 128) → LayerNorm(128) → ReLU → Dropout(0.2)
   → Linear(128 → 64) → ReLU → Dropout(0.1)
   → Linear(64 → output_size * n_classes), reshaped to (batch, output_size, n_classes)
-  Classes: 0=DOWN, 1=FLAT, 2=UP
+  Classes: 0=DOWN, 1=UP
+- Volatility head (optional, v3):
+  Linear(128 → 64) → ReLU → Dropout(0.1) → Linear(64 → output_size) → Softplus
+  Output: (batch, output_size) — forward realized vol per step (always positive)
 
 Input features (N_FEATURES=9)
 ------------------------------
-0: log_return_1d, 1: log_return_7d, 2: log_return_30d, 3: RSI_14, 4: log_volume,
+0: log_return_1d, 1: momentum_30d, 2: realized_vol_14d, 3: RSI_14, 4: log_volume,
 5: macd_norm, 6: bb_pct_b, 7: atr_norm, 8: fear_greed
 
 Public API
@@ -22,12 +25,20 @@ Public API
 DirectionHead(hidden_size, output_size, n_classes)
     .forward(last_hidden) → Tensor (batch, output_size, n_classes)  — raw logits
 
+VolatilityHead(hidden_size, output_size)
+    .forward(last_hidden) → Tensor (batch, output_size)             — vol predictions > 0
+
 LSTMModel(input_size, hidden_size, num_layers, dropout, output_size,
-          use_direction_head, n_classes)
-    .forward(x)   → Tensor (batch, output_size)                      — price head only
-                  OR tuple (price_tensor, dir_logits_tensor)          — dual-head
-    .predict(X)   → numpy array (N, output_size)                     — price head only
-                  OR tuple (np_prices, np_dir_logits)                 — dual-head
+          use_direction_head, n_classes, use_volatility_head)
+    .forward(x)
+        use_direction_head=False, use_volatility_head=False
+            → Tensor (batch, output_size)
+        use_direction_head=True,  use_volatility_head=False
+            → tuple (price_tensor, dir_logits_tensor)
+        use_direction_head=False, use_volatility_head=True   ← v3 default
+            → tuple (price_tensor, vol_tensor)
+        use_direction_head=True,  use_volatility_head=True
+            → tuple (price_tensor, dir_logits_tensor, vol_tensor)
 """
 
 from __future__ import annotations
@@ -48,14 +59,14 @@ class DirectionHead(nn.Module):
     ----------
     hidden_size : int — LSTM hidden state dimension (128)
     output_size : int — forecast horizon (7)
-    n_classes   : int — number of direction classes (3: DOWN/FLAT/UP)
+    n_classes   : int — number of direction classes (2: DOWN/UP)
     """
 
     def __init__(
         self,
         hidden_size: int = 128,
         output_size: int = 7,
-        n_classes: int = 3,
+        n_classes: int = 2,
     ) -> None:
         super().__init__()
         self.output_size = output_size
@@ -89,6 +100,42 @@ class DirectionHead(nn.Module):
         return out.view(batch, self.output_size, self.n_classes)   # (batch, output_size, n_classes)
 
 
+class VolatilityHead(nn.Module):
+    """
+    Auxiliary regression head for forward realized volatility prediction.
+
+    Input : last LSTM hidden state, shape (batch, hidden_size)
+    Output: (batch, output_size) — per-step vol predictions, guaranteed > 0 via Softplus
+
+    Parameters
+    ----------
+    hidden_size : int — LSTM hidden state dimension (128)
+    output_size : int — forecast horizon (7)
+    """
+
+    def __init__(self, hidden_size: int = 128, output_size: int = 7) -> None:
+        super().__init__()
+        self.net = nn.Sequential(
+            nn.Linear(hidden_size, 64),
+            nn.ReLU(),
+            nn.Dropout(0.1),
+            nn.Linear(64, output_size),
+            nn.Softplus(),   # ensures vol > 0
+        )
+
+    def forward(self, last_hidden: torch.Tensor) -> torch.Tensor:
+        """
+        Parameters
+        ----------
+        last_hidden : Tensor, shape (batch, hidden_size)
+
+        Returns
+        -------
+        Tensor, shape (batch, output_size) — positive volatility predictions
+        """
+        return self.net(last_hidden)
+
+
 class LSTMModel(nn.Module):
     """
     Two-layer LSTM with a two-layer fully-connected price head
@@ -96,13 +143,14 @@ class LSTMModel(nn.Module):
 
     Parameters
     ----------
-    input_size         : int   — number of input features (9 for new pipeline).
-    hidden_size        : int   — LSTM hidden state dimension.
-    num_layers         : int   — stacked LSTM depth.
-    dropout            : float — dropout probability applied between LSTM layers.
-    output_size        : int   — prediction horizon (7 for MIMO 7-day forecast).
-    use_direction_head : bool  — if True, attach DirectionHead and return dual output.
-    n_classes          : int   — number of direction classes (3: DOWN/FLAT/UP).
+    input_size          : int   — number of input features (9 for new pipeline).
+    hidden_size         : int   — LSTM hidden state dimension.
+    num_layers          : int   — stacked LSTM depth.
+    dropout             : float — dropout probability applied between LSTM layers.
+    output_size         : int   — prediction horizon (7 for MIMO 7-day forecast).
+    use_direction_head  : bool  — if True, attach DirectionHead and return dual output.
+    n_classes           : int   — number of direction classes (2: DOWN/UP).
+    use_volatility_head : bool  — if True, attach VolatilityHead (v3 model).
     """
 
     def __init__(
@@ -113,7 +161,8 @@ class LSTMModel(nn.Module):
         dropout: float = 0.2,
         output_size: int = 7,
         use_direction_head: bool = True,
-        n_classes: int = 3,
+        n_classes: int = 2,
+        use_volatility_head: bool = False,
     ) -> None:
         super().__init__()
 
@@ -121,6 +170,7 @@ class LSTMModel(nn.Module):
         self.num_layers = num_layers
         self.output_size = output_size
         self.use_direction_head = use_direction_head
+        self.use_volatility_head = use_volatility_head
 
         # ── LSTM encoder ──────────────────────────────────────────────────────
         self.lstm = nn.LSTM(
@@ -145,6 +195,13 @@ class LSTMModel(nn.Module):
                 hidden_size=hidden_size,
                 output_size=output_size,
                 n_classes=n_classes,
+            )
+
+        # ── Volatility head (optional, v3) ────────────────────────────────────
+        if use_volatility_head:
+            self.vol_head = VolatilityHead(
+                hidden_size=hidden_size,
+                output_size=output_size,
             )
 
     # ── Forward pass ──────────────────────────────────────────────────────────
@@ -174,7 +231,14 @@ class LSTMModel(nn.Module):
 
         if self.use_direction_head:
             dir_logits = self.dir_head(last_hidden)   # (batch, output_size, n_classes)
+            if self.use_volatility_head:
+                vol_preds = self.vol_head(last_hidden)   # (batch, output_size)
+                return price_preds, dir_logits, vol_preds
             return price_preds, dir_logits
+
+        if self.use_volatility_head:
+            vol_preds = self.vol_head(last_hidden)   # (batch, output_size)
+            return price_preds, vol_preds
 
         return price_preds
 
@@ -205,8 +269,14 @@ class LSTMModel(nn.Module):
 
         result = self.forward(X)
 
-        if self.use_direction_head:
-            price_tensor, dir_tensor = result
-            return price_tensor.cpu().numpy(), dir_tensor.cpu().numpy()
+        if isinstance(result, tuple):
+            if len(result) == 3:   # price + dir + vol
+                return (
+                    result[0].cpu().numpy(),
+                    result[1].cpu().numpy(),
+                    result[2].cpu().numpy(),
+                )
+            # price + dir  OR  price + vol
+            return result[0].cpu().numpy(), result[1].cpu().numpy()
 
         return result.cpu().numpy()

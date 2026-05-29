@@ -5,30 +5,41 @@ Loads data/sample/{coin}.csv, engineers 9 stationary features from the raw
 close price, normalises with StandardScaler (fitted on training rows only),
 creates overlapping 60-step input sequences targeting HORIZON=7 forward steps,
 and splits the data chronologically (80 / 10 / 10) into train / val / test sets.
-Also produces integer direction labels {0=DOWN, 1=FLAT, 2=UP} per target step.
+Also produces integer direction labels {0=DOWN, 1=UP} per target step.
 
 Public API
 ----------
-load_and_preprocess(csv_path, seq_len, train_ratio, val_ratio, with_fear_greed)
-    -> X_train, y_train, y_dir_train,
+load_and_preprocess(csv_path, seq_len, train_ratio, val_ratio, with_fear_greed,
+                    window_days, with_vol_target)
+    -> 11-tuple (default)  or  14-tuple (when with_vol_target=True)
+       X_train, y_train, y_dir_train,
        X_val,   y_val,   y_dir_val,
        X_test,  y_test,  y_dir_test,
-       scaler, last_price_usd   (11-tuple)
+       scaler, last_price_usd
+       [, y_vol_train, y_vol_val, y_vol_test]   # only when with_vol_target=True
 
-make_direction_labels(log_returns_1d, threshold_factor=0.5)
-    -> int ndarray of shape (N,), values in {0, 1, 2}
+load_for_fold(df_raw, fg_full, train_end_idx, val_end_idx, seq_len, horizon, window_days)
+    -> X_tr, y_tr, y_dir_tr, X_vl, y_vl, y_dir_vl, scaler_fold, last_price  (8-tuple)
+       Builds one walk-forward fold — no disk writes.
+
+make_direction_labels(log_returns_1d)
+    -> int ndarray of shape (N,), values in {0, 1}
 
 Features (N_FEATURES=9)
 -----------------------
-0: log_return_1d  = log(close[t] / close[t-1])
-1: log_return_7d  = log(close[t] / close[t-7])
-2: log_return_30d = log(close[t] / close[t-30])
+0: log_return_1d      = log(close[t] / close[t-1])
+1: momentum_30d       = close[t] / SMA30[t] - 1          (replaces log_return_7d)
+2: realized_vol_14d   = rolling 14-day std of log_return_1d  (replaces log_return_30d)
 3: RSI_14
-4: log_volume     = log(total_volume + 1)  (zeros if column missing)
-5: macd_norm      = (EMA_12 - EMA_26) / close  — normalised MACD
-6: bb_pct_b       = (close - lower_band) / (upper_band - lower_band)  20-period BB
-7: atr_norm       = |log_return_1d| * close / close  (proxy ATR, no high/low)
-8: fear_greed     = Fear & Greed index / 100, in [0,1]
+4: log_volume         = log(total_volume + 1)  (zeros if column missing)
+5: macd_norm          = (EMA_12 - EMA_26) / close  — normalised MACD
+6: bb_pct_b           = (close - lower_band) / (upper_band - lower_band)  20-period BB
+7: atr_norm           = |log_return_1d|  (proxy ATR, no high/low)
+8: fear_greed         = Fear & Greed index / 100, in [0,1]
+
+Warmup: ~29 rows (SMA30 needs 29 rows, dominant constraint).
+Column-0 invariant: features[:, 0] MUST remain log_return_1d — scaler.scale_[0] /
+mean_[0] are used for inverse-transform in inference.
 
 Target (output_size=7)
 -----------------------
@@ -37,7 +48,7 @@ Inverse-transform: price_t+k = last_price * exp(cumsum(log_returns[0:k+1]))
 
 Direction labels
 ----------------
-y_dir[:, k] = 0 (DOWN), 1 (FLAT), or 2 (UP)  based on sign/threshold of log_return target
+y_dir[:, k] = 0 (DOWN) or 1 (UP)  split at the training-set median
 """
 
 from __future__ import annotations
@@ -178,32 +189,23 @@ def _load_fear_greed(n_days: int) -> np.ndarray:
 
 def make_direction_labels(
     log_returns_1d: np.ndarray,
-    target_pct: float = 0.33,
 ) -> np.ndarray:
-    """Map log-returns to direction labels {0=DOWN, 1=FLAT, 2=UP}.
+    """Map log-returns to binary direction labels {0=DOWN, 1=UP}.
 
-    Uses quantile-based adaptive thresholds so each class receives approximately
-    *target_pct* of labels.  This prevents the FLAT class from dominating (the
-    old 0.5-std threshold produced 50-70% FLAT on typical crypto data, causing
-    the direction head to learn to always predict FLAT).
+    Splits at the median so each class receives ~50% of labels.
+    Removing the FLAT class eliminates the hardest-to-learn category and
+    converts the problem to binary classification (chance = 50%).
 
     Parameters
     ----------
     log_returns_1d : 1-D array of raw (un-scaled) log return values.
-    target_pct     : fraction of samples to assign to UP and DOWN each.
-                     Default 0.33 → ~33% UP, ~33% DOWN, ~34% FLAT.
 
     Returns
     -------
-    int ndarray of shape (N,), dtype int64, values in {0, 1, 2}.
+    int ndarray of shape (N,), dtype int64, values in {0, 1}.
     """
-    target_pct = float(np.clip(target_pct, 0.01, 0.49))
-    up_threshold   = float(np.quantile(log_returns_1d, 1.0 - target_pct))
-    down_threshold = float(np.quantile(log_returns_1d, target_pct))
-
-    labels = np.ones(len(log_returns_1d), dtype=np.int64)  # default FLAT
-    labels[log_returns_1d > up_threshold]   = 2             # UP
-    labels[log_returns_1d < down_threshold] = 0             # DOWN
+    threshold = float(np.median(log_returns_1d))
+    labels = (log_returns_1d > threshold).astype(np.int64)  # 1=UP, 0=DOWN
     return labels
 
 
@@ -234,13 +236,16 @@ def _build_features(
     log_ret_1d = np.full(N, np.nan)
     log_ret_1d[1:] = np.log(close[1:] / close[:-1])
 
-    # ── Feature 1: log_return_7d ──────────────────────────────────────────────
-    log_ret_7d = np.full(N, np.nan)
-    log_ret_7d[7:] = np.log(close[7:] / close[:-7])
+    # ── Feature 1: momentum_30d = close/SMA30 - 1 ────────────────────────────
+    sma30 = np.full(N, np.nan)
+    for i in range(29, N):
+        sma30[i] = close[i - 29 : i + 1].mean()
+    momentum_30d = close / (sma30 + 1e-10) - 1.0   # NaN where sma30 is NaN (i < 29)
 
-    # ── Feature 2: log_return_30d ─────────────────────────────────────────────
-    log_ret_30d = np.full(N, np.nan)
-    log_ret_30d[30:] = np.log(close[30:] / close[:-30])
+    # ── Feature 2: realized_vol_14d = rolling 14-day std of log_return_1d ─────
+    realized_vol_14d = np.full(N, np.nan)
+    for i in range(14, N):
+        realized_vol_14d[i] = np.std(log_ret_1d[i - 13 : i + 1], ddof=1)
 
     # ── Feature 3: RSI_14 ─────────────────────────────────────────────────────
     rsi = _compute_rsi(close, period=14)
@@ -295,7 +300,7 @@ def _build_features(
         fg = np.full(N, 0.5, dtype=np.float64)
 
     features = np.stack(
-        [log_ret_1d, log_ret_7d, log_ret_30d, rsi, log_vol,
+        [log_ret_1d, momentum_30d, realized_vol_14d, rsi, log_vol,
          macd_norm, bb_pct_b, atr_norm, fg],
         axis=1,
     )
@@ -398,6 +403,33 @@ def _create_direction_sequences(
     return np.array(y_dir, dtype=np.int64)
 
 
+# ── Volatility sequence builder ───────────────────────────────────────────────
+
+def _create_vol_sequences(
+    fwd_vol_scaled: np.ndarray,
+    seq_len: int,
+    horizon: int = HORIZON,
+) -> np.ndarray:
+    """
+    Build forward-volatility target sequences aligned with _create_sequences output.
+
+    Parameters
+    ----------
+    fwd_vol_scaled : 1-D float array of per-row forward volatility estimates (scaled).
+    seq_len        : look-back window (same as passed to _create_sequences).
+    horizon        : forecast horizon.
+
+    Returns
+    -------
+    y_vol : ndarray, shape (M, horizon), dtype float32
+    """
+    y_vol = []
+    n = len(fwd_vol_scaled)
+    for i in range(seq_len, n - horizon + 1):
+        y_vol.append(fwd_vol_scaled[i : i + horizon])
+    return np.array(y_vol, dtype=np.float32)
+
+
 # ── Main preprocessing function ───────────────────────────────────────────────
 
 def load_and_preprocess(
@@ -408,6 +440,8 @@ def load_and_preprocess(
     save_scaler: bool = True,
     scaler_path: Path | None = None,
     with_fear_greed: bool = True,
+    window_days: int | None = 730,
+    with_vol_target: bool = False,
 ) -> tuple:
     """
     Full preprocessing pipeline.
@@ -422,15 +456,21 @@ def load_and_preprocess(
     scaler_path    : override scaler save path (defaults to _SCALER_PATH)
     with_fear_greed: whether to fetch Fear & Greed index (default True;
                      falls back to 0.5 if API unavailable)
+    window_days    : rolling training window — use only the most-recent N rows.
+                     None = use all data (backward compat).  Default 730 (2 years).
+    with_vol_target: if True, return 14-tuple (adds y_vol_train/val/test).
 
-    Returns (11-tuple)
-    ------------------
+    Returns (11-tuple, or 14-tuple when with_vol_target=True)
+    -----------------------------------------------------------
     X_train, y_train, y_dir_train,
     X_val,   y_val,   y_dir_val,
     X_test,  y_test,  y_dir_test,
     scaler, last_price_usd
+    [, y_vol_train, y_vol_val, y_vol_test]   # only when with_vol_target=True
     """
     df = _load_csv(csv_path)
+    if window_days is not None:
+        df = df.iloc[-window_days:].reset_index(drop=True)
     close_prices = df["close"].values.copy()
     N_raw = len(df)
 
@@ -456,6 +496,13 @@ def load_and_preprocess(
     close_prices = close_prices[valid_mask]
     fear_greed_arr = fear_greed_arr[valid_mask]
     logger.info("After warmup drop: %d rows remain", len(features))
+
+    # Column-0 invariant check: log_return_1d mean should be near 0
+    col0_mean = float(features[:, 0].mean())
+    assert abs(col0_mean) < 0.05, (
+        f"Feature-0 mean ({col0_mean:.4f}) out of expected range — "
+        "column-0 (log_return_1d) invariant may be broken."
+    )
 
     # ── Build raw direction labels from feature-0 (log_return_1d) ────────────
     # feature-0 is NOT yet scaled — it's the raw log_return_1d values
@@ -509,11 +556,59 @@ def load_and_preprocess(
             pickle.dump(scaler, f)
         logger.info("Scaler saved to %s", save_path)
 
+    if not with_vol_target:
+        return (
+            X_train, y_train, y_dir_train,
+            X_val,   y_val,   y_dir_val,
+            X_test,  y_test,  y_dir_test,
+            scaler, last_price_usd,
+        )
+
+    # ── Forward realized volatility target (only when with_vol_target=True) ───
+    # fwd_vol[i] = std of log_return_1d over next 7 days
+    N_clean = len(features)
+    fwd_vol = np.full(N_clean, np.nan)
+    for i in range(N_clean - 7):
+        fwd_vol[i] = np.std(raw_log_rets[i + 1 : i + 8], ddof=1)
+
+    fvol_train = fwd_vol[:train_end_raw]
+    fvol_val   = fwd_vol[train_end_raw:val_end_raw]
+    fvol_test  = fwd_vol[val_end_raw:]
+
+    # Fit a separate StandardScaler for volatility on training rows only
+    vol_scaler = StandardScaler()
+    valid_train_mask = ~np.isnan(fvol_train)
+    if valid_train_mask.sum() > 1:
+        vol_scaler.fit(fvol_train[valid_train_mask].reshape(-1, 1))
+    else:
+        vol_scaler.mean_  = np.array([0.0])
+        vol_scaler.scale_ = np.array([1.0])
+        vol_scaler.var_   = np.array([1.0])
+
+    def _scale_vol(arr: np.ndarray) -> np.ndarray:
+        result = np.zeros(len(arr), dtype=np.float32)
+        valid = ~np.isnan(arr)
+        if valid.any():
+            result[valid] = vol_scaler.transform(
+                arr[valid].reshape(-1, 1)
+            ).ravel().astype(np.float32)
+        return result
+
+    y_vol_train = _create_vol_sequences(_scale_vol(fvol_train), seq_len, HORIZON)
+    y_vol_val   = _create_vol_sequences(_scale_vol(fvol_val),   seq_len, HORIZON)
+    y_vol_test  = _create_vol_sequences(_scale_vol(fvol_test),  seq_len, HORIZON)
+
+    logger.info(
+        "Vol target shapes — train: %s, val: %s, test: %s",
+        y_vol_train.shape, y_vol_val.shape, y_vol_test.shape,
+    )
+
     return (
         X_train, y_train, y_dir_train,
         X_val,   y_val,   y_dir_val,
         X_test,  y_test,  y_dir_test,
         scaler, last_price_usd,
+        y_vol_train, y_vol_val, y_vol_test,
     )
 
 
@@ -521,6 +616,105 @@ def load_scaler() -> StandardScaler:
     """Load the persisted StandardScaler from disk."""
     with open(_SCALER_PATH, "rb") as f:
         return pickle.load(f)
+
+
+def load_for_fold(
+    df_raw: pd.DataFrame,
+    fg_full: np.ndarray,
+    train_end_idx: int,
+    val_end_idx: int,
+    seq_len: int = SEQ_LEN,
+    horizon: int = HORIZON,
+    window_days: int = 730,
+) -> tuple:
+    """
+    Build one walk-forward fold: slice window, build features, fit scaler on
+    train, create sequences.  Does NOT write anything to disk.
+
+    Parameters
+    ----------
+    df_raw        : full raw DataFrame from _load_csv (has 'close' column).
+    fg_full       : full fear_greed array aligned row-for-row with df_raw.
+    train_end_idx : end index (exclusive) of training rows in df_raw coordinates.
+    val_end_idx   : end index (exclusive) of validation rows in df_raw coordinates.
+    seq_len       : look-back window.
+    horizon       : forecast horizon.
+    window_days   : rolling training window — use at most this many rows before
+                    train_end_idx as the effective training start.
+
+    Returns (8-tuple)
+    -----------------
+    X_tr, y_tr, y_dir_tr, X_vl, y_vl, y_dir_vl, scaler_fold, last_price
+    """
+    effective_start = max(0, train_end_idx - window_days)
+
+    df_fold     = df_raw.iloc[effective_start:val_end_idx].reset_index(drop=True)
+    fg_fold     = fg_full[effective_start:val_end_idx].copy()
+    close_fold  = df_fold["close"].values.copy()
+
+    # Align fg_fold length with df_fold
+    if len(fg_fold) != len(df_fold):
+        padded = np.full(len(df_fold), 0.5, dtype=np.float32)
+        take = min(len(fg_fold), len(df_fold))
+        padded[-take:] = fg_fold[-take:]
+        fg_fold = padded
+
+    features = _build_features(df_fold, fear_greed=fg_fold)
+
+    valid_mask = ~np.isnan(features).any(axis=1)
+    if not valid_mask.any():
+        raise ValueError(
+            f"No valid rows after warmup drop for fold (train_end={train_end_idx}, "
+            f"effective_start={effective_start})"
+        )
+    warmup_count = int(np.argmax(valid_mask))   # index of first valid row
+    features_clean = features[valid_mask]
+    close_clean    = close_fold[valid_mask]
+
+    # Map the train/val boundary from fold coords to clean-feature coords
+    local_train_end  = train_end_idx - effective_start
+    clean_train_end  = max(0, local_train_end - warmup_count)
+
+    if clean_train_end <= 0 or clean_train_end >= len(features_clean):
+        raise ValueError(
+            f"Invalid clean_train_end={clean_train_end} "
+            f"(features_clean={len(features_clean)}, warmup={warmup_count}) "
+            f"for fold train_end={train_end_idx}"
+        )
+
+    feat_train = features_clean[:clean_train_end]
+    feat_val   = features_clean[clean_train_end:]
+
+    raw_log_rets = features_clean[:, 0]
+    dir_labels   = make_direction_labels(raw_log_rets)
+    dir_train    = dir_labels[:clean_train_end]
+    dir_val      = dir_labels[clean_train_end:]
+
+    scaler_fold = StandardScaler()
+    scaler_fold.fit(feat_train)
+    scaled_train = scaler_fold.transform(feat_train)
+    scaled_val   = scaler_fold.transform(feat_val)
+
+    last_price = float(close_clean[-1])
+    scaler_fold.last_price_usd_ = last_price
+
+    # When the val split is shorter than seq_len (common with small fold_size),
+    # prepend the last seq_len rows of training as look-back context so that
+    # val sequences share the same sliding-window mechanism.
+    context = min(seq_len, len(scaled_train))
+    if len(scaled_val) < seq_len + horizon:
+        scaled_val_ctx = np.concatenate([scaled_train[-context:], scaled_val], axis=0)
+        dir_val_ctx    = np.concatenate([dir_train[-context:],    dir_val],    axis=0)
+    else:
+        scaled_val_ctx = scaled_val
+        dir_val_ctx    = dir_val
+
+    X_tr, y_tr   = _create_sequences(scaled_train,  seq_len, horizon)
+    X_vl, y_vl   = _create_sequences(scaled_val_ctx, seq_len, horizon)
+    y_dir_tr     = _create_direction_sequences(dir_train,   seq_len, horizon)
+    y_dir_vl     = _create_direction_sequences(dir_val_ctx, seq_len, horizon)
+
+    return X_tr, y_tr, y_dir_tr, X_vl, y_vl, y_dir_vl, scaler_fold, last_price
 
 
 if __name__ == "__main__":

@@ -55,17 +55,17 @@ EPOCHS = 50
 BATCH_SIZE = 64
 LEARNING_RATE = 1e-3
 WEIGHT_DECAY = 1e-5
-PATIENCE = 10        # early-stopping patience
+PATIENCE = 7         # early-stopping patience (7 suits ~3k-row crypto datasets)
 
 # Loss combination weights
-DEFAULT_ALPHA = 0.3   # weight for price (Huber) loss — auxiliary task
-DEFAULT_BETA  = 1.0   # weight for direction (CrossEntropy) loss — primary task
+DEFAULT_ALPHA = 1.0   # weight for price (Huber) loss — only loss used (direction head disabled)
+DEFAULT_BETA  = 0.0   # unused — direction head removed; direction derived from price forecast sign
 
 # Direction-weighted loss penalty: wrong-direction predictions get 1 + PENALTY_FACTOR weight
 DIRECTION_PENALTY = 2.0
 
 
-def _compute_class_weights(y_dir: np.ndarray, n_classes: int = 3) -> torch.Tensor:
+def _compute_class_weights(y_dir: np.ndarray, n_classes: int = 2) -> torch.Tensor:
     """Compute inverse-frequency class weights for CrossEntropyLoss.
 
     Handles remaining class imbalance after adaptive-threshold labelling.
@@ -103,8 +103,10 @@ def _metrics_path(coin: str) -> Path:
     return _MODEL_DIR / f"metrics_{coin}.json"
 
 
-def _scaler_path(coin: str) -> Path:
-    return _MODEL_DIR / f"scaler_{coin}.pkl"
+def _scaler_path(coin: str, version: int = 2) -> Path:
+    if version <= 2:
+        return _MODEL_DIR / f"scaler_{coin}.pkl"
+    return _MODEL_DIR / f"scaler_{coin}_v{version}.pkl"
 
 
 # ── Evaluation helpers ─────────────────────────────────────────────────────────
@@ -155,7 +157,7 @@ def compute_metrics(
     confusion: list[list[int]] = []
 
     if y_dir_pred_logits is not None and len(y_dir_true) > 0:
-        # y_dir_pred_logits: (M, 7, 3) — argmax over class dim
+        # y_dir_pred_logits: (M, 7, 2) — argmax over class dim
         y_dir_pred_cls = np.argmax(y_dir_pred_logits, axis=2)   # (M, 7)
 
         # Flatten all M*7 step predictions for accuracy/F1
@@ -168,8 +170,8 @@ def compute_metrics(
             from sklearn.metrics import f1_score, confusion_matrix
             f1_macro = float(f1_score(true_flat, pred_flat, average="macro", zero_division=0))
 
-            # Per-class accuracy for DOWN / FLAT / UP
-            _labels = {0: "DOWN", 1: "FLAT", 2: "UP"}
+            # Per-class accuracy for DOWN / UP (binary)
+            _labels = {0: "DOWN", 1: "UP"}
             for cls_idx, cls_name in _labels.items():
                 mask = true_flat == cls_idx
                 if mask.sum() > 0:
@@ -177,8 +179,8 @@ def compute_metrics(
                         (pred_flat[mask] == cls_idx).mean() * 100
                     )
 
-            # Confusion matrix (3×3)
-            cm = confusion_matrix(true_flat, pred_flat, labels=[0, 1, 2])
+            # Confusion matrix (2×2)
+            cm = confusion_matrix(true_flat, pred_flat, labels=[0, 1])
             confusion = cm.tolist()
         except ImportError:
             logger.warning("sklearn not available; skipping f1_macro and confusion matrix.")
@@ -205,23 +207,27 @@ def train(
     alpha: float = DEFAULT_ALPHA,
     beta: float = DEFAULT_BETA,
     loss_type: str = "direction_weighted",
+    *,
+    window_days: int | None = 730,
+    gamma: float = 0.3,
+    model_version: int = 3,
 ) -> dict[str, float]:
     """
     Main training entry-point.
 
     Parameters
     ----------
-    coin       : coin id — "bitcoin" or "dogecoin"
-    csv_path   : override CSV path (defaults to data/sample/{coin}.csv)
-    epochs     : maximum training epochs.
-    batch_size : DataLoader batch size.
-    dry_run    : if True, run only 2 epochs and skip saving (for CI/testing).
-    alpha      : weight for price loss.
-    beta       : weight for direction (CrossEntropy) loss.
-    loss_type  : "direction_weighted" (default) — Huber penalised for wrong
-                 direction; or "standard" — plain HuberLoss.
-                 Both modes use class-weighted CrossEntropyLoss for the
-                 direction head.
+    coin          : coin id — "bitcoin" or "dogecoin"
+    csv_path      : override CSV path (defaults to data/sample/{coin}.csv)
+    epochs        : maximum training epochs.
+    batch_size    : DataLoader batch size.
+    dry_run       : if True, run only 2 epochs and skip saving (for CI/testing).
+    alpha         : weight for price loss (default 1.0).
+    beta          : unused (kept for backward compat).
+    loss_type     : "direction_weighted" | "standard".
+    window_days   : rolling training window (default 730, None = all data).
+    gamma         : weight for volatility (MSE) loss (default 0.3).
+    model_version : output file version number (default 3 → lstm_{coin}_v3.pt).
 
     Returns
     -------
@@ -234,63 +240,62 @@ def train(
     if csv_path is None:
         csv_path = _DATA_DIR / f"{coin}.csv"
 
-    model_path_v2 = _model_path(coin, version=2)
-    metrics_path  = _metrics_path(coin)
-    scaler_path   = _scaler_path(coin)
+    out_model_path = _model_path(coin, version=model_version)
+    metrics_path   = _metrics_path(coin)
+    scaler_out     = _scaler_path(coin, version=model_version)
 
     device = torch.device("cpu")   # CPU is sufficient for 3k rows
 
     # ── 1. Data ───────────────────────────────────────────────────────────────
-    logger.info("Loading and preprocessing data from %s ...", csv_path)
+    logger.info("Loading and preprocessing data from %s (window_days=%s) ...",
+                csv_path, window_days)
+    result = load_and_preprocess(
+        csv_path=csv_path,
+        save_scaler=(not dry_run),
+        scaler_path=scaler_out,
+        with_fear_greed=True,
+        window_days=window_days,
+        with_vol_target=True,
+    )
     (
         X_train, y_train, y_dir_train,
         X_val,   y_val,   y_dir_val,
         X_test,  y_test,  y_dir_test,
         scaler,  last_price_usd,
-    ) = load_and_preprocess(
-        csv_path=csv_path,
-        save_scaler=(not dry_run),
-        scaler_path=scaler_path,
-        with_fear_greed=True,
-    )
+        y_vol_train, y_vol_val, y_vol_test,
+    ) = result
 
-    def _to_tensors(X, y, y_dir):
+    def _to_tensors(X, y, y_dir, y_vol):
         return (
-            torch.tensor(X, dtype=torch.float32),
-            torch.tensor(y, dtype=torch.float32),
+            torch.tensor(X,     dtype=torch.float32),
+            torch.tensor(y,     dtype=torch.float32),
             torch.tensor(y_dir, dtype=torch.long),
+            torch.tensor(y_vol, dtype=torch.float32),
         )
 
     # shuffle=False — critical for time-series data
-    train_ds = TensorDataset(*_to_tensors(X_train, y_train, y_dir_train))
-    val_ds   = TensorDataset(*_to_tensors(X_val,   y_val,   y_dir_val))
-    test_ds  = TensorDataset(*_to_tensors(X_test,  y_test,  y_dir_test))
+    train_ds = TensorDataset(*_to_tensors(X_train, y_train, y_dir_train, y_vol_train))
+    val_ds   = TensorDataset(*_to_tensors(X_val,   y_val,   y_dir_val,   y_vol_val))
+    test_ds  = TensorDataset(*_to_tensors(X_test,  y_test,  y_dir_test,  y_vol_test))
 
     train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=False)
     val_loader   = DataLoader(val_ds,   batch_size=batch_size, shuffle=False)
     test_loader  = DataLoader(test_ds,  batch_size=batch_size, shuffle=False)
 
     # ── 2. Model ──────────────────────────────────────────────────────────────
-    n_features = X_train.shape[2]   # 9 for new pipeline
+    n_features = X_train.shape[2]   # 9 for v3 pipeline
     model = LSTMModel(
         input_size=n_features,
         hidden_size=128,
         num_layers=2,
         dropout=0.2,
         output_size=7,
-        use_direction_head=True,
-        n_classes=3,
+        use_direction_head=False,
+        use_volatility_head=True,
     ).to(device)
 
-    # Class weights from training labels to handle residual imbalance
-    class_weights = _compute_class_weights(y_dir_train, n_classes=3).to(device)
-    logger.info(
-        "Direction class weights — DOWN: %.4f  FLAT: %.4f  UP: %.4f",
-        class_weights[0].item(), class_weights[1].item(), class_weights[2].item(),
-    )
-
-    price_criterion = nn.HuberLoss(delta=1.0)   # used only for 'standard' mode
-    dir_criterion   = nn.CrossEntropyLoss(weight=class_weights)
+    price_criterion = nn.HuberLoss(delta=1.0)
+    vol_criterion   = nn.MSELoss()
     optimizer = torch.optim.Adam(
         model.parameters(), lr=LEARNING_RATE, weight_decay=WEIGHT_DECAY
     )
@@ -299,7 +304,7 @@ def train(
     )
 
     # ── 3. Training loop ──────────────────────────────────────────────────────
-    model_path_v2.parent.mkdir(parents=True, exist_ok=True)
+    out_model_path.parent.mkdir(parents=True, exist_ok=True)
 
     best_val_loss = float("inf")
     epochs_no_improve = 0
@@ -309,30 +314,23 @@ def train(
         # — Train —
         model.train()
         train_loss_sum = 0.0
-        for X_batch, y_batch, y_dir_batch in train_loader:
-            X_batch    = X_batch.to(device)
-            y_batch    = y_batch.to(device)
-            y_dir_batch = y_dir_batch.to(device)
+        for X_batch, y_batch, y_dir_batch, y_vol_batch in train_loader:
+            X_batch     = X_batch.to(device)
+            y_batch     = y_batch.to(device)
+            y_vol_batch = y_vol_batch.to(device)
 
             optimizer.zero_grad()
-            price_preds, dir_logits = model(X_batch)   # (B,7), (B,7,3)
+            price_preds, vol_preds = model(X_batch)   # (B, 7), (B, 7)
 
-            # Price loss — direction_weighted penalises wrong-sign predictions
             if loss_type == "direction_weighted":
-                p_loss = _direction_weighted_huber(price_preds, y_batch)
+                price_loss = _direction_weighted_huber(price_preds, y_batch)
             else:
-                p_loss = price_criterion(price_preds, y_batch)
+                price_loss = price_criterion(price_preds, y_batch)
 
-            # Direction loss: CrossEntropy expects (B*7, 3) logits and (B*7,) targets
-            B = dir_logits.size(0)
-            d_loss = dir_criterion(
-                dir_logits.view(B * 7, 3),
-                y_dir_batch.view(B * 7),
-            )
+            vol_loss = vol_criterion(vol_preds, y_vol_batch)
+            loss = alpha * price_loss + gamma * vol_loss
 
-            loss = alpha * p_loss + beta * d_loss
             loss.backward()
-            # Gradient clipping prevents exploding gradients in LSTM
             nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
             optimizer.step()
             train_loss_sum += loss.item() * len(X_batch)
@@ -343,22 +341,18 @@ def train(
         model.eval()
         val_loss_sum = 0.0
         with torch.no_grad():
-            for X_batch, y_batch, y_dir_batch in val_loader:
-                X_batch    = X_batch.to(device)
-                y_batch    = y_batch.to(device)
-                y_dir_batch = y_dir_batch.to(device)
-                price_preds, dir_logits = model(X_batch)
-                B = dir_logits.size(0)
+            for X_batch, y_batch, y_dir_batch, y_vol_batch in val_loader:
+                X_batch     = X_batch.to(device)
+                y_batch     = y_batch.to(device)
+                y_vol_batch = y_vol_batch.to(device)
+                price_preds, vol_preds = model(X_batch)
                 if loss_type == "direction_weighted":
                     p_loss = _direction_weighted_huber(price_preds, y_batch)
                 else:
                     p_loss = price_criterion(price_preds, y_batch)
-                d_loss = dir_criterion(
-                    dir_logits.view(B * 7, 3),
-                    y_dir_batch.view(B * 7),
-                )
-                combined = alpha * p_loss + beta * d_loss
-                val_loss_sum += combined.item() * len(X_batch)
+                v_loss = vol_criterion(vol_preds, y_vol_batch)
+                val_loss_val = alpha * p_loss + gamma * v_loss
+                val_loss_sum += val_loss_val.item() * len(X_batch)
 
         val_loss = val_loss_sum / max(len(val_ds), 1)
 
@@ -369,9 +363,16 @@ def train(
             best_val_loss = val_loss
             epochs_no_improve = 0
             if not dry_run:
-                torch.save(model.state_dict(), model_path_v2)
+                torch.save(model.state_dict(), out_model_path)
         else:
             epochs_no_improve += 1
+
+        # — Overfitting detection —
+        if train_loss > 0 and val_loss > 2.5 * train_loss and epoch > 5:
+            logger.warning(
+                "Epoch %3d: val_loss (%.6f) >> train_loss (%.6f) — possible overfitting.",
+                epoch, val_loss, train_loss,
+            )
 
         # — Progress logging every 5 epochs —
         if epoch % 5 == 0 or epoch == 1:
@@ -387,60 +388,65 @@ def train(
             break
 
     # ── 4. Test evaluation ────────────────────────────────────────────────────
-    if not dry_run and model_path_v2.exists():
-        model.load_state_dict(torch.load(model_path_v2, map_location=device))
+    if not dry_run and out_model_path.exists():
+        model.load_state_dict(
+            torch.load(out_model_path, map_location=device, weights_only=True)
+        )
 
     model.eval()
-    all_price_preds, all_dir_logits, all_true, all_dir_true = [], [], [], []
+    all_price_preds, all_true, all_dir_true, all_vol_preds = [], [], [], []
     with torch.no_grad():
-        for X_batch, y_batch, y_dir_batch in test_loader:
-            price_preds, dir_logits = model(X_batch.to(device))
+        for X_batch, y_batch, y_dir_batch, y_vol_batch in test_loader:
+            price_preds, vol_preds = model(X_batch.to(device))
             all_price_preds.append(price_preds.cpu().numpy())
-            all_dir_logits.append(dir_logits.cpu().numpy())
             all_true.append(y_batch.numpy())
             all_dir_true.append(y_dir_batch.numpy())
+            all_vol_preds.append(vol_preds.cpu().numpy())
+
+    if not all_price_preds:
+        logger.warning("Test set is empty — skipping test metrics (try a larger dataset or window_days).")
+        return {"rmse": 0.0, "mae": 0.0, "directional_accuracy_pct": 0.0,
+                "direction_accuracy_pct": 0.0, "f1_macro": 0.0,
+                "per_class_accuracy": {}, "confusion_matrix": []}
 
     y_pred_norm    = np.concatenate(all_price_preds)   # (M, 7)
-    y_dir_logits   = np.concatenate(all_dir_logits)    # (M, 7, 3)
     y_true_norm    = np.concatenate(all_true)          # (M, 7)
     y_dir_true_all = np.concatenate(all_dir_true)      # (M, 7)
+    y_vol_pred_all = np.concatenate(all_vol_preds)     # (M, 7)
 
     metrics = compute_metrics(
         y_true_norm, y_pred_norm,
-        y_dir_true_all, y_dir_logits,
+        y_dir_true_all, None,
         scaler, last_price_usd,
     )
 
-    logger.info("── Test Metrics (%s) ─────────────────────────────────────", coin)
-    logger.info("  [PRIMARY]  F1 macro:              %.4f  (chance=0.333)",
-                metrics["f1_macro"])
-    logger.info("  [PRIMARY]  Direction accuracy:    %.1f%%  (chance=33.3%%)",
-                metrics["direction_accuracy_pct"])
-    pca = metrics.get("per_class_accuracy", {})
-    logger.info("  [PRIMARY]  Per-class accuracy:    DOWN=%.1f%%  FLAT=%.1f%%  UP=%.1f%%",
-                pca.get("DOWN", 0), pca.get("FLAT", 0), pca.get("UP", 0))
-    cm = metrics.get("confusion_matrix", [])
-    if cm:
-        logger.info("  Confusion matrix (rows=true, cols=pred) [DOWN, FLAT, UP]:")
-        for i, row in enumerate(cm):
-            logger.info("    %s: %s", ["DOWN", "FLAT", "UP"][i], row)
-    logger.info("  [SECONDARY] RMSE:                 $%.2f", metrics["rmse"])
-    logger.info("  [SECONDARY] MAE:                  $%.2f", metrics["mae"])
-    logger.info("  [SECONDARY] Price dir accuracy:   %.1f%%", metrics["directional_accuracy_pct"])
+    # Vol head RMSE (in scaled units; informational only)
+    vol_rmse = float(np.sqrt(np.mean((y_vol_pred_all - y_vol_test) ** 2))) if len(y_vol_test) > 0 else 0.0
+
+    logger.info("── Test Metrics (%s, v%d) ──────────────────────────────────",
+                coin, model_version)
+    logger.info("  Price dir accuracy:  %.1f%%", metrics["directional_accuracy_pct"])
+    logger.info("  RMSE:                $%.2f",  metrics["rmse"])
+    logger.info("  MAE:                 $%.2f",  metrics["mae"])
+    logger.info("  Vol head RMSE:       %.6f (scaled units)", vol_rmse)
 
     # ── 5. Save metrics ───────────────────────────────────────────────────────
     if not dry_run:
-        metrics["epochs_trained"] = epoch
-        metrics["best_val_loss"] = float(best_val_loss)
-        metrics["coin"] = coin
-        metrics["last_price_usd"] = last_price_usd
-        metrics["alpha"] = alpha
-        metrics["beta"] = beta
-        metrics["loss_type"] = loss_type
+        metrics["epochs_trained"]  = epoch
+        metrics["best_val_loss"]   = float(best_val_loss)
+        metrics["coin"]            = coin
+        metrics["last_price_usd"]  = last_price_usd
+        metrics["alpha"]           = alpha
+        metrics["gamma"]           = gamma
+        metrics["loss_type"]       = loss_type
+        metrics["model_version"]   = model_version
+        metrics["window_days"]     = window_days
+        metrics["vol_rmse_scaled"] = vol_rmse
         with open(metrics_path, "w") as f:
             json.dump(metrics, f, indent=2)
         logger.info("Metrics saved to %s", metrics_path)
-        logger.info("Model weights saved to %s", model_path_v2)
+        logger.info("Model saved to %s", out_model_path)
+        logger.info("Scaler saved to %s", scaler_out)
 
     return metrics
 
@@ -448,7 +454,7 @@ def train(
 # ── CLI entry-point ────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Train BTC / DOGE LSTM model (v2 multi-task)")
+    parser = argparse.ArgumentParser(description="Train BTC / DOGE LSTM model (v3 rolling window + vol head)")
     parser.add_argument(
         "--coin", type=str, default="bitcoin",
         choices=["bitcoin", "dogecoin"],
@@ -466,7 +472,7 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--beta", type=float, default=DEFAULT_BETA,
-        help="Weight for direction (CrossEntropy) loss (default: 0.5)"
+        help="Unused — kept for backward compat."
     )
     parser.add_argument(
         "--loss-type", type=str, default="direction_weighted",
@@ -476,7 +482,42 @@ if __name__ == "__main__":
             "predictions; 'standard' uses plain HuberLoss."
         ),
     )
+    parser.add_argument(
+        "--window-days", type=int, default=730,
+        help="Rolling training window in days (default: 730 = 2 years; 0 = all data)",
+    )
+    parser.add_argument(
+        "--gamma", type=float, default=0.3,
+        help="Weight for volatility (MSE) loss (default: 0.3)",
+    )
+    parser.add_argument(
+        "--model-version", type=int, default=3,
+        help="Output model version number (default: 3 → lstm_{coin}_v3.pt)",
+    )
+    parser.add_argument(
+        "--walk-forward", action="store_true",
+        help="Run walk-forward validation and print results before training.",
+    )
     args = parser.parse_args()
+
+    window = None if args.window_days == 0 else args.window_days
+
+    # Optional walk-forward validation before full training
+    if args.walk_forward:
+        from walk_forward import walk_forward_validation   # noqa: PLC0415
+        csv_path_wf = _DATA_DIR / f"{args.coin}.csv"
+        logger.info("Running walk-forward validation for %s ...", args.coin)
+        wf_results = walk_forward_validation(csv_path_wf, window_days=window or 730)
+        print("\n── Walk-Forward Results ──────────────────────────────")
+        print(f"  Folds completed : {wf_results['n_folds_used']}")
+        print(f"  RMSE (mean)     : ${wf_results['rmse_mean']:,.2f}")
+        print(f"  MAE  (mean)     : ${wf_results['mae_mean']:,.2f}")
+        print(f"  Dir Acc (mean)  : {wf_results['dir_acc_mean']:.1f}%")
+        for m in wf_results["fold_metrics"]:
+            print(f"    Fold {m['fold']}: RMSE=${m['rmse']:,.2f}  "
+                  f"MAE=${m['mae']:,.2f}  dir={m['dir_acc']:.1f}%  "
+                  f"(n_tr={m['n_train']} n_vl={m['n_val']})")
+        print()
 
     train(
         coin=args.coin,
@@ -486,4 +527,7 @@ if __name__ == "__main__":
         alpha=args.alpha,
         beta=args.beta,
         loss_type=args.loss_type,
+        window_days=window,
+        gamma=args.gamma,
+        model_version=args.model_version,
     )

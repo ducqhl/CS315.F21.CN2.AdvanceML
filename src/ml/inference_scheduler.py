@@ -64,9 +64,12 @@ COINGECKO_API_KEY = os.getenv("COINGECKO_API_KEY", "")
 SCHEDULER_FETCH_COINGECKO = os.getenv("SCHEDULER_FETCH_COINGECKO", "true").lower() == "true"
 
 # Daily inference: run once per UTC day at DAILY_INFERENCE_HOUR (default midnight).
-# This produces a properly anchored daily forecast and evaluates yesterday's accuracy.
-# The 5-min cycle continues independently for intraday predictions.
 DAILY_INFERENCE_HOUR = int(os.getenv("DAILY_INFERENCE_HOUR", "0"))
+
+# Weekly retrain: retrain both coin models every RETRAIN_INTERVAL_DAYS days.
+# Retrain is blocking (~2–10 min) but runs before daily inference so the new
+# model is used immediately.  Set to 0 to disable.
+RETRAIN_INTERVAL_DAYS = int(os.getenv("RETRAIN_INTERVAL_DAYS", "7"))
 
 COINS = ["bitcoin", "dogecoin"]
 _COIN_SYMBOL_MAP = {"bitcoin": "BTC", "dogecoin": "DOGE"}
@@ -147,6 +150,71 @@ def fetch_and_persist_latest_prices() -> bool:
         return False
 
 
+# ── Weekly retrain ────────────────────────────────────────────────────────────
+
+def run_weekly_retrain(coin: str) -> bool:
+    """
+    Retrain the LSTM for *coin* using the rolling-window v3 pipeline and
+    write a retrain log entry to MongoDB.
+
+    Note: this is blocking — expect 2–10 minutes per coin on CPU.
+    Returns True on success, False on any error (non-fatal).
+    """
+    try:
+        from train_lstm import train as _train_lstm   # noqa: PLC0415
+
+        logger.info("Weekly retrain starting for %s ...", coin)
+        metrics = _train_lstm(
+            coin=coin,
+            window_days=730,
+            gamma=0.3,
+            model_version=3,
+            loss_type="direction_weighted",
+        )
+        logger.info(
+            "Weekly retrain complete for %s — dir_acc=%.1f%%  RMSE=$%.2f",
+            coin,
+            metrics.get("directional_accuracy_pct", 0),
+            metrics.get("rmse", 0),
+        )
+
+        # Log result to MongoDB (non-fatal if unavailable)
+        try:
+            import pymongo as _pymongo  # noqa: PLC0415
+            client = _pymongo.MongoClient(MONGO_URI, serverSelectionTimeoutMS=3000)
+            db = client["crypto_db"]
+            db.retrain_log.insert_one({
+                "coin":        coin,
+                "timestamp":   datetime.now(timezone.utc),
+                "model_version": 3,
+                "window_days": 730,
+                "metrics":     metrics,
+                "status":      "success",
+            })
+            client.close()
+        except Exception as exc:
+            logger.warning("Could not write retrain log to MongoDB: %s", exc)
+
+        return True
+
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("Weekly retrain failed for %s: %s", coin, exc)
+        try:
+            import pymongo as _pymongo  # noqa: PLC0415
+            client = _pymongo.MongoClient(MONGO_URI, serverSelectionTimeoutMS=3000)
+            db = client["crypto_db"]
+            db.retrain_log.insert_one({
+                "coin":      coin,
+                "timestamp": datetime.now(timezone.utc),
+                "status":    "error",
+                "error":     str(exc),
+            })
+            client.close()
+        except Exception:
+            pass
+        return False
+
+
 # ── Inference cycle ────────────────────────────────────────────────────────────
 
 def run_cycle(consecutive_failures: int) -> int:
@@ -157,7 +225,12 @@ def run_cycle(consecutive_failures: int) -> int:
     """
     # Step 1: pull fresh price data into live_prices before seeding the model
     if SCHEDULER_FETCH_COINGECKO:
-        fetch_and_persist_latest_prices()
+        fetch_ok = fetch_and_persist_latest_prices()
+        if not fetch_ok:
+            logger.warning(
+                "CoinGecko fetch failed — inference will seed from existing live_prices "
+                "or historical_sma (may be stale)."
+            )
     else:
         logger.debug("CoinGecko fetch disabled (SCHEDULER_FETCH_COINGECKO=false).")
 
@@ -202,9 +275,11 @@ def run_cycle(consecutive_failures: int) -> int:
         if consecutive_failures >= 3:
             logger.critical(
                 "Inference failed %d consecutive cycles. "
-                "Verify models are trained and MongoDB is reachable.",
+                "Verify models are trained and MongoDB is reachable. "
+                "Exiting — container will restart automatically.",
                 consecutive_failures,
             )
+            sys.exit(1)
     else:
         consecutive_failures = 0
 
@@ -281,19 +356,40 @@ if __name__ == "__main__":
         SCHEDULER_FETCH_COINGECKO,
         MONGO_URI.split("@")[-1] if "@" in MONGO_URI else MONGO_URI,  # hide credentials
     )
-    consecutive_failures = 0
-    _last_daily_run_date: str = ""   # "YYYY-MM-DD" of last completed daily cycle
+    consecutive_failures   = 0
+    _last_daily_run_date: str  = ""   # "YYYY-MM-DD" of last completed daily cycle
+    _last_retrain_date:   str  = ""   # "YYYY-MM-DD" of last completed weekly retrain
 
     while True:
         cycle_start = time.monotonic()
         consecutive_failures = run_cycle(consecutive_failures)
 
         # ── Daily trigger: fires once per UTC day at DAILY_INFERENCE_HOUR ──────
-        now_utc    = datetime.now(timezone.utc)
-        today_str  = now_utc.strftime("%Y-%m-%d")
+        now_utc       = datetime.now(timezone.utc)
+        today_str     = now_utc.strftime("%Y-%m-%d")
         at_daily_hour = now_utc.hour == DAILY_INFERENCE_HOUR
 
         if at_daily_hour and today_str != _last_daily_run_date:
+            # ── Weekly retrain (runs before daily inference so new model is used) ─
+            if RETRAIN_INTERVAL_DAYS > 0:
+                try:
+                    from datetime import date as _date  # noqa: PLC0415
+                    last_rt = (
+                        _date.fromisoformat(_last_retrain_date)
+                        if _last_retrain_date else _date.min
+                    )
+                    days_since = (now_utc.date() - last_rt).days
+                    if days_since >= RETRAIN_INTERVAL_DAYS:
+                        logger.info(
+                            "Weekly retrain triggered (days_since_last=%d, interval=%d).",
+                            days_since, RETRAIN_INTERVAL_DAYS,
+                        )
+                        for coin in COINS:
+                            run_weekly_retrain(coin)   # blocking ~2–10 min
+                        _last_retrain_date = today_str
+                except Exception as exc:  # noqa: BLE001
+                    logger.exception("Weekly retrain trigger error: %s", exc)
+
             try:
                 run_daily_cycle()
             except Exception as exc:  # noqa: BLE001
