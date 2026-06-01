@@ -5,6 +5,7 @@ const BASE_URL = import.meta.env.VITE_API_URL || '/api';
 export const api = axios.create({
   baseURL: BASE_URL,
   timeout: 15000,
+  withCredentials: true,
 });
 
 // ── Types ──────────────────────────────────────────────────────────────────────
@@ -65,11 +66,15 @@ export interface PredictionPoint {
 
 export interface PredictionsResponse {
   coin: string;
-  model_version: string;
+  model_version: string | null;
+  active_horizon: number;
   predictions: PredictionPoint[];
   next_day_price: number | null;
   seven_day_high: number | null;
   seven_day_low: number | null;
+  dominant_direction?: string;
+  avg_confidence?: number | null;
+  message?: string;
 }
 
 export interface CorrelationResponse {
@@ -118,32 +123,11 @@ export interface InferenceStatusResponse {
   timestamp: string;
 }
 
-// ── Auth token management ──────────────────────────────────────────────────────
-const TOKEN_KEY = 'crypto_jwt';
-
-export const authStorage = {
-  get: (): string | null => localStorage.getItem(TOKEN_KEY),
-  set: (token: string): void => localStorage.setItem(TOKEN_KEY, token),
-  clear: (): void => localStorage.removeItem(TOKEN_KEY),
-};
-
-// Request interceptor — attach Bearer token
-api.interceptors.request.use(config => {
-  const token = authStorage.get();
-  if (token) {
-    config.headers = config.headers ?? {};
-    config.headers['Authorization'] = `Bearer ${token}`;
-  }
-  return config;
-});
-
-// Response interceptor — clear token on 401
+// Response interceptor — dispatch logout event on 401
 api.interceptors.response.use(
   response => response,
   error => {
     if (error.response?.status === 401) {
-      authStorage.clear();
-      // Dispatch custom event so AuthContext can react
       window.dispatchEvent(new Event('auth:logout'));
     }
     return Promise.reject(error);
@@ -153,6 +137,9 @@ api.interceptors.response.use(
 // ── Auth API ───────────────────────────────────────────────────────────────────
 export const login = (req: LoginRequest) =>
   api.post<LoginResponse>('/auth/login', req).then(r => r.data);
+
+export const logoutApi = () =>
+  api.post('/auth/logout').then(r => r.data);
 
 export const getMe = () =>
   api.get<AuthUser>('/auth/me').then(r => r.data);
@@ -164,8 +151,8 @@ export const fetchRealtime = (coin: string) =>
 export const fetchHistorical = (coin: string, days = 90) =>
   api.get<HistoricalPoint[]>(`/historical/${coin}`, { params: { days } }).then(r => r.data);
 
-export const fetchPredictions = (coin: string) =>
-  api.get<PredictionsResponse>(`/predictions/${coin}`).then(r => r.data);
+export const fetchPredictions = (coin: string, horizon?: number) =>
+  api.get<PredictionsResponse>(`/predictions/${coin}`, { params: horizon ? { horizon } : {} }).then(r => r.data);
 
 export const fetchPredictionHistory = (coin: string, days = 30) =>
   api.get<PredictionPoint[]>(`/predictions/${coin}/history`, { params: { days } }).then(r => r.data);
@@ -217,3 +204,57 @@ export const fetchIntradayDates = (coin: string) =>
 
 export const fetchIntraday = (coin: string, params: { date?: string; range?: IntradayRange } = {}) =>
   api.get<IntradayResponse>(`/intraday/${coin}`, { params }).then(r => r.data);
+
+// ── ML Model Registry types ────────────────────────────────────────────────────
+export interface ModelRegistryEntry {
+  coin: string;
+  coin_id: string;
+  horizon: number;
+  model_file: string;
+  scaler_file: string;
+  model_exists: boolean;
+  is_active: boolean;
+  metrics?: {
+    rmse?: number;
+    mae?: number;
+    directional_accuracy_pct?: number;
+    epochs_trained?: number;
+    best_val_loss?: number;
+  };
+  registered_at?: string;
+}
+
+export interface ModelRegistryResponse {
+  models: ModelRegistryEntry[];
+  count: number;
+  valid_horizons: number[];
+}
+
+export interface RetrainJob {
+  job_id: string;
+  coin: string;
+  horizon: number;
+  status: 'pending' | 'running' | 'completed' | 'failed';
+  message?: string;
+  created_at?: string;
+  started_at?: string;
+  finished_at?: string;
+  error?: string | null;
+}
+
+export interface RetrainStatusResponse {
+  jobs: RetrainJob[];
+  count: number;
+}
+
+export const fetchModels = (coin?: string) =>
+  api.get<ModelRegistryResponse>('/ml/models', { params: coin ? { coin } : {} }).then(r => r.data);
+
+export const setActiveModel = (coin: string, horizon: number) =>
+  api.put<{ status: string; coin: string; horizon: number; message: string }>('/ml/models/active', { coin, horizon }).then(r => r.data);
+
+export const triggerRetrain = (coin: string, horizon: number) =>
+  api.post<RetrainJob>('/ml/retrain', { coin, horizon }).then(r => r.data);
+
+export const fetchRetrainStatus = (coin?: string) =>
+  api.get<RetrainStatusResponse>('/ml/retrain/status', { params: coin ? { coin } : {} }).then(r => r.data);

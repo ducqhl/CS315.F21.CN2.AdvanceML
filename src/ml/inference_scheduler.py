@@ -52,7 +52,9 @@ from pathlib import Path
 # Ensure src/ml is on the path when run directly
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from inference import run_inference  # noqa: E402
+from inference import run_inference   # noqa: E402
+
+HORIZONS: list[int] = [7, 15, 60]
 
 # ── Configuration ──────────────────────────────────────────────────────────────
 INFERENCE_INTERVAL_SECONDS = int(os.getenv("INFERENCE_INTERVAL_SECONDS", "300"))
@@ -154,75 +156,145 @@ def fetch_and_persist_latest_prices() -> bool:
 
 def run_weekly_retrain(coin: str) -> bool:
     """
-    Retrain the LSTM for *coin* using the rolling-window v3 pipeline and
-    write a retrain log entry to MongoDB.
+    Retrain the LSTM for *coin* across all supported horizons (H7, H15, H60).
+    Each horizon is trained sequentially (blocking ~2–10 min each).
+    Returns True if at least one horizon trained successfully.
+    """
+    from train_lstm import train as _train_lstm   # noqa: PLC0415
 
-    Note: this is blocking — expect 2–10 minutes per coin on CPU.
-    Returns True on success, False on any error (non-fatal).
+    any_ok = False
+    for h in HORIZONS:
+        try:
+            logger.info("Weekly retrain starting for %s H%d ...", coin, h)
+            metrics = _train_lstm(
+                coin=coin,
+                window_days=730,
+                gamma=0.3,
+                model_version=3,
+                loss_type="direction_weighted",
+                horizon=h,
+            )
+            logger.info(
+                "Weekly retrain complete for %s H%d — dir_acc=%.1f%%  RMSE=$%.2f",
+                coin, h,
+                metrics.get("directional_accuracy_pct", 0),
+                metrics.get("rmse", 0),
+            )
+            any_ok = True
+
+            try:
+                import pymongo as _pymongo  # noqa: PLC0415
+                client = _pymongo.MongoClient(MONGO_URI, serverSelectionTimeoutMS=3000)
+                client["crypto_db"].retrain_log.insert_one({
+                    "coin":          coin,
+                    "horizon":       h,
+                    "timestamp":     datetime.now(timezone.utc),
+                    "model_version": 3,
+                    "window_days":   730,
+                    "metrics":       metrics,
+                    "status":        "success",
+                })
+                client.close()
+            except Exception as _log_exc:
+                logger.warning("Could not write retrain log for H%d: %s", h, _log_exc)
+
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("Weekly retrain failed for %s H%d: %s", coin, h, exc)
+            try:
+                import pymongo as _pymongo  # noqa: PLC0415
+                client = _pymongo.MongoClient(MONGO_URI, serverSelectionTimeoutMS=3000)
+                client["crypto_db"].retrain_log.insert_one({
+                    "coin":      coin,
+                    "horizon":   h,
+                    "timestamp": datetime.now(timezone.utc),
+                    "status":    "error",
+                    "error":     str(exc),
+                })
+                client.close()
+            except Exception:
+                pass
+
+    return any_ok
+
+
+# ── On-demand retrain request processor ───────────────────────────────────────
+
+def process_retrain_requests() -> None:
+    """
+    Poll MongoDB training_jobs for pending retrain requests (written by the API)
+    and execute them synchronously.  Marks jobs running → completed / failed.
     """
     try:
-        from train_lstm import train as _train_lstm   # noqa: PLC0415
+        import pymongo as _pymongo  # noqa: PLC0415
+        client = _pymongo.MongoClient(MONGO_URI, serverSelectionTimeoutMS=3000)
+        db = client["crypto_db"]
+        pending = list(db.training_jobs.find({"status": "pending"}, {"_id": 0}))
+        client.close()
+    except Exception as exc:
+        logger.warning("Could not poll training_jobs (non-fatal): %s", exc)
+        return
 
-        logger.info("Weekly retrain starting for %s ...", coin)
-        metrics = _train_lstm(
-            coin=coin,
-            window_days=730,
-            gamma=0.3,
-            model_version=3,
-            loss_type="direction_weighted",
-        )
-        logger.info(
-            "Weekly retrain complete for %s — dir_acc=%.1f%%  RMSE=$%.2f",
-            coin,
-            metrics.get("directional_accuracy_pct", 0),
-            metrics.get("rmse", 0),
-        )
+    for job in pending:
+        jid     = job["job_id"]
+        coin    = job["coin_id"]
+        horizon = job["horizon"]
+        logger.info("Processing retrain request: %s  H%d", jid, horizon)
 
-        # Log result to MongoDB (non-fatal if unavailable)
         try:
             import pymongo as _pymongo  # noqa: PLC0415
-            client = _pymongo.MongoClient(MONGO_URI, serverSelectionTimeoutMS=3000)
-            db = client["crypto_db"]
-            db.retrain_log.insert_one({
-                "coin":        coin,
-                "timestamp":   datetime.now(timezone.utc),
-                "model_version": 3,
-                "window_days": 730,
-                "metrics":     metrics,
-                "status":      "success",
-            })
-            client.close()
-        except Exception as exc:
-            logger.warning("Could not write retrain log to MongoDB: %s", exc)
-
-        return True
-
-    except Exception as exc:  # noqa: BLE001
-        logger.exception("Weekly retrain failed for %s: %s", coin, exc)
-        try:
-            import pymongo as _pymongo  # noqa: PLC0415
-            client = _pymongo.MongoClient(MONGO_URI, serverSelectionTimeoutMS=3000)
-            db = client["crypto_db"]
-            db.retrain_log.insert_one({
-                "coin":      coin,
-                "timestamp": datetime.now(timezone.utc),
-                "status":    "error",
-                "error":     str(exc),
-            })
-            client.close()
+            _client = _pymongo.MongoClient(MONGO_URI, serverSelectionTimeoutMS=3000)
+            _client["crypto_db"].training_jobs.update_one(
+                {"job_id": jid},
+                {"$set": {"status": "running", "started_at": datetime.now(timezone.utc)}},
+            )
+            _client.close()
         except Exception:
             pass
-        return False
+
+        try:
+            from train_lstm import train as _train_lstm  # noqa: PLC0415
+            metrics = _train_lstm(
+                coin=coin,
+                horizon=horizon,
+                window_days=730,
+                gamma=0.3,
+                model_version=3,
+                loss_type="direction_weighted",
+            )
+            logger.info("On-demand retrain complete: %s H%d  RMSE=$%.2f", coin, horizon, metrics.get("rmse", 0))
+            status, err_msg = "completed", None
+        except Exception as exc:
+            logger.exception("On-demand retrain failed for %s H%d: %s", coin, horizon, exc)
+            metrics, status, err_msg = {}, "failed", str(exc)
+
+        try:
+            import pymongo as _pymongo  # noqa: PLC0415
+            _client = _pymongo.MongoClient(MONGO_URI, serverSelectionTimeoutMS=3000)
+            _client["crypto_db"].training_jobs.update_one(
+                {"job_id": jid},
+                {"$set": {
+                    "status":      status,
+                    "finished_at": datetime.now(timezone.utc),
+                    "metrics":     metrics,
+                    "error":       err_msg,
+                }},
+            )
+            _client.close()
+        except Exception:
+            pass
 
 
 # ── Inference cycle ────────────────────────────────────────────────────────────
 
 def run_cycle(consecutive_failures: int) -> int:
     """
-    Run one full cycle: fetch prices → run inference for all coins.
+    Run one full cycle: process retrain requests → fetch prices → run inference for all coins.
 
     Returns updated consecutive_failures count (resets to 0 on any success).
     """
+    # Step 0: process any pending retrain requests from the API (blocking if any)
+    process_retrain_requests()
+
     # Step 1: pull fresh price data into live_prices before seeding the model
     if SCHEDULER_FETCH_COINGECKO:
         fetch_ok = fetch_and_persist_latest_prices()
@@ -234,40 +306,57 @@ def run_cycle(consecutive_failures: int) -> int:
     else:
         logger.debug("CoinGecko fetch disabled (SCHEDULER_FETCH_COINGECKO=false).")
 
-    # Step 2: run 7-day daily inference for each coin
+    # Step 2: run inference for ALL horizons (H7 / H15 / H60) for each coin
     any_success = False
     import pymongo as _pymongo
     _status_client = _pymongo.MongoClient(MONGO_URI, serverSelectionTimeoutMS=3000)
     _status_db = _status_client["crypto_db"]
     for coin in COINS:
         symbol = _COIN_SYMBOL_MAP.get(coin, coin.upper())
-        try:
-            docs = run_inference(coin=coin, mongo_uri=MONGO_URI)
-            logger.info(
-                "Inference OK for %s — %d predictions written.", coin, len(docs)
-            )
-            any_success = True
-            _status_db.inference_status.update_one(
-                {"coin": symbol},
-                {"$set": {"coin": symbol, "status": "completed", "last_run": datetime.now(timezone.utc), "error": None}},
-                upsert=True,
-            )
-        except FileNotFoundError as exc:
-            logger.error(
-                "Model not trained for %s (run train_lstm.py first): %s", coin, exc
-            )
-            _status_db.inference_status.update_one(
-                {"coin": symbol},
-                {"$set": {"coin": symbol, "status": "model_missing", "last_run": datetime.now(timezone.utc), "error": str(exc)}},
-                upsert=True,
-            )
-        except Exception as exc:  # noqa: BLE001
-            logger.exception("Inference failed for %s: %s", coin, exc)
-            _status_db.inference_status.update_one(
-                {"coin": symbol},
-                {"$set": {"coin": symbol, "status": "error", "last_run": datetime.now(timezone.utc), "error": str(exc)}},
-                upsert=True,
-            )
+        for h in HORIZONS:
+            status_key = f"{symbol}_h{h}"
+            try:
+                docs = run_inference(coin=coin, mongo_uri=MONGO_URI, horizon=h)
+                logger.info(
+                    "Inference OK for %s H%d — %d predictions written.", coin, h, len(docs)
+                )
+                any_success = True
+                _status_db.inference_status.update_one(
+                    {"coin": status_key},
+                    {"$set": {
+                        "coin": status_key, "symbol": symbol, "horizon": h,
+                        "status": "completed",
+                        "last_run": datetime.now(timezone.utc),
+                        "error": None,
+                    }},
+                    upsert=True,
+                )
+            except FileNotFoundError as exc:
+                logger.warning(
+                    "Model not trained for %s H%d (skipping): %s", coin, h, exc
+                )
+                _status_db.inference_status.update_one(
+                    {"coin": status_key},
+                    {"$set": {
+                        "coin": status_key, "symbol": symbol, "horizon": h,
+                        "status": "model_missing",
+                        "last_run": datetime.now(timezone.utc),
+                        "error": str(exc),
+                    }},
+                    upsert=True,
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.exception("Inference failed for %s H%d: %s", coin, h, exc)
+                _status_db.inference_status.update_one(
+                    {"coin": status_key},
+                    {"$set": {
+                        "coin": status_key, "symbol": symbol, "horizon": h,
+                        "status": "error",
+                        "last_run": datetime.now(timezone.utc),
+                        "error": str(exc),
+                    }},
+                    upsert=True,
+                )
     _status_client.close()
 
     if not any_success:
@@ -305,20 +394,20 @@ def run_daily_cycle() -> None:
         DAILY_INFERENCE_HOUR,
     )
 
-    # Step 1: Daily 7-day forecast for each coin
+    # Step 1: Daily forecast for ALL horizons (H7/H15/H60) for each coin
     for coin in COINS:
-        symbol = _COIN_SYMBOL_MAP.get(coin, coin.upper())
-        try:
-            docs = run_inference(coin=coin, mongo_uri=MONGO_URI)
-            logger.info(
-                "Daily inference OK for %s — %d predictions written.", coin, len(docs)
-            )
-        except FileNotFoundError as exc:
-            logger.error(
-                "Model not trained for %s (run train_lstm.py first): %s", coin, exc
-            )
-        except Exception as exc:  # noqa: BLE001
-            logger.exception("Daily inference failed for %s: %s", coin, exc)
+        for h in HORIZONS:
+            try:
+                docs = run_inference(coin=coin, mongo_uri=MONGO_URI, horizon=h)
+                logger.info(
+                    "Daily inference OK for %s H%d — %d predictions written.", coin, h, len(docs)
+                )
+            except FileNotFoundError as exc:
+                logger.warning(
+                    "Model not trained for %s H%d (skipping daily inference): %s", coin, h, exc
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.exception("Daily inference failed for %s H%d: %s", coin, h, exc)
 
     # Step 2: Accuracy evaluation — compare yesterday's predictions to actual prices
     try:

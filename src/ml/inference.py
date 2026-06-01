@@ -60,7 +60,7 @@ import pandas as pd
 import torch
 
 from model import LSTMModel
-from preprocess import _build_features
+from preprocess import _build_features, HORIZON_SEQ_LEN_MAP
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(
@@ -72,7 +72,9 @@ logging.basicConfig(
 # ── Paths ──────────────────────────────────────────────────────────────────────
 _HERE = Path(__file__).resolve().parent
 _MODEL_DIR = _HERE / "model"
-_DATA_DIR = _HERE.parent.parent / "data" / "sample"
+_DATA_DIR = _HERE / "data" / "sample"
+if not _DATA_DIR.exists():
+    _DATA_DIR = _HERE.parent.parent / "data" / "sample"
 
 # ── Constants ──────────────────────────────────────────────────────────────────
 SEQ_LEN = 60
@@ -392,6 +394,7 @@ def _write_predictions(
     strengths: list[str] | None = None,
     vol_predictions: np.ndarray | None = None,
     model_version_str: str = MODEL_VERSION,
+    horizon: int = HORIZON,
 ) -> list[dict]:
     """
     Write 7-day forecast to  predictions  collection (upsert on coin + prediction_date).
@@ -437,6 +440,7 @@ def _write_predictions(
             "model_version":   model_version_str,
             "seed_source":     seed_source,
             "created_at":      now_utc,
+            "horizon":         horizon,
         }
         # Add optional direction fields
         if directions is not None and idx < len(directions):
@@ -450,7 +454,7 @@ def _write_predictions(
             doc["predicted_volatility"] = float(vol_predictions[idx])
 
         collection.update_one(
-            {"coin": doc["coin"], "prediction_date": doc["prediction_date"]},
+            {"coin": doc["coin"], "prediction_date": doc["prediction_date"], "horizon": doc["horizon"]},
             {"$set": doc},
             upsert=True,
         )
@@ -474,8 +478,9 @@ def _write_predictions(
         run_doc = {**doc, "run_date": run_date_day}
         runs_col.update_one(
             {
-                "coin": run_doc["coin"],
-                "run_date": run_date_day,
+                "coin":            run_doc["coin"],
+                "horizon":         run_doc["horizon"],
+                "run_date":        run_date_day,
                 "prediction_date": run_doc["prediction_date"],
             },
             {"$set": run_doc},
@@ -488,7 +493,7 @@ def _write_predictions(
 
 # ── Main entry-point ───────────────────────────────────────────────────────────
 
-def run_inference(coin: str = "bitcoin", mongo_uri: str | None = None) -> list[dict]:
+def run_inference(coin: str = "bitcoin", mongo_uri: str | None = None, horizon: int = HORIZON) -> list[dict]:
     """
     Full inference pipeline: load model → build seed → forecast → write to MongoDB.
 
@@ -503,30 +508,36 @@ def run_inference(coin: str = "bitcoin", mongo_uri: str | None = None) -> list[d
     """
     coin_symbol = _COIN_SYMBOL_MAP.get(coin, coin.upper())
 
-    # ── 1. Load model — version priority: v3 → v2 → v1 ───────────────────────
+    # ── 1. Load model — horizon-specific v3 → legacy v3 → v2 → v1 ───────────
+    # Primary: horizon-specific artifact (e.g. lstm_bitcoin_h7_v3.pt)
+    path_h = _MODEL_DIR / f"lstm_{coin}_h{horizon}_v3.pt"
+    scaler_h = _MODEL_DIR / f"scaler_{coin}_h{horizon}_v3.pkl"
+
+    # Legacy fallbacks (pre-horizon naming)
     path_v3 = _model_path_v3(coin)
     path_v2 = _model_path_v2(coin)
     path_v1 = _model_path_v1(coin)
 
-    use_v3 = path_v3.exists() and _scaler_path_v3(coin).exists()
-    use_v2 = (not use_v3) and path_v2.exists()
-
-    if use_v3:
-        model_path  = path_v3
-        scaler_path = _scaler_path_v3(coin)
+    if path_h.exists() and scaler_h.exists():
+        model_path     = path_h
+        scaler_path    = scaler_h
         loaded_version = "v3"
-    elif use_v2:
-        model_path  = path_v2
-        scaler_path = _scaler_path(coin)
+    elif path_v3.exists() and _scaler_path_v3(coin).exists():
+        model_path     = path_v3
+        scaler_path    = _scaler_path_v3(coin)
+        loaded_version = "v3"
+    elif path_v2.exists():
+        model_path     = path_v2
+        scaler_path    = _scaler_path(coin)
         loaded_version = "v2"
     elif path_v1.exists():
-        model_path  = path_v1
-        scaler_path = _scaler_path(coin)
+        model_path     = path_v1
+        scaler_path    = _scaler_path(coin)
         loaded_version = "v1"
     else:
         raise FileNotFoundError(
-            f"No trained model found for {coin}. "
-            f"Run  python src/ml/train_lstm.py --coin {coin}  first."
+            f"No trained model found for {coin} (horizon={horizon}). "
+            f"Run  python src/ml/train_lstm.py --coin {coin} --horizon {horizon}  first."
         )
 
     if not scaler_path.exists():
@@ -546,7 +557,7 @@ def run_inference(coin: str = "bitcoin", mongo_uri: str | None = None) -> list[d
         hidden_size=128,
         num_layers=2,
         dropout=0.2,
-        output_size=7,
+        output_size=horizon,
         use_direction_head=False,
         use_volatility_head=(loaded_version == "v3"),
     )
@@ -556,8 +567,9 @@ def run_inference(coin: str = "bitcoin", mongo_uri: str | None = None) -> list[d
     model.eval()
     logger.info("Loaded model from %s (%s)", model_path, loaded_version)
 
-    # ── 2. Seed data — fetch SEQ_LEN + 31 rows for feature warmup ─────────────
-    n_fetch = SEQ_LEN + 31
+    # ── 2. Seed data — fetch horizon-appropriate SEQ_LEN + 31 rows for warmup ──
+    _seq_len = HORIZON_SEQ_LEN_MAP.get(horizon, SEQ_LEN)
+    n_fetch = _seq_len + 31
 
     raw_close = _load_last_n_from_live_prices(coin_symbol, n=n_fetch, mongo_uri=mongo_uri)
     seed_source = "live_prices"
@@ -585,9 +597,10 @@ def run_inference(coin: str = "bitcoin", mongo_uri: str | None = None) -> list[d
     features = features[valid]
     close_for_seed = raw_close[valid]
 
-    if len(features) < SEQ_LEN:
+    if len(features) < _seq_len:
         raise ValueError(
-            f"Not enough clean rows after warmup drop: {len(features)} < SEQ_LEN={SEQ_LEN}. "
+            f"Not enough clean rows after warmup drop: {len(features)} < SEQ_LEN={_seq_len} "
+            f"(horizon={horizon}). "
             "Fetch more history."
         )
 
@@ -605,17 +618,17 @@ def run_inference(coin: str = "bitcoin", mongo_uri: str | None = None) -> list[d
         )
 
     seed_scaled = scaler.transform(features)
-    seed = seed_scaled[-SEQ_LEN:]          # (SEQ_LEN, n_features)
+    seed = seed_scaled[-_seq_len:]         # (_seq_len, n_features)
     last_price_usd = float(close_for_seed[-1])
 
     # ── 5. MIMO forecast ───────────────────────────────────────────────────────
     vol_predictions: np.ndarray | None = None
     if loaded_version == "v3":
         predictions_usd, vol_predictions = _mimo_predict_v3(
-            model, seed, scaler, last_price_usd, horizon=HORIZON
+            model, seed, scaler, last_price_usd, horizon=horizon
         )
     else:
-        predictions_usd = _mimo_predict(model, seed, scaler, last_price_usd, horizon=HORIZON)
+        predictions_usd = _mimo_predict(model, seed, scaler, last_price_usd, horizon=horizon)
 
     # Derive direction and strength from the price forecast curve
     directions: list[str] = []
@@ -639,12 +652,14 @@ def run_inference(coin: str = "bitcoin", mongo_uri: str | None = None) -> list[d
     avg_conf = sum(dir_probs) / len(dir_probs)
     dominant = max(dir_summary, key=dir_summary.get)
     logger.info(
-        "7-day forecast for %s (USD): %s",
+        "%d-day forecast for %s (USD): %s",
+        horizon,
         coin_symbol,
         [f"${p:.4f}" for p in predictions_usd],
     )
     logger.info(
-        "7-day trend summary: %s  (UP=%d DOWN=%d)  avg_confidence=%.3f",
+        "%d-day trend summary: %s  (UP=%d DOWN=%d)  avg_confidence=%.3f",
+        horizon,
         dominant, dir_summary["UP"], dir_summary["DOWN"], avg_conf,
     )
 
@@ -660,6 +675,7 @@ def run_inference(coin: str = "bitcoin", mongo_uri: str | None = None) -> list[d
         strengths=strengths,
         vol_predictions=vol_predictions,
         model_version_str=mv_str,
+        horizon=horizon,
     )
     return docs
 

@@ -1,398 +1,140 @@
-import { useEffect, useState, useMemo } from 'react';
-import ReactApexChart from 'react-apexcharts';
+import { useState, useMemo } from 'react';
+import { useQuery } from '@tanstack/react-query';
+import {
+  ResponsiveContainer, ComposedChart, LineChart, BarChart,
+  Line, Bar, Area, XAxis, YAxis, CartesianGrid, Tooltip,
+  ReferenceLine, Cell,
+} from 'recharts';
 import { BarChart2 } from 'lucide-react';
 import { fetchTechnical } from '../api/client';
-import type { HistoricalPoint } from '../api/client';
-import { C, baseApexOptions } from '../components/apexTheme';
 
-interface Props {
-  coin: 'bitcoin' | 'dogecoin';
-}
+interface Props { coin: 'bitcoin' | 'dogecoin' }
 
 type Timeframe = '1M' | '3M' | '6M' | '1Y';
-const TIMEFRAME_DAYS: Record<Timeframe, number> = {
-  '1M': 30, '3M': 90, '6M': 180, '1Y': 365,
+type OverlayKey = 'ma20' | 'ma50' | 'bb';
+
+const TF_DAYS: Record<Timeframe, number> = { '1M': 30, '3M': 90, '6M': 180, '1Y': 365 };
+
+function fmtPrice(v: number, coin: string) {
+  return coin === 'bitcoin'
+    ? `$${(v / 1000).toFixed(1)}k`
+    : `$${v.toFixed(5)}`;
+}
+
+const ChartTooltip = ({ active, payload, label, coin }: {
+  active?: boolean;
+  payload?: { name: string; value: number; color: string }[];
+  label?: string;
+  coin: string;
+}) => {
+  if (!active || !payload?.length) return null;
+  const dec = coin === 'bitcoin' ? 2 : 6;
+  return (
+    <div className="chart-tooltip">
+      <div style={{ fontSize: '10px', color: 'var(--text-secondary)', marginBottom: '5px', fontFamily: 'IBM Plex Mono' }}>{label}</div>
+      {payload.map((p, i) => p.value != null && (
+        <div key={i} style={{ display: 'flex', gap: '7px', alignItems: 'center', marginBottom: '2px' }}>
+          <div style={{ width: '7px', height: '7px', borderRadius: '2px', background: p.color }} />
+          <span style={{ fontSize: '11px', color: 'var(--text-secondary)', flex: 1, fontFamily: 'Plus Jakarta Sans' }}>{p.name}</span>
+          <span className="font-mono" style={{ fontSize: '11px', color: 'var(--text-primary)' }}>
+            {`$${p.value.toLocaleString('en-US', { minimumFractionDigits: dec, maximumFractionDigits: dec })}`}
+          </span>
+        </div>
+      ))}
+    </div>
+  );
 };
 
-// Overlay toggle keys
-type OverlayKey = 'ma20' | 'ma50' | 'bb';
+const RsiTooltip = ({ active, payload, label }: { active?: boolean; payload?: { value: number }[]; label?: string }) => {
+  if (!active || !payload?.length) return null;
+  const v = payload[0]?.value;
+  return (
+    <div className="chart-tooltip">
+      <div style={{ fontSize: '10px', color: 'var(--text-secondary)', marginBottom: '4px', fontFamily: 'IBM Plex Mono' }}>{label}</div>
+      <div className="font-mono" style={{ fontSize: '12px', color: v >= 70 ? 'var(--down)' : v <= 30 ? 'var(--up)' : 'var(--accent-light)' }}>
+        RSI {v?.toFixed(2) ?? '—'}
+      </div>
+    </div>
+  );
+};
+
+const MacdTooltip = ({ active, payload, label, coin }: { active?: boolean; payload?: { name: string; value: number; color: string }[]; label?: string; coin: string }) => {
+  if (!active || !payload?.length) return null;
+  const dec = coin === 'bitcoin' ? 2 : 6;
+  return (
+    <div className="chart-tooltip">
+      <div style={{ fontSize: '10px', color: 'var(--text-secondary)', marginBottom: '5px', fontFamily: 'IBM Plex Mono' }}>{label}</div>
+      {payload.map((p, i) => p.value != null && (
+        <div key={i} style={{ display: 'flex', gap: '7px', alignItems: 'center', marginBottom: '2px' }}>
+          <div style={{ width: '7px', height: '7px', borderRadius: '2px', background: p.color }} />
+          <span style={{ fontSize: '11px', color: 'var(--text-secondary)', flex: 1, fontFamily: 'Plus Jakarta Sans' }}>{p.name}</span>
+          <span className="font-mono" style={{ fontSize: '11px', color: 'var(--text-primary)' }}>
+            {p.value.toFixed(dec)}
+          </span>
+        </div>
+      ))}
+    </div>
+  );
+};
 
 export default function TechnicalPage({ coin }: Props) {
   const [timeframe, setTimeframe] = useState<Timeframe>('3M');
-  const [data, setData] = useState<HistoricalPoint[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-  const [overlays, setOverlays] = useState<Record<OverlayKey, boolean>>({
-    ma20: true,
-    ma50: true,
-    bb: false,
-  });
+  const [overlays, setOverlays]   = useState<Record<OverlayKey, boolean>>({ ma20: true, ma50: true, bb: false });
 
-  useEffect(() => {
-    setLoading(true);
-    setError(null);
-    fetchTechnical(coin, TIMEFRAME_DAYS[timeframe])
-      .then(d => setData(d))
-      .catch(e => setError(String(e)))
-      .finally(() => setLoading(false));
-  }, [coin, timeframe]);
-
-  const symbol = coin === 'bitcoin' ? 'BTC' : 'DOGE';
+  const symbol   = coin === 'bitcoin' ? 'BTC' : 'DOGE';
   const decimals = coin === 'bitcoin' ? 2 : 6;
 
-  const fmt = (v: number) =>
-    coin === 'bitcoin' ? `$${(v / 1000).toFixed(1)}k` : `$${v.toFixed(4)}`;
+  const { data: rawData = [], isLoading, error } = useQuery({
+    queryKey: ['technical', coin, TF_DAYS[timeframe]],
+    queryFn:  () => fetchTechnical(coin, TF_DAYS[timeframe]),
+    staleTime: 300_000,
+  });
 
-  const toggleOverlay = (key: OverlayKey) =>
-    setOverlays(prev => ({ ...prev, [key]: !prev[key] }));
+  const data = useMemo(() =>
+    rawData.map(d => ({
+      date:  d.date.split('T')[0],
+      close: d.avg_close,
+      sma20: d.sma_20 ?? null,
+      sma50: d.sma_50 ?? null,
+      bbUp:  d.bb_upper ?? null,
+      bbLo:  d.bb_lower ?? null,
+      bbMid: d.bb_middle ?? null,
+      rsi:   d.rsi    ?? null,
+      macd:  d.macd   ?? null,
+      sig:   d.macd_signal    ?? null,
+      hist:  d.macd_histogram ?? null,
+      vol:   d.avg_volume ?? null,
+    })),
+    [rawData]
+  );
 
-  // Derived date labels for x-axis
-  const dates = useMemo(() => data.map(d => d.date.split('T')[0]), [data]);
-
-  // ── Main chart series ────────────────────────────────────────────────────────
-  const mainSeries = useMemo((): ApexCharts.ApexOptions['series'] => {
-    const series: ApexCharts.ApexOptions['series'] = [
-      {
-        name: 'Close',
-        type: 'line',
-        data: data.map(d => d.avg_close),
-      },
-    ];
-    if (overlays.ma20) {
-      series.push({
-        name: 'MA20',
-        type: 'line',
-        data: data.map(d => d.sma_20 ?? null) as number[],
-      });
-    }
-    if (overlays.ma50) {
-      series.push({
-        name: 'MA50',
-        type: 'line',
-        data: data.map(d => d.sma_50 ?? null) as number[],
-      });
-    }
-    if (overlays.bb) {
-      series.push(
-        {
-          name: 'BB Upper',
-          type: 'line',
-          data: data.map(d => d.bb_upper ?? null) as number[],
-        },
-        {
-          name: 'BB Lower',
-          type: 'line',
-          data: data.map(d => d.bb_lower ?? null) as number[],
-        }
-      );
-    }
-    return series;
-  }, [data, overlays]);
-
-  const mainColors = useMemo(() => {
-    const colors: string[] = [C.cyan];
-    if (overlays.ma20) colors.push(C.gold);
-    if (overlays.ma50) colors.push(C.violet);
-    if (overlays.bb) colors.push(C.red, C.green);
-    return colors;
-  }, [overlays]);
-
-  const mainDash = useMemo(() => {
-    const dash = [0];
-    if (overlays.ma20) dash.push(0);
-    if (overlays.ma50) dash.push(0);
-    if (overlays.bb) dash.push(4, 4);
-    return dash;
-  }, [overlays]);
-
-  const mainWidths = useMemo(() => {
-    const w = [2];
-    if (overlays.ma20) w.push(1);
-    if (overlays.ma50) w.push(1);
-    if (overlays.bb) w.push(1, 1);
-    return w;
-  }, [overlays]);
-
-  const mainOptions = useMemo((): ApexCharts.ApexOptions => {
-    const base = baseApexOptions(360);
-    return {
-      ...base,
-      chart: {
-        ...base.chart,
-        id: 'tech-main',
-        group: 'technical',
-        type: 'line',
-        height: 360,
-        toolbar: { show: true, tools: { download: false, zoom: true, zoomin: true, zoomout: true, pan: true, reset: true }, autoSelected: 'zoom' },
-      },
-      colors: mainColors,
-      stroke: {
-        curve: 'smooth',
-        width: mainWidths,
-        dashArray: mainDash,
-      },
-      xaxis: {
-        ...base.xaxis,
-        categories: dates,
-        tickAmount: 8,
-        labels: {
-          ...base.xaxis?.labels,
-          formatter: (v: string) => v ? v.slice(5) : '',
-        },
-      },
-      yaxis: {
-        labels: {
-          style: { colors: C.textSec, fontSize: '10px', fontFamily: "'Space Mono', monospace" },
-          formatter: fmt,
-        },
-      },
-      tooltip: {
-        ...base.tooltip,
-        shared: true,
-        intersect: false,
-        y: { formatter: (v: number) => v != null ? `$${v.toLocaleString('en-US', { minimumFractionDigits: decimals, maximumFractionDigits: decimals })}` : '—' },
-      },
-      legend: {
-        ...base.legend,
-        show: true,
-        position: 'top',
-        horizontalAlign: 'right',
-      },
-      markers: { size: 0 },
-    };
-  }, [dates, mainColors, mainDash, mainWidths, decimals]);
-
-  // ── RSI series ───────────────────────────────────────────────────────────────
-  const rsiSeries = useMemo((): ApexCharts.ApexOptions['series'] => [
-    { name: 'RSI', data: data.map(d => d.rsi ?? null) as number[] },
-  ], [data]);
-
-  const rsiOptions = useMemo((): ApexCharts.ApexOptions => {
-    const base = baseApexOptions(120);
-    return {
-      ...base,
-      chart: {
-        ...base.chart,
-        id: 'tech-rsi',
-        group: 'technical',
-        type: 'line',
-        height: 120,
-        toolbar: { show: false },
-        zoom: { enabled: false },
-      },
-      colors: [C.cyan],
-      stroke: { curve: 'smooth', width: [1.5] },
-      xaxis: {
-        ...base.xaxis,
-        categories: dates,
-        tickAmount: 8,
-        labels: {
-          ...base.xaxis?.labels,
-          formatter: (v: string) => v ? v.slice(5) : '',
-        },
-      },
-      yaxis: {
-        min: 0,
-        max: 100,
-        tickAmount: 4,
-        labels: {
-          style: { colors: C.textSec, fontSize: '10px', fontFamily: "'Space Mono', monospace" },
-          formatter: (v: number) => v.toFixed(0),
-        },
-      },
-      annotations: {
-        yaxis: [
-          {
-            y: 70,
-            borderColor: C.red,
-            strokeDashArray: 3,
-            label: {
-              text: 'OB 70',
-              style: { color: C.red, background: C.bg, fontSize: '9px', fontFamily: "'Space Mono', monospace" },
-              position: 'right',
-            },
-          },
-          {
-            y: 30,
-            borderColor: C.green,
-            strokeDashArray: 3,
-            label: {
-              text: 'OS 30',
-              style: { color: C.green, background: C.bg, fontSize: '9px', fontFamily: "'Space Mono', monospace" },
-              position: 'right',
-            },
-          },
-        ],
-      },
-      tooltip: {
-        ...base.tooltip,
-        shared: true,
-        intersect: false,
-        y: { formatter: (v: number) => v != null ? v.toFixed(2) : '—' },
-      },
-      markers: { size: 0 },
-      legend: { show: false },
-      fill: {
-        type: 'gradient',
-        gradient: {
-          shade: 'dark',
-          type: 'vertical',
-          shadeIntensity: 0.4,
-          opacityFrom: 0.12,
-          opacityTo: 0.01,
-        },
-      },
-    };
-  }, [dates]);
-
-  // ── MACD series ──────────────────────────────────────────────────────────────
-  const macdSeries = useMemo((): ApexCharts.ApexOptions['series'] => [
-    { name: 'MACD', type: 'line', data: data.map(d => d.macd ?? null) as number[] },
-    { name: 'Signal', type: 'line', data: data.map(d => d.macd_signal ?? null) as number[] },
-    { name: 'Histogram', type: 'bar', data: data.map(d => d.macd_histogram ?? null) as number[] },
-  ], [data]);
-
-  const macdOptions = useMemo((): ApexCharts.ApexOptions => {
-    const base = baseApexOptions(120);
-    // Histogram bars: green if positive, red if negative
-    const histColors = data.map(d =>
-      (d.macd_histogram ?? 0) >= 0 ? C.green : C.red
-    );
-    return {
-      ...base,
-      chart: {
-        ...base.chart,
-        id: 'tech-macd',
-        group: 'technical',
-        type: 'line',
-        height: 120,
-        toolbar: { show: false },
-        zoom: { enabled: false },
-      },
-      colors: [C.cyan, C.gold, C.green],
-      stroke: {
-        curve: 'smooth',
-        width: [1.5, 1, 0],
-        dashArray: [0, 4, 0],
-      },
-      plotOptions: {
-        bar: {
-          columnWidth: '80%',
-          colors: {
-            ranges: [
-              { from: -1e9, to: 0, color: C.red },
-              { from: 0, to: 1e9, color: C.green },
-            ],
-          },
-        },
-      },
-      fill: {
-        opacity: [1, 1, 0.6],
-      },
-      xaxis: {
-        ...base.xaxis,
-        categories: dates,
-        tickAmount: 8,
-        labels: {
-          ...base.xaxis?.labels,
-          formatter: (v: string) => v ? v.slice(5) : '',
-        },
-      },
-      yaxis: {
-        labels: {
-          style: { colors: C.textSec, fontSize: '10px', fontFamily: "'Space Mono', monospace" },
-          formatter: (v: number) => v.toFixed(coin === 'bitcoin' ? 0 : 5),
-        },
-      },
-      tooltip: {
-        ...base.tooltip,
-        shared: true,
-        intersect: false,
-      },
-      markers: { size: 0 },
-      legend: { show: false },
-      // suppress unused histColors variable TS warning
-      ...(histColors && {}),
-    };
-  }, [dates, data, coin]);
-
-  // ── Volume series ────────────────────────────────────────────────────────────
-  const volumeSeries = useMemo((): ApexCharts.ApexOptions['series'] => [
-    { name: 'Volume', data: data.map(d => d.avg_volume ?? null) as number[] },
-  ], [data]);
-
-  const volumeOptions = useMemo((): ApexCharts.ApexOptions => {
-    const base = baseApexOptions(80);
-    return {
-      ...base,
-      chart: {
-        ...base.chart,
-        id: 'tech-volume',
-        group: 'technical',
-        type: 'bar',
-        height: 80,
-        toolbar: { show: false },
-        zoom: { enabled: false },
-      },
-      colors: [C.border],
-      plotOptions: {
-        bar: {
-          columnWidth: '90%',
-        },
-      },
-      xaxis: {
-        ...base.xaxis,
-        categories: dates,
-        tickAmount: 8,
-        labels: {
-          ...base.xaxis?.labels,
-          formatter: (v: string) => v ? v.slice(5) : '',
-        },
-      },
-      yaxis: {
-        labels: {
-          style: { colors: C.textSec, fontSize: '10px', fontFamily: "'Space Mono', monospace" },
-          formatter: (v: number) =>
-            v > 1e9 ? `${(v / 1e9).toFixed(1)}B` : v > 1e6 ? `${(v / 1e6).toFixed(0)}M` : v.toFixed(0),
-        },
-      },
-      tooltip: {
-        ...base.tooltip,
-        y: {
-          formatter: (v: number) =>
-            v > 1e9
-              ? `$${(v / 1e9).toFixed(2)}B`
-              : `$${(v / 1e6).toFixed(1)}M`,
-        },
-      },
-      dataLabels: { enabled: false },
-      legend: { show: false },
-    };
-  }, [dates]);
-
-  // Latest RSI value
   const latestRsi = useMemo(() => {
-    const rsiPoints = data.filter(d => d.rsi != null);
-    return rsiPoints.length ? rsiPoints[rsiPoints.length - 1].rsi : null;
+    const pts = data.filter(d => d.rsi != null);
+    return pts.length ? pts[pts.length - 1].rsi : null;
   }, [data]);
 
-  const hasMacd = useMemo(() => data.some(d => d.macd != null), [data]);
+  const xInterval = Math.max(1, Math.floor(data.length / 8));
+  const yWidth    = coin === 'bitcoin' ? 52 : 68;
 
-  if (loading) {
+  const toggleOverlay = (k: OverlayKey) =>
+    setOverlays(p => ({ ...p, [k]: !p[k] }));
+
+  if (isLoading) {
     return (
       <div>
-        <div className="skeleton" style={{ height: '36px', width: '200px', borderRadius: '8px', marginBottom: '28px' }} />
-        <div className="skeleton" style={{ height: '420px', borderRadius: '12px', marginBottom: '16px' }} />
-        <div className="skeleton" style={{ height: '180px', borderRadius: '12px' }} />
+        <div className="skeleton" style={{ height: '32px', width: '220px', borderRadius: '8px', marginBottom: '28px' }} />
+        <div className="skeleton" style={{ height: '380px', borderRadius: '12px', marginBottom: '12px' }} />
+        <div className="skeleton" style={{ height: '140px', borderRadius: '12px', marginBottom: '12px' }} />
+        <div className="skeleton" style={{ height: '140px', borderRadius: '12px' }} />
       </div>
     );
   }
 
   if (error) {
     return (
-      <div style={{ padding: '40px', textAlign: 'center', color: 'var(--red)', fontFamily: 'Manrope' }}>
-        <BarChart2 size={32} style={{ marginBottom: '12px', opacity: 0.5 }} />
-        <div>Error loading technical data: {error}</div>
+      <div style={{ padding: '40px', textAlign: 'center', color: 'var(--down)', fontFamily: 'Plus Jakarta Sans' }}>
+        <BarChart2 size={32} style={{ marginBottom: '12px', opacity: 0.4 }} />
+        <div>Error loading technical data</div>
       </div>
     );
   }
@@ -402,171 +144,205 @@ export default function TechnicalPage({ coin }: Props) {
       {/* Header */}
       <div style={{ display: 'flex', alignItems: 'center', marginBottom: '24px' }}>
         <div>
-          <div className="font-display" style={{
-            fontSize: '18px', fontWeight: 700, color: 'var(--text-primary)', letterSpacing: '0.06em',
-          }}>
-            TECHNICAL ANALYSIS
-          </div>
-          <div style={{ color: 'var(--text-secondary)', fontSize: '12px', marginTop: '4px', fontFamily: 'Manrope' }}>
-            {symbol} · Price · MA overlays · BB · RSI(14) · MACD
+          <h1 className="font-display" style={{ margin: 0, fontSize: '22px', color: 'var(--text-primary)' }}>
+            Technical Analysis
+          </h1>
+          <div style={{ fontSize: '13px', color: 'var(--text-secondary)', marginTop: '4px', fontFamily: 'Plus Jakarta Sans' }}>
+            {symbol} · Price · MA overlays · Bollinger Bands · RSI(14) · MACD
           </div>
         </div>
-        <div style={{ marginLeft: 'auto', display: 'flex', gap: '6px', alignItems: 'center' }}>
-          {/* Timeframe buttons */}
+        <div style={{ marginLeft: 'auto', display: 'flex', gap: '6px', alignItems: 'center', flexWrap: 'wrap' }}>
           {(['1M', '3M', '6M', '1Y'] as Timeframe[]).map(tf => (
-            <button
-              key={tf}
-              onClick={() => setTimeframe(tf)}
+            <button key={tf} onClick={() => setTimeframe(tf)}
               className={`btn-ghost ${timeframe === tf ? 'active' : ''}`}
-              style={{ padding: '6px 14px', fontSize: '12px' }}
-            >
+              style={{ padding: '5px 12px', fontSize: '11px' }}>
               {tf}
             </button>
           ))}
-          {/* Divider */}
-          <div style={{ width: '1px', height: '24px', background: 'var(--border)', margin: '0 4px' }} />
-          {/* Overlay toggles */}
-          {([ ['ma20', 'MA20', C.gold], ['ma50', 'MA50', C.violet], ['bb', 'BB', C.red] ] as [OverlayKey, string, string][]).map(([key, label, color]) => (
-            <button
-              key={key}
-              onClick={() => toggleOverlay(key)}
+          <div style={{ width: '1px', height: '20px', background: 'var(--border)' }} />
+          {([
+            ['ma20', 'MA20', 'var(--warn)'],
+            ['ma50', 'MA50', 'var(--purple)'],
+            ['bb',   'BB',   'var(--down)'],
+          ] as [OverlayKey, string, string][]).map(([k, label, color]) => (
+            <button key={k} onClick={() => toggleOverlay(k)}
+              className="btn-ghost"
               style={{
-                padding: '5px 10px',
-                fontSize: '11px',
-                fontFamily: 'Space Mono, monospace',
-                fontWeight: 700,
-                borderRadius: '6px',
-                cursor: 'pointer',
-                transition: 'all 0.15s ease',
-                background: overlays[key] ? `${color}18` : 'transparent',
-                border: `1px solid ${overlays[key] ? color : 'var(--border)'}`,
-                color: overlays[key] ? color : 'var(--text-secondary)',
-              }}
-            >
+                padding: '5px 10px', fontSize: '11px',
+                borderColor: overlays[k] ? color : 'var(--border)',
+                color: overlays[k] ? color : 'var(--text-secondary)',
+                background: overlays[k] ? `${color}18` : 'transparent',
+              }}>
               {label}
             </button>
           ))}
         </div>
       </div>
 
-      {/* RSI badge */}
+      {/* RSI status pill */}
       {latestRsi != null && (
         <div style={{
-          display: 'inline-flex', alignItems: 'center', gap: '10px',
-          padding: '6px 14px', borderRadius: '8px',
-          marginBottom: '12px',
-          background: 'rgba(0,229,255,0.04)',
-          border: '1px solid var(--border)',
+          display: 'inline-flex', alignItems: 'center', gap: '8px',
+          padding: '5px 12px', borderRadius: '7px', marginBottom: '14px',
+          background: 'var(--bg-elevated)', border: '1px solid var(--border)',
         }}>
-          <span style={{ fontSize: '11px', color: 'var(--text-secondary)', fontFamily: 'Manrope' }}>Current RSI:</span>
+          <span style={{ fontSize: '11px', color: 'var(--text-secondary)', fontFamily: 'Plus Jakarta Sans' }}>
+            Current RSI:
+          </span>
           <span className="font-mono" style={{
-            color: Number(latestRsi) >= 70 ? C.red : Number(latestRsi) <= 30 ? C.green : C.cyan,
-            fontWeight: 700, fontSize: '13px',
+            fontSize: '13px', fontWeight: 500,
+            color: latestRsi >= 70 ? 'var(--down)' : latestRsi <= 30 ? 'var(--up)' : 'var(--accent-light)',
           }}>
             {Number(latestRsi).toFixed(1)}
-            {Number(latestRsi) >= 70 && ' · OVERBOUGHT'}
-            {Number(latestRsi) <= 30 && ' · OVERSOLD'}
+            {latestRsi >= 70 && <span style={{ fontSize: '11px', marginLeft: '6px', opacity: 0.8 }}>Overbought</span>}
+            {latestRsi <= 30 && <span style={{ fontSize: '11px', marginLeft: '6px', opacity: 0.8 }}>Oversold</span>}
           </span>
         </div>
       )}
 
       {/* Main price chart */}
-      <div className="card" style={{ padding: '20px', marginBottom: '8px' }}>
-        <div style={{ fontSize: '13px', fontWeight: 600, color: 'var(--text-primary)', fontFamily: 'Manrope', marginBottom: '4px' }}>
-          Price · {overlays.ma20 ? 'MA20 · ' : ''}{overlays.ma50 ? 'MA50 · ' : ''}{overlays.bb ? 'Bollinger Bands · ' : ''}Close Line
+      <div className="card" style={{ padding: '20px', marginBottom: '10px' }}>
+        <div style={{ fontSize: '13px', fontWeight: 600, color: 'var(--text-primary)', fontFamily: 'Plus Jakarta Sans', marginBottom: '14px' }}>
+          Price {overlays.ma20 ? '· MA20' : ''}{overlays.ma50 ? ' · MA50' : ''}{overlays.bb ? ' · Bollinger Bands' : ''}
         </div>
-        {data.length > 0 ? (
-          <ReactApexChart
-            // @ts-ignore
-            options={mainOptions}
-            series={mainSeries}
-            type="line"
-            height={360}
-          />
-        ) : (
-          <div style={{ height: '360px', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text-secondary)', fontFamily: 'Manrope', fontSize: '13px' }}>
-            No price data
-          </div>
-        )}
+        <ResponsiveContainer width="100%" height={300}>
+          <ComposedChart data={data} margin={{ top: 4, right: 4, bottom: 0, left: 0 }}>
+            <defs>
+              <linearGradient id="techGrad" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0%" stopColor="var(--accent)" stopOpacity={0.12} />
+                <stop offset="100%" stopColor="var(--accent)" stopOpacity={0} />
+              </linearGradient>
+            </defs>
+            <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.04)" vertical={false} />
+            <XAxis dataKey="date" tickLine={false} axisLine={false}
+              tick={{ fontSize: 10, fill: 'var(--text-muted)', fontFamily: 'IBM Plex Mono' }}
+              tickFormatter={v => v.slice(5)} interval={xInterval} />
+            <YAxis tickLine={false} axisLine={false} width={yWidth}
+              tick={{ fontSize: 10, fill: 'var(--text-muted)', fontFamily: 'IBM Plex Mono' }}
+              tickFormatter={v => fmtPrice(v, coin)} />
+            <Tooltip content={<ChartTooltip coin={coin} />} />
+            <Area type="monotone" dataKey="close" name="Close"
+              stroke="var(--accent-light)" strokeWidth={2} fill="url(#techGrad)" dot={false} />
+            {overlays.ma20 && (
+              <Line type="monotone" dataKey="sma20" name="MA 20"
+                stroke="var(--warn)" strokeWidth={1.5} strokeDasharray="4 2" dot={false} connectNulls />
+            )}
+            {overlays.ma50 && (
+              <Line type="monotone" dataKey="sma50" name="MA 50"
+                stroke="var(--purple)" strokeWidth={1.5} strokeDasharray="4 2" dot={false} connectNulls />
+            )}
+            {overlays.bb && (
+              <>
+                <Line type="monotone" dataKey="bbUp" name="BB Upper"
+                  stroke="var(--down)" strokeWidth={1} strokeDasharray="3 3" dot={false} connectNulls />
+                <Line type="monotone" dataKey="bbLo" name="BB Lower"
+                  stroke="var(--up)" strokeWidth={1} strokeDasharray="3 3" dot={false} connectNulls />
+                <Line type="monotone" dataKey="bbMid" name="BB Mid"
+                  stroke="rgba(255,255,255,0.2)" strokeWidth={1} dot={false} connectNulls />
+              </>
+            )}
+          </ComposedChart>
+        </ResponsiveContainer>
       </div>
 
-      {/* RSI subchart */}
-      <div className="card" style={{ padding: '16px 20px', marginBottom: '8px' }}>
-        <div style={{
-          display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px',
-        }}>
-          <div style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text-primary)', fontFamily: 'Manrope' }}>
+      {/* RSI chart */}
+      <div className="card" style={{ padding: '16px 20px', marginBottom: '10px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '10px' }}>
+          <div style={{ fontSize: '13px', fontWeight: 600, color: 'var(--text-primary)', fontFamily: 'Plus Jakarta Sans' }}>
             RSI (14)
           </div>
-          <div style={{ display: 'flex', gap: '16px', fontSize: '11px', fontFamily: 'Manrope' }}>
-            <span style={{ color: C.red }}>— 70 Overbought</span>
-            <span style={{ color: C.green }}>— 30 Oversold</span>
+          <div style={{ display: 'flex', gap: '16px', fontSize: '11px', fontFamily: 'Plus Jakarta Sans' }}>
+            <span style={{ color: 'var(--down)' }}>— 70 Overbought</span>
+            <span style={{ color: 'var(--up)' }}>— 30 Oversold</span>
           </div>
         </div>
         {data.some(d => d.rsi != null) ? (
-          <ReactApexChart
-            // @ts-ignore
-            options={rsiOptions}
-            series={rsiSeries}
-            type="line"
-            height={120}
-          />
+          <ResponsiveContainer width="100%" height={120}>
+            <LineChart data={data} margin={{ top: 4, right: 4, bottom: 0, left: 0 }}>
+              <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.04)" vertical={false} />
+              <XAxis dataKey="date" tickLine={false} axisLine={false}
+                tick={{ fontSize: 10, fill: 'var(--text-muted)', fontFamily: 'IBM Plex Mono' }}
+                tickFormatter={v => v.slice(5)} interval={xInterval} />
+              <YAxis domain={[0, 100]} tickCount={5} tickLine={false} axisLine={false} width={28}
+                tick={{ fontSize: 10, fill: 'var(--text-muted)', fontFamily: 'IBM Plex Mono' }} />
+              <Tooltip content={<RsiTooltip />} />
+              <ReferenceLine y={70} stroke="var(--down)" strokeDasharray="4 2" strokeOpacity={0.6} />
+              <ReferenceLine y={30} stroke="var(--up)"   strokeDasharray="4 2" strokeOpacity={0.6} />
+              <ReferenceLine y={50} stroke="rgba(255,255,255,0.06)" />
+              <Line type="monotone" dataKey="rsi" name="RSI"
+                stroke="var(--accent-light)" strokeWidth={1.5} dot={false} connectNulls />
+            </LineChart>
+          </ResponsiveContainer>
         ) : (
-          <div style={{ height: '120px', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text-secondary)', fontFamily: 'Manrope', fontSize: '12px' }}>
+          <div style={{ height: '120px', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text-muted)', fontSize: '12px', fontFamily: 'Plus Jakarta Sans' }}>
             RSI data not available for this timeframe
           </div>
         )}
       </div>
 
-      {/* MACD subchart */}
-      {hasMacd && (
-        <div className="card" style={{ padding: '16px 20px', marginBottom: '8px' }}>
-          <div style={{
-            display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px',
-          }}>
-            <div style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text-primary)', fontFamily: 'Manrope' }}>
+      {/* MACD chart */}
+      {data.some(d => d.macd != null) && (
+        <div className="card" style={{ padding: '16px 20px', marginBottom: '10px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '10px' }}>
+            <div style={{ fontSize: '13px', fontWeight: 600, color: 'var(--text-primary)', fontFamily: 'Plus Jakarta Sans' }}>
               MACD (12, 26, 9)
             </div>
-            <div style={{ display: 'flex', gap: '16px', fontSize: '11px', fontFamily: 'Manrope' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
-                <div style={{ width: '14px', height: '2px', background: C.cyan }} />
-                <span style={{ color: 'var(--text-secondary)' }}>MACD</span>
-              </div>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
-                <svg width="14" height="8"><line x1="0" y1="4" x2="14" y2="4" stroke={C.gold} strokeWidth="1.5" strokeDasharray="4 2"/></svg>
-                <span style={{ color: 'var(--text-secondary)' }}>Signal</span>
-              </div>
+            <div style={{ display: 'flex', gap: '14px', fontSize: '11px', fontFamily: 'Plus Jakarta Sans' }}>
+              {[
+                { color: 'var(--accent-light)', label: 'MACD', dash: false },
+                { color: 'var(--warn)', label: 'Signal', dash: true },
+              ].map(({ color, label, dash }) => (
+                <div key={label} style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
+                  <svg width="16" height="8"><line x1="0" y1="4" x2="16" y2="4" stroke={color} strokeWidth="1.5" strokeDasharray={dash ? '4 2' : undefined} /></svg>
+                  <span style={{ color: 'var(--text-secondary)' }}>{label}</span>
+                </div>
+              ))}
             </div>
           </div>
-          <ReactApexChart
-            // @ts-ignore
-            options={macdOptions}
-            series={macdSeries}
-            type="line"
-            height={120}
-          />
+          <ResponsiveContainer width="100%" height={130}>
+            <ComposedChart data={data} margin={{ top: 4, right: 4, bottom: 0, left: 0 }}>
+              <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.04)" vertical={false} />
+              <XAxis dataKey="date" tickLine={false} axisLine={false}
+                tick={{ fontSize: 10, fill: 'var(--text-muted)', fontFamily: 'IBM Plex Mono' }}
+                tickFormatter={v => v.slice(5)} interval={xInterval} />
+              <YAxis tickLine={false} axisLine={false} width={yWidth}
+                tick={{ fontSize: 10, fill: 'var(--text-muted)', fontFamily: 'IBM Plex Mono' }}
+                tickFormatter={v => v.toFixed(decimals > 2 ? 4 : 0)} />
+              <Tooltip content={<MacdTooltip coin={coin} />} />
+              <ReferenceLine y={0} stroke="rgba(255,255,255,0.1)" />
+              <Bar dataKey="hist" name="Histogram" maxBarSize={6}>
+                {data.map((d, i) => (
+                  <Cell key={i} fill={(d.hist ?? 0) >= 0 ? 'var(--up)' : 'var(--down)'} fillOpacity={0.6} />
+                ))}
+              </Bar>
+              <Line type="monotone" dataKey="macd" name="MACD"
+                stroke="var(--accent-light)" strokeWidth={1.5} dot={false} connectNulls />
+              <Line type="monotone" dataKey="sig" name="Signal"
+                stroke="var(--warn)" strokeWidth={1.5} strokeDasharray="4 2" dot={false} connectNulls />
+            </ComposedChart>
+          </ResponsiveContainer>
         </div>
       )}
 
-      {/* Volume subchart */}
-      <div className="card" style={{ padding: '16px 20px' }}>
-        <div style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text-primary)', fontFamily: 'Manrope', marginBottom: '4px' }}>
-          Volume
-        </div>
-        {data.some(d => d.avg_volume != null) ? (
-          <ReactApexChart
-            // @ts-ignore
-            options={volumeOptions}
-            series={volumeSeries}
-            type="bar"
-            height={80}
-          />
-        ) : (
-          <div style={{ height: '80px', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text-secondary)', fontFamily: 'Manrope', fontSize: '12px' }}>
-            Volume data not available
+      {/* Volume chart */}
+      {data.some(d => d.vol != null) && (
+        <div className="card" style={{ padding: '16px 20px' }}>
+          <div style={{ fontSize: '13px', fontWeight: 600, color: 'var(--text-primary)', fontFamily: 'Plus Jakarta Sans', marginBottom: '10px' }}>
+            Volume
           </div>
-        )}
-      </div>
+          <ResponsiveContainer width="100%" height={80}>
+            <BarChart data={data} margin={{ top: 4, right: 4, bottom: 0, left: 0 }}>
+              <XAxis dataKey="date" tickLine={false} axisLine={false}
+                tick={{ fontSize: 10, fill: 'var(--text-muted)', fontFamily: 'IBM Plex Mono' }}
+                tickFormatter={v => v.slice(5)} interval={xInterval} />
+              <YAxis tickLine={false} axisLine={false} width={40}
+                tick={{ fontSize: 10, fill: 'var(--text-muted)', fontFamily: 'IBM Plex Mono' }}
+                tickFormatter={v => v > 1e9 ? `${(v/1e9).toFixed(0)}B` : v > 1e6 ? `${(v/1e6).toFixed(0)}M` : String(v)} />
+              <Bar dataKey="vol" name="Volume" fill="rgba(99,102,241,0.3)" maxBarSize={8} />
+            </BarChart>
+          </ResponsiveContainer>
+        </div>
+      )}
     </div>
   );
 }

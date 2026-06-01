@@ -3,10 +3,9 @@ import {
   useCallback,
   useContext,
   useEffect,
-  useRef,
   useState,
 } from 'react';
-import { api, authStorage, login as apiLogin } from '../api/client';
+import { login as apiLogin, logoutApi, getMe } from '../api/client';
 import type { LoginRequest } from '../api/client';
 
 interface AuthUser {
@@ -16,7 +15,6 @@ interface AuthUser {
 
 interface AuthContextValue {
   user: AuthUser | null;
-  token: string | null;
   isAuthenticated: boolean;
   isLoading: boolean;
   login: (req: LoginRequest) => Promise<void>;
@@ -26,80 +24,31 @@ interface AuthContextValue {
 const AuthContext = createContext<AuthContextValue>(null!);
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
-  const [token, setToken] = useState<string | null>(() => authStorage.get());
   const [user, setUser] = useState<AuthUser | null>(null);
   const [isLoading, setIsLoading] = useState(true);
-  const reqInterceptor = useRef<number | null>(null);
-  const resInterceptor = useRef<number | null>(null);
 
-  const doLogout = useCallback(() => {
-    authStorage.clear();
-    setToken(null);
+  const doLogout = useCallback(async () => {
+    try { await logoutApi(); } catch { /* ignore */ }
     setUser(null);
   }, []);
 
-  // Attach / re-attach axios interceptors when token changes
+  // Restore session on mount — cookie is sent automatically
   useEffect(() => {
-    if (reqInterceptor.current !== null) {
-      api.interceptors.request.eject(reqInterceptor.current);
-    }
-    reqInterceptor.current = api.interceptors.request.use(config => {
-      const t = authStorage.get();
-      if (t) {
-        config.headers = config.headers ?? {};
-        (config.headers as Record<string, string>)['Authorization'] = `Bearer ${t}`;
-      }
-      return config;
-    });
+    getMe()
+      .then(u => setUser(u))
+      .catch(() => setUser(null))
+      .finally(() => setIsLoading(false));
+  }, []);
 
-    if (resInterceptor.current !== null) {
-      api.interceptors.response.eject(resInterceptor.current);
-    }
-    resInterceptor.current = api.interceptors.response.use(
-      r => r,
-      err => {
-        if (err.response?.status === 401) doLogout();
-        return Promise.reject(err);
-      }
-    );
-  }, [token, doLogout]);
-
-  // Listen for auth:logout events dispatched by client.ts
+  // Listen for 401 events dispatched by the axios interceptor
   useEffect(() => {
-    window.addEventListener('auth:logout', doLogout);
-    return () => window.removeEventListener('auth:logout', doLogout);
-  }, [doLogout]);
-
-  // Validate token on mount
-  useEffect(() => {
-    if (!token) {
-      setIsLoading(false);
-      return;
-    }
-    // Optimistically parse username from token payload (no external dep needed)
-    try {
-      const parts = token.split('.');
-      if (parts.length === 3) {
-        // Convert base64url (Python output: - and _) → standard base64 (+ and /) for atob()
-        let payload = parts[1].replace(/-/g, '+').replace(/_/g, '/');
-        payload += '='.repeat(-payload.length % 4);
-        const decoded = JSON.parse(atob(payload));
-        if (decoded.exp && decoded.exp > Date.now() / 1000) {
-          setUser({ username: decoded.sub ?? 'admin', role: decoded.role ?? 'admin' });
-        } else {
-          doLogout();
-        }
-      }
-    } catch {
-      doLogout();
-    }
-    setIsLoading(false);
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+    const handler = () => setUser(null);
+    window.addEventListener('auth:logout', handler);
+    return () => window.removeEventListener('auth:logout', handler);
+  }, []);
 
   const login = useCallback(async (req: LoginRequest) => {
     const res = await apiLogin(req);
-    authStorage.set(res.access_token);
-    setToken(res.access_token);
     setUser({ username: res.username, role: 'admin' });
   }, []);
 
@@ -107,8 +56,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     <AuthContext.Provider
       value={{
         user,
-        token,
-        isAuthenticated: !!token && !!user,
+        isAuthenticated: !!user,
         isLoading,
         login,
         logout: doLogout,

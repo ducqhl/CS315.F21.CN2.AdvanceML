@@ -1,22 +1,20 @@
-import { useEffect, useState } from 'react';
-import { GitBranch } from 'lucide-react';
+import { useQuery } from '@tanstack/react-query';
 import { fetchCorrelation } from '../api/client';
-import type { CorrelationResponse } from '../api/client';
 
 function corrColor(v: number): string {
-  if (v >= 0.7) return 'var(--green)';
-  if (v >= 0.4) return 'var(--cyan)';
-  if (v >= 0.0) return 'var(--gold)';
+  if (v >= 0.7) return 'var(--up)';
+  if (v >= 0.4) return 'var(--accent-light)';
+  if (v >= 0.0) return 'var(--warn)';
   if (v >= -0.4) return 'var(--text-secondary)';
-  return 'var(--red)';
+  return 'var(--down)';
 }
 
 function corrBg(v: number): string {
-  if (v >= 0.7) return 'rgba(0,240,160,0.12)';
-  if (v >= 0.4) return 'rgba(0,229,255,0.10)';
-  if (v >= 0.0) return 'rgba(255,176,32,0.08)';
-  if (v >= -0.4) return 'rgba(255,255,255,0.03)';
-  return 'rgba(255,56,100,0.10)';
+  if (v >= 0.7) return 'var(--up-subtle)';
+  if (v >= 0.4) return 'var(--accent-muted)';
+  if (v >= 0.0) return 'var(--warn-subtle)';
+  if (v >= -0.4) return 'var(--bg-elevated)';
+  return 'var(--down-subtle)';
 }
 
 function corrLabel(v: number): string {
@@ -30,68 +28,68 @@ function corrLabel(v: number): string {
 }
 
 export default function CorrelationPage() {
-  const [data, setData] = useState<CorrelationResponse | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const { data, isLoading, error } = useQuery({
+    queryKey: ['correlation'],
+    queryFn:  fetchCorrelation,
+    staleTime: 600_000,
+  });
 
-  useEffect(() => {
-    setLoading(true);
-    fetchCorrelation()
-      .then(setData)
-      .catch(e => setError(String(e)))
-      .finally(() => setLoading(false));
-  }, []);
-
-  if (loading) {
+  if (isLoading) {
     return (
       <div>
-        <div className="skeleton" style={{ height: '36px', width: '220px', borderRadius: '8px', marginBottom: '28px' }} />
-        <div className="skeleton" style={{ height: '260px', borderRadius: '12px', marginBottom: '16px' }} />
-        <div className="skeleton" style={{ height: '140px', borderRadius: '12px' }} />
+        <div className="skeleton" style={{ height: '32px', width: '260px', borderRadius: '8px', marginBottom: '28px' }} />
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px' }}>
+          <div className="skeleton" style={{ height: '280px', borderRadius: '12px' }} />
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+            <div className="skeleton" style={{ height: '130px', borderRadius: '12px' }} />
+            <div className="skeleton" style={{ height: '130px', borderRadius: '12px' }} />
+          </div>
+        </div>
       </div>
     );
   }
 
-  if (error) {
+  if (error || !data) {
     return (
-      <div style={{ padding: '40px', textAlign: 'center', color: 'var(--red)', fontFamily: 'Manrope', fontSize: '14px' }}>
-        <GitBranch size={32} style={{ marginBottom: '12px', opacity: 0.5 }} />
-        <div>Failed to load correlation data: {error}</div>
+      <div style={{ padding: '40px', textAlign: 'center', color: 'var(--down)', fontFamily: 'Plus Jakarta Sans', fontSize: '14px' }}>
+        Failed to load correlation data
       </div>
     );
   }
-
-  if (!data) return null;
 
   const { coins, matrix, docs } = data;
-  const mainCorr = docs[0]?.pearson_corr ?? matrix?.['BTC']?.['DOGE'] ?? 0;
+  const mainCorr   = docs[0]?.pearson_corr ?? matrix?.['BTC']?.['DOGE'] ?? 0;
   const computedAt = docs[0]?.computed_at?.split('T')[0] ?? '—';
 
   return (
     <div>
       {/* Header */}
       <div style={{ marginBottom: '28px' }}>
-        <div className="font-display" style={{ fontSize: '18px', fontWeight: 700, color: 'var(--text-primary)', letterSpacing: '0.06em' }}>
-          CORRELATION ANALYSIS
-        </div>
-        <div style={{ color: 'var(--text-secondary)', fontSize: '12px', marginTop: '4px', fontFamily: 'Manrope' }}>
-          Pearson correlation coefficient between cryptocurrencies
+        <h1 className="font-display" style={{ margin: 0, fontSize: '22px', color: 'var(--text-primary)' }}>
+          Correlation Analysis
+        </h1>
+        <div style={{ fontSize: '13px', color: 'var(--text-secondary)', marginTop: '4px', fontFamily: 'Plus Jakarta Sans' }}>
+          Pearson correlation coefficient between BTC and DOGE
         </div>
       </div>
 
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px', alignItems: 'start' }}>
-        {/* Matrix */}
+        {/* Correlation Matrix */}
         <div className="card" style={{ padding: '24px' }}>
-          <div style={{ fontSize: '13px', fontWeight: 600, color: 'var(--text-primary)', fontFamily: 'Manrope', marginBottom: '20px' }}>
+          <div style={{ fontSize: '14px', fontWeight: 600, color: 'var(--text-primary)', fontFamily: 'Plus Jakarta Sans', marginBottom: '20px' }}>
             Correlation Matrix
           </div>
           <div style={{ overflowX: 'auto' }}>
             <table style={{ borderCollapse: 'separate', borderSpacing: '6px' }}>
               <thead>
                 <tr>
-                  <th style={{ width: '60px' }} />
+                  <th style={{ width: '56px' }} />
                   {coins.map(c => (
-                    <th key={c} style={{ padding: '8px 12px', color: 'var(--text-secondary)', fontFamily: 'Space Mono', fontSize: '12px', fontWeight: 700, textAlign: 'center', letterSpacing: '0.06em' }}>
+                    <th key={c} style={{
+                      padding: '8px 12px', color: 'var(--text-secondary)',
+                      fontFamily: 'IBM Plex Mono', fontSize: '12px', fontWeight: 500,
+                      textAlign: 'center', letterSpacing: '0.04em',
+                    }}>
                       {c}
                     </th>
                   ))}
@@ -100,23 +98,36 @@ export default function CorrelationPage() {
               <tbody>
                 {coins.map(row => (
                   <tr key={row}>
-                    <td style={{ padding: '8px 12px', color: 'var(--text-secondary)', fontFamily: 'Space Mono', fontSize: '12px', fontWeight: 700, textAlign: 'right', letterSpacing: '0.06em' }}>
+                    <td style={{
+                      padding: '8px 12px', color: 'var(--text-secondary)',
+                      fontFamily: 'IBM Plex Mono', fontSize: '12px', fontWeight: 500,
+                      textAlign: 'right',
+                    }}>
                       {row}
                     </td>
                     {coins.map(col => {
-                      const val = matrix[row]?.[col] ?? 0;
+                      const val    = matrix[row]?.[col] ?? 0;
                       const isDiag = row === col;
                       return (
-                        <td key={col} style={{ padding: '4px' }}>
+                        <td key={col} style={{ padding: '3px' }}>
                           <div style={{
-                            padding: '14px 20px', borderRadius: '10px', textAlign: 'center', minWidth: '90px',
-                            background: isDiag ? 'var(--cyan-10)' : corrBg(val),
-                            border: `1px solid ${isDiag ? 'rgba(0,229,255,0.2)' : 'transparent'}`,
+                            padding: '14px 18px', borderRadius: '9px', textAlign: 'center', minWidth: '86px',
+                            background: isDiag ? 'var(--accent-muted)' : corrBg(val),
+                            border: `1px solid ${isDiag ? 'rgba(99,102,241,0.2)' : 'transparent'}`,
                           }}>
-                            <div className="font-mono" style={{ fontSize: '18px', fontWeight: 700, color: isDiag ? 'var(--cyan)' : corrColor(val), lineHeight: 1 }}>
+                            <div className="font-mono" style={{
+                              fontSize: '18px', fontWeight: 500,
+                              color: isDiag ? 'var(--accent-light)' : corrColor(val),
+                              lineHeight: 1,
+                            }}>
                               {val.toFixed(3)}
                             </div>
-                            <div style={{ fontSize: '9px', color: isDiag ? 'var(--cyan)' : corrColor(val), opacity: 0.8, marginTop: '4px', fontFamily: 'Manrope', letterSpacing: '0.04em', textTransform: 'uppercase' }}>
+                            <div style={{
+                              fontSize: '9px', marginTop: '4px',
+                              color: isDiag ? 'var(--accent-light)' : corrColor(val),
+                              opacity: 0.7, fontFamily: 'Plus Jakarta Sans',
+                              textTransform: 'uppercase', letterSpacing: '0.04em',
+                            }}>
                               {isDiag ? 'self' : 'Pearson r'}
                             </div>
                           </div>
@@ -128,53 +139,76 @@ export default function CorrelationPage() {
               </tbody>
             </table>
           </div>
-          {/* Color gradient */}
-          <div style={{ marginTop: '20px', display: 'flex', alignItems: 'center', gap: '10px', fontSize: '10px', fontFamily: 'Manrope' }}>
-            <span style={{ color: 'var(--red)' }}>-1</span>
-            <div style={{ flex: 1, height: '6px', borderRadius: '3px', background: 'linear-gradient(to right, rgba(255,56,100,0.5), var(--border), rgba(0,240,160,0.5))' }} />
-            <span style={{ color: 'var(--green)' }}>+1</span>
+
+          {/* Color scale */}
+          <div style={{ marginTop: '20px', display: 'flex', alignItems: 'center', gap: '10px', fontSize: '10px', fontFamily: 'Plus Jakarta Sans' }}>
+            <span style={{ color: 'var(--down)' }}>−1</span>
+            <div style={{
+              flex: 1, height: '5px', borderRadius: '3px',
+              background: 'linear-gradient(to right, rgba(239,68,68,0.5), var(--border), rgba(34,197,94,0.5))',
+            }} />
+            <span style={{ color: 'var(--up)' }}>+1</span>
           </div>
         </div>
 
-        {/* Stats */}
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+        {/* Stats column */}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+          {/* Main coefficient hero */}
           <div className="card" style={{ padding: '28px', textAlign: 'center' }}>
-            <div style={{ fontSize: '10px', color: 'var(--text-secondary)', letterSpacing: '0.1em', textTransform: 'uppercase', fontFamily: 'Manrope', marginBottom: '16px' }}>
+            <div style={{
+              fontSize: '10px', color: 'var(--text-secondary)', letterSpacing: '0.08em',
+              textTransform: 'uppercase', fontFamily: 'Plus Jakarta Sans', marginBottom: '14px',
+            }}>
               BTC — DOGE Pearson r
             </div>
-            <div className="font-mono glow-cyan" style={{ fontSize: '56px', fontWeight: 700, color: 'var(--cyan)', lineHeight: 1, marginBottom: '12px' }}>
+            <div className="font-mono" style={{
+              fontSize: '52px', fontWeight: 500, color: corrColor(mainCorr),
+              lineHeight: 1, marginBottom: '12px',
+            }}>
               {mainCorr.toFixed(3)}
             </div>
             <div style={{
-              display: 'inline-block', padding: '5px 16px', borderRadius: '20px',
-              background: corrBg(mainCorr), border: `1px solid ${corrColor(mainCorr)}40`,
-              fontSize: '12px', fontWeight: 600, color: corrColor(mainCorr), fontFamily: 'Manrope',
+              display: 'inline-block', padding: '4px 14px', borderRadius: '6px',
+              background: corrBg(mainCorr),
+              fontSize: '12px', fontWeight: 600, color: corrColor(mainCorr),
+              fontFamily: 'Plus Jakarta Sans',
             }}>
               {corrLabel(mainCorr)}
             </div>
           </div>
 
+          {/* Interpretation card */}
           <div className="card" style={{ padding: '20px' }}>
-            <div style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text-primary)', fontFamily: 'Manrope', marginBottom: '12px' }}>
+            <div style={{ fontSize: '13px', fontWeight: 600, color: 'var(--text-primary)', fontFamily: 'Plus Jakarta Sans', marginBottom: '10px' }}>
               Interpretation
             </div>
-            <div style={{ fontSize: '12px', color: 'var(--text-secondary)', lineHeight: '1.7', fontFamily: 'Manrope' }}>
-              A Pearson coefficient of{' '}
-              <span className="font-mono" style={{ color: 'var(--cyan)' }}>{mainCorr.toFixed(3)}</span>{' '}
+            <div style={{ fontSize: '13px', color: 'var(--text-secondary)', lineHeight: '1.7', fontFamily: 'Plus Jakarta Sans' }}>
+              A coefficient of{' '}
+              <span className="font-mono" style={{ color: corrColor(mainCorr) }}>
+                {mainCorr.toFixed(3)}
+              </span>{' '}
               indicates BTC and DOGE tend to move{' '}
-              <strong style={{ color: mainCorr > 0 ? 'var(--green)' : 'var(--red)' }}>
+              <strong style={{ color: mainCorr > 0 ? 'var(--up)' : 'var(--down)' }}>
                 {mainCorr > 0 ? 'together' : 'inversely'}
               </strong>.
-              This reflects shared crypto market sentiment, where altcoins often follow Bitcoin's price action.
-              <div style={{ marginTop: '10px', color: 'var(--text-muted)', fontSize: '11px' }}>
-                Computed: {computedAt} · Spark batch job
-              </div>
+              This reflects shared crypto market sentiment where altcoins often follow Bitcoin's price action.
+            </div>
+            <div style={{
+              marginTop: '12px', fontSize: '11px', color: 'var(--text-muted)',
+              fontFamily: 'Plus Jakarta Sans',
+            }}>
+              Computed: {computedAt} · Spark batch job
             </div>
           </div>
 
+          {/* Raw data table */}
           {docs.length > 0 && (
             <div className="card" style={{ overflow: 'hidden' }}>
-              <div style={{ padding: '14px 20px', borderBottom: '1px solid var(--border)', fontSize: '12px', fontWeight: 600, color: 'var(--text-primary)', fontFamily: 'Manrope' }}>
+              <div style={{
+                padding: '13px 18px', borderBottom: '1px solid var(--border)',
+                fontSize: '13px', fontWeight: 600, color: 'var(--text-primary)',
+                fontFamily: 'Plus Jakarta Sans',
+              }}>
                 Raw Data
               </div>
               <table className="data-table">
@@ -189,13 +223,19 @@ export default function CorrelationPage() {
                   {docs.map((d, i) => (
                     <tr key={i}>
                       <td>
-                        <span className="font-mono" style={{ color: 'var(--cyan)', fontSize: '12px' }}>{d.coin_a} ↔ {d.coin_b}</span>
+                        <span className="font-mono" style={{ color: 'var(--accent-light)', fontSize: '12px' }}>
+                          {d.coin_a} ↔ {d.coin_b}
+                        </span>
                       </td>
                       <td style={{ textAlign: 'right' }}>
-                        <span className="font-mono" style={{ color: corrColor(d.pearson_corr), fontWeight: 700 }}>{d.pearson_corr.toFixed(6)}</span>
+                        <span className="font-mono" style={{ color: corrColor(d.pearson_corr), fontWeight: 500 }}>
+                          {d.pearson_corr.toFixed(6)}
+                        </span>
                       </td>
                       <td style={{ textAlign: 'right' }}>
-                        <span className="font-mono" style={{ color: 'var(--text-secondary)', fontSize: '11px' }}>{d.computed_at?.split('T')[0]}</span>
+                        <span className="font-mono" style={{ color: 'var(--text-secondary)', fontSize: '11px' }}>
+                          {d.computed_at?.split('T')[0]}
+                        </span>
                       </td>
                     </tr>
                   ))}

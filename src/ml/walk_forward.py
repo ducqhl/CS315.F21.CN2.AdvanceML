@@ -53,6 +53,7 @@ def walk_forward_validation(
     fold_size: int = FOLD_SIZE,
     window_days: int = 730,
     epochs: int = WF_EPOCHS,
+    horizon: int | None = None,
 ) -> dict:
     """
     Run walk-forward cross-validation and return average metrics.
@@ -77,9 +78,11 @@ def walk_forward_validation(
     # Import here to avoid circular deps if walk_forward is imported before preprocess
     from preprocess import (  # noqa: PLC0415
         _load_csv, _load_fear_greed, load_for_fold,
-        HORIZON, SEQ_LEN,
+        HORIZON as _DEFAULT_HORIZON, SEQ_LEN,
     )
     from model import LSTMModel  # noqa: PLC0415
+
+    effective_horizon = horizon if horizon is not None else _DEFAULT_HORIZON
 
     csv_path = Path(csv_path)
     df_raw = _load_csv(csv_path)
@@ -93,7 +96,7 @@ def walk_forward_validation(
         fg_full = padded
 
     # Determine fold boundaries (in df_raw row-index terms)
-    last_val_end    = N - HORIZON
+    last_val_end    = N - effective_horizon
     first_train_end = last_val_end - n_folds * fold_size
 
     if first_train_end <= SEQ_LEN:
@@ -125,7 +128,7 @@ def walk_forward_validation(
                 train_end_idx=train_end,
                 val_end_idx=val_end,
                 seq_len=SEQ_LEN,
-                horizon=HORIZON,
+                horizon=effective_horizon,
                 window_days=window_days,
             )
         except Exception as exc:
@@ -149,7 +152,7 @@ def walk_forward_validation(
             hidden_size=128,
             num_layers=2,
             dropout=0.2,
-            output_size=HORIZON,
+            output_size=effective_horizon,
             use_direction_head=False,
             use_volatility_head=False,
         )

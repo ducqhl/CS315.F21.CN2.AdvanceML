@@ -28,7 +28,7 @@ from typing import Any
 
 import numpy as np
 import pymongo
-from fastapi import Depends, FastAPI, HTTPException, Query, status
+from fastapi import Cookie, Depends, FastAPI, HTTPException, Query, Response, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel
@@ -120,14 +120,24 @@ def verify_token(token: str) -> dict:
 
 
 # ── Auth dependency ───────────────────────────────────────────────────────────────
-_bearer = HTTPBearer()
+_bearer = HTTPBearer(auto_error=False)
+
+COOKIE_NAME = "access_token"
 
 
 def get_current_user(
-    credentials: HTTPAuthorizationCredentials = Depends(_bearer),
+    credentials: HTTPAuthorizationCredentials | None = Depends(_bearer),
+    access_token: str | None = Cookie(default=None),
 ) -> dict:
+    token = (credentials.credentials if credentials else None) or access_token
+    if not token:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Not authenticated",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
     try:
-        payload = verify_token(credentials.credentials)
+        payload = verify_token(token)
         return {"username": payload.get("sub"), "role": payload.get("role", "admin")}
     except ValueError as exc:
         raise HTTPException(
@@ -251,7 +261,7 @@ class LoginRequest(BaseModel):
 
 
 @app.post("/api/auth/login")
-def login(req: LoginRequest) -> dict:
+def login(req: LoginRequest, response: Response) -> dict:
     user = db.users.find_one({"username": req.username})
     if not user:
         raise HTTPException(status_code=401, detail="Invalid credentials")
@@ -259,12 +269,26 @@ def login(req: LoginRequest) -> dict:
     if not hmac.compare_digest(pwd_hash, user.get("password_hash", "")):
         raise HTTPException(status_code=401, detail="Invalid credentials")
     token = create_token({"sub": user["username"], "role": user.get("role", "admin")})
+    response.set_cookie(
+        key=COOKIE_NAME,
+        value=token,
+        httponly=True,
+        samesite="lax",
+        max_age=JWT_EXPIRE_HOURS * 3600,
+        path="/",
+    )
     return {
         "access_token": token,
         "token_type": "bearer",
         "username": user["username"],
         "expires_in": JWT_EXPIRE_HOURS * 3600,
     }
+
+
+@app.post("/api/auth/logout")
+def logout(response: Response) -> dict:
+    response.delete_cookie(key=COOKIE_NAME, path="/")
+    return {"status": "logged out"}
 
 
 @app.get("/api/auth/me")
@@ -348,17 +372,37 @@ def get_historical(
 
 
 @app.get("/api/predictions/{coin}")
-def get_predictions(coin: str, _user: dict = Depends(get_current_user)) -> dict:
+def get_predictions(
+    coin: str,
+    horizon: int | None = Query(default=None, description="Horizon override: 7, 15, or 60. Defaults to active model."),
+    _user: dict = Depends(get_current_user),
+) -> dict:
     symbol = _resolve_symbol(coin)
+
+    # Resolve active horizon from registry (or query param override)
+    active_horizon: int = horizon if horizon in (7, 15, 60) else 7
+    if horizon is None:
+        registry_doc = db.model_registry.find_one({"coin": symbol, "is_active": True}, {"_id": 0, "horizon": 1})
+        if registry_doc:
+            active_horizon = int(registry_doc["horizon"])
+
     today = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+    # Match on horizon field (new docs) OR fall back to docs without horizon (legacy)
+    horizon_filter: dict = {"$or": [{"horizon": active_horizon}, {"horizon": {"$exists": False}}]} if active_horizon == 7 else {"horizon": active_horizon}
     cursor = db.predictions.find(
-        {"coin": symbol, "prediction_date": {"$gte": today}},
+        {"coin": symbol, "prediction_date": {"$gte": today}, **horizon_filter},
         sort=[("prediction_date", 1)],
         projection={"_id": 0},
     )
     docs = list(cursor)
     if not docs:
-        raise HTTPException(status_code=404, detail=f"No predictions for {symbol}. Run inference first.")
+        return {
+            "coin": symbol, "model_version": None, "active_horizon": active_horizon,
+            "predictions": [], "dominant_direction": None, "direction_counts": {},
+            "avg_confidence": None, "dominant_strength": None,
+            "next_day_price": None, "seven_day_high": None, "seven_day_low": None,
+            "message": f"No predictions for {symbol} H{active_horizon}. Run inference first.",
+        }
     model_version = docs[-1].get("model_version", "lstm_v1") if docs else "lstm_v1"
     prices = [d["predicted_price"] for d in docs]
     serialized = []
@@ -383,6 +427,7 @@ def get_predictions(coin: str, _user: dict = Depends(get_current_user)) -> dict:
     return {
         "coin": symbol,
         "model_version": model_version,
+        "active_horizon": active_horizon,
         "predictions": serialized,
         # Trend-first summary fields
         "dominant_direction": dominant_direction,
@@ -728,4 +773,193 @@ def get_inference_status(_user: dict = Depends(get_current_user)) -> dict:
         "jobs": jobs,
         "interval_seconds": interval,
         "timestamp": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+# ── ML Model Management Endpoints ─────────────────────────────────────────────
+
+import threading as _threading
+import subprocess as _subprocess
+from pathlib import Path as _Path
+
+_ML_DIR = _Path(__file__).resolve().parent.parent / "ml"
+_VALID_HORIZONS = {7, 15, 60}
+_VALID_COINS = {"bitcoin", "dogecoin", "BTC", "DOGE", "btc", "doge"}
+
+# In-memory store for background retrain jobs (resets on restart; MongoDB is authoritative)
+_retrain_lock = _threading.Lock()
+
+
+class _ActiveModelRequest(BaseModel):
+    coin: str
+    horizon: int
+
+
+class _RetrainRequest(BaseModel):
+    coin: str
+    horizon: int
+
+
+@app.get("/api/ml/models")
+def get_ml_models(
+    coin: str | None = Query(default=None, description="Filter by coin: bitcoin|dogecoin|BTC|DOGE"),
+    _user: dict = Depends(get_current_user),
+) -> dict:
+    """
+    List all registered LSTM models with their metrics and active status.
+
+    Each entry shows horizon (7/15/60), whether the model file exists on disk,
+    current metrics (RMSE, MAE, dir accuracy), and which model is active.
+    """
+    query: dict = {}
+    if coin:
+        coin_norm = COIN_SYMBOL_MAP.get(coin.lower(), coin.upper())
+        query = {"$or": [{"coin": coin_norm}, {"coin_id": coin.lower()}]}
+
+    docs = list(db.model_registry.find(query, {"_id": 0}, sort=[("coin", 1), ("horizon", 1)]))
+    # model_exists is maintained by the training pipeline; API reads it from registry
+    serialized = [_serialize(d) for d in docs]
+    return {
+        "models": serialized,
+        "count": len(serialized),
+        "valid_horizons": sorted(_VALID_HORIZONS),
+    }
+
+
+@app.put("/api/ml/models/active")
+def set_active_model(
+    req: _ActiveModelRequest,
+    _user: dict = Depends(get_current_user),
+) -> dict:
+    """
+    Set the active prediction model for a coin.
+
+    Body: { "coin": "bitcoin"|"dogecoin", "horizon": 7|15|60 }
+
+    The active model is used by GET /api/predictions/{coin} when no
+    ?horizon= query param is provided.
+    """
+    if req.horizon not in _VALID_HORIZONS:
+        raise HTTPException(status_code=400, detail=f"Invalid horizon {req.horizon}. Must be one of {sorted(_VALID_HORIZONS)}")
+
+    coin_id = req.coin.lower()
+    coin_norm = COIN_SYMBOL_MAP.get(coin_id)
+    if not coin_norm:
+        raise HTTPException(status_code=400, detail=f"Unknown coin: {req.coin}")
+
+    # Verify model is registered and exists (checked via MongoDB registry)
+    reg = db.model_registry.find_one({"coin": coin_norm, "horizon": req.horizon}, {"_id": 0})
+    if not reg or not reg.get("model_exists", False):
+        raise HTTPException(
+            status_code=404,
+            detail=f"Model not trained for {coin_norm} H{req.horizon}. "
+                   f"Trigger training first: POST /api/ml/retrain",
+        )
+
+    # Deactivate all models for this coin, then activate the selected one
+    db.model_registry.update_many({"coin": coin_norm}, {"$set": {"is_active": False}})
+    db.model_registry.update_one(
+        {"coin": coin_norm, "horizon": req.horizon},
+        {"$set": {"is_active": True}},
+    )
+
+    return {
+        "status":  "ok",
+        "coin":    coin_norm,
+        "horizon": req.horizon,
+        "message": f"Active model for {coin_norm} set to H{req.horizon}",
+    }
+
+
+@app.post("/api/ml/retrain")
+def trigger_retrain(
+    req: _RetrainRequest,
+    _user: dict = Depends(get_current_user),
+) -> dict:
+    """
+    Trigger retraining of the LSTM for a specific coin + horizon.
+
+    Body: { "coin": "bitcoin"|"dogecoin", "horizon": 7|15|60 }
+
+    Writes a retrain_request document to MongoDB; the inference-scheduler
+    picks it up on its next cycle and runs training.
+    Poll GET /api/ml/retrain/status for progress.
+    """
+    if req.horizon not in _VALID_HORIZONS:
+        raise HTTPException(status_code=400, detail=f"horizon must be one of {sorted(_VALID_HORIZONS)}")
+
+    coin_id = req.coin.lower()
+    coin_norm = COIN_SYMBOL_MAP.get(coin_id)
+    if not coin_norm:
+        raise HTTPException(status_code=400, detail=f"Unknown coin: {req.coin}")
+
+    # Reject if a job is already pending/running for this coin+horizon
+    active = db.training_jobs.find_one(
+        {"coin": coin_norm, "horizon": req.horizon, "status": {"$in": ["pending", "running"]}},
+        {"_id": 0, "job_id": 1, "status": 1},
+    )
+    if active:
+        return {
+            "job_id":  active["job_id"],
+            "coin":    coin_norm,
+            "horizon": req.horizon,
+            "status":  active["status"],
+            "message": f"A {active['status']} job already exists for {coin_norm} H{req.horizon}.",
+        }
+
+    job_id = f"{coin_norm}_h{req.horizon}_{int(datetime.now(timezone.utc).timestamp())}"
+    now = datetime.now(timezone.utc)
+
+    # Write retrain request — the inference-scheduler polls this collection
+    db.training_jobs.insert_one({
+        "job_id":     job_id,
+        "coin":       coin_norm,
+        "coin_id":    coin_id,
+        "horizon":    req.horizon,
+        "status":     "pending",
+        "created_at": now,
+        "started_at": None,
+        "finished_at": None,
+        "metrics":    None,
+        "error":      None,
+    })
+
+    return {
+        "job_id":  job_id,
+        "coin":    coin_norm,
+        "horizon": req.horizon,
+        "status":  "pending",
+        "message": f"Retrain request queued for {coin_norm} H{req.horizon}. "
+                   f"The scheduler will pick it up on the next cycle (~5 min). "
+                   f"Poll /api/ml/retrain/status?coin={req.coin} for progress.",
+    }
+
+
+@app.get("/api/ml/retrain/status")
+def get_retrain_status(
+    coin: str | None = Query(default=None, description="Filter by coin"),
+    limit: int = Query(default=20, ge=1, le=100),
+    _user: dict = Depends(get_current_user),
+) -> dict:
+    """
+    Return recent training job records.
+
+    Each entry has: job_id, coin, horizon, status (pending|running|completed|failed),
+    created_at, started_at, finished_at, metrics, error.
+    """
+    query: dict = {}
+    if coin:
+        coin_norm = COIN_SYMBOL_MAP.get(coin.lower(), coin.upper())
+        query["coin"] = coin_norm
+
+    jobs = list(db.training_jobs.find(
+        query,
+        {"_id": 0},
+        sort=[("created_at", -1)],
+        limit=limit,
+    ))
+
+    return {
+        "jobs":  [_serialize(j) for j in jobs],
+        "count": len(jobs),
     }

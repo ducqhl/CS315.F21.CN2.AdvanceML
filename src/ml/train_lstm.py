@@ -35,7 +35,7 @@ import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader, TensorDataset
 
-from preprocess import load_and_preprocess
+from preprocess import load_and_preprocess, HORIZON as _DEFAULT_HORIZON, SEQ_LEN as _SEQ_LEN, HORIZON_SEQ_LEN_MAP, HORIZON_WINDOW_DAYS_MAP
 from model import LSTMModel
 
 logging.basicConfig(
@@ -48,7 +48,10 @@ logger = logging.getLogger(__name__)
 # ── Paths ──────────────────────────────────────────────────────────────────────
 _HERE = Path(__file__).resolve().parent
 _MODEL_DIR = _HERE / "model"
-_DATA_DIR = _HERE.parent.parent / "data" / "sample"
+# Docker mounts data/ at /app/data; local dev has data/ at project root two levels up
+_DATA_DIR = _HERE / "data" / "sample"
+if not _DATA_DIR.exists():
+    _DATA_DIR = _HERE.parent.parent / "data" / "sample"
 
 # ── Hyper-parameters ───────────────────────────────────────────────────────────
 EPOCHS = 50
@@ -99,14 +102,26 @@ def _model_path(coin: str, version: int = 2) -> Path:
     return _MODEL_DIR / f"lstm_{coin}_v{version}.pt"
 
 
+def _model_path_h(coin: str, horizon: int, version: int = 3) -> Path:
+    return _MODEL_DIR / f"lstm_{coin}_h{horizon}_v{version}.pt"
+
+
 def _metrics_path(coin: str) -> Path:
     return _MODEL_DIR / f"metrics_{coin}.json"
+
+
+def _score_report_path(coin: str, horizon: int) -> Path:
+    return _MODEL_DIR / f"score_report_{coin}_h{horizon}.json"
 
 
 def _scaler_path(coin: str, version: int = 2) -> Path:
     if version <= 2:
         return _MODEL_DIR / f"scaler_{coin}.pkl"
     return _MODEL_DIR / f"scaler_{coin}_v{version}.pkl"
+
+
+def _scaler_path_h(coin: str, horizon: int, version: int = 3) -> Path:
+    return _MODEL_DIR / f"scaler_{coin}_h{horizon}_v{version}.pkl"
 
 
 # ── Evaluation helpers ─────────────────────────────────────────────────────────
@@ -211,6 +226,7 @@ def train(
     window_days: int | None = 730,
     gamma: float = 0.3,
     model_version: int = 3,
+    horizon: int = _DEFAULT_HORIZON,
 ) -> dict[str, float]:
     """
     Main training entry-point.
@@ -237,12 +253,18 @@ def train(
         epochs = 2
         logger.info("Dry-run mode — 2 epochs only, model not saved.")
 
+    # Auto-select window_days from horizon map when using the default (730)
+    if window_days == 730:
+        mapped = HORIZON_WINDOW_DAYS_MAP.get(horizon, 730)
+        window_days = None if mapped == 0 else mapped
+
     if csv_path is None:
         csv_path = _DATA_DIR / f"{coin}.csv"
 
-    out_model_path = _model_path(coin, version=model_version)
+    out_model_path = _model_path_h(coin, horizon, version=model_version)
+    scaler_out     = _scaler_path_h(coin, horizon, version=model_version)
     metrics_path   = _metrics_path(coin)
-    scaler_out     = _scaler_path(coin, version=model_version)
+    score_path     = _score_report_path(coin, horizon)
 
     device = torch.device("cpu")   # CPU is sufficient for 3k rows
 
@@ -256,6 +278,7 @@ def train(
         with_fear_greed=True,
         window_days=window_days,
         with_vol_target=True,
+        horizon=horizon,
     )
     (
         X_train, y_train, y_dir_train,
@@ -289,7 +312,7 @@ def train(
         hidden_size=128,
         num_layers=2,
         dropout=0.2,
-        output_size=7,
+        output_size=horizon,
         use_direction_head=False,
         use_volatility_head=True,
     ).to(device)
@@ -448,6 +471,57 @@ def train(
         logger.info("Model saved to %s", out_model_path)
         logger.info("Scaler saved to %s", scaler_out)
 
+        # Register model in MongoDB registry (always, even if test set was empty)
+        try:
+            from model_registry import register_model   # noqa: PLC0415
+            register_model(coin=coin, horizon=horizon, metrics=metrics)
+            logger.info("Model registered in registry (coin=%s, horizon=%d).", coin, horizon)
+        except Exception as _reg_exc:
+            logger.warning("Model registry update skipped (non-fatal): %s", _reg_exc)
+
+    # ── Walk-forward validation + score report ────────────────────────────────
+    if not dry_run:
+        from walk_forward import walk_forward_validation, FOLD_SIZE  # noqa: PLC0415
+        # With context prepend, val_seqs = fold_size - horizon + 1.
+        # Ensure at least 10 val sequences per fold regardless of horizon.
+        wf_fold_size = max(FOLD_SIZE, horizon + 9)
+        logger.info(
+            "Running walk-forward validation (horizon=%d, fold_size=%d) ...",
+            horizon, wf_fold_size,
+        )
+        wf = walk_forward_validation(
+            csv_path=csv_path,
+            window_days=window_days or 730,
+            horizon=horizon,
+            fold_size=wf_fold_size,
+        )
+        score_report = {
+            "coin":                      coin,
+            "horizon":                   horizon,
+            "rmse":                      metrics["rmse"],
+            "mae":                       metrics["mae"],
+            "directional_accuracy_pct":  metrics["directional_accuracy_pct"],
+            "walk_forward_dir_acc_mean": wf.get("dir_acc_mean"),
+            "walk_forward_rmse_mean":    wf.get("rmse_mean"),
+            "per_fold_metrics":          wf.get("fold_metrics", []),
+            "epochs_trained":            metrics.get("epochs_trained"),
+            "best_val_loss":             metrics.get("best_val_loss"),
+            "window_days":               window_days,
+        }
+        score_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(score_path, "w") as f:
+            json.dump(score_report, f, indent=2)
+        logger.info("Score report saved to %s", score_path)
+        logger.info(
+            "── Score Report (horizon=%d) ─────────────────────────────────────",
+            horizon,
+        )
+        logger.info("  RMSE:               $%.2f",  score_report["rmse"])
+        logger.info("  MAE:                $%.2f",  score_report["mae"])
+        logger.info("  Test dir acc:       %.1f%%", score_report["directional_accuracy_pct"])
+        logger.info("  WF dir acc (mean):  %.1f%%", wf.get("dir_acc_mean") or 0)
+        logger.info("  WF RMSE (mean):     $%.2f",  wf.get("rmse_mean") or 0)
+
     return metrics
 
 
@@ -498,6 +572,14 @@ if __name__ == "__main__":
         "--walk-forward", action="store_true",
         help="Run walk-forward validation and print results before training.",
     )
+    parser.add_argument(
+        "--horizon", type=int, default=_DEFAULT_HORIZON,
+        help=(
+            f"Forecast horizon in days (default: {_DEFAULT_HORIZON}). "
+            "Non-default values save to lstm_{coin}_h{horizon}_v{version}.pt "
+            "so the existing H7 artifact is not overwritten."
+        ),
+    )
     args = parser.parse_args()
 
     window = None if args.window_days == 0 else args.window_days
@@ -507,7 +589,7 @@ if __name__ == "__main__":
         from walk_forward import walk_forward_validation   # noqa: PLC0415
         csv_path_wf = _DATA_DIR / f"{args.coin}.csv"
         logger.info("Running walk-forward validation for %s ...", args.coin)
-        wf_results = walk_forward_validation(csv_path_wf, window_days=window or 730)
+        wf_results = walk_forward_validation(csv_path_wf, window_days=window or 730, horizon=args.horizon)
         print("\n── Walk-Forward Results ──────────────────────────────")
         print(f"  Folds completed : {wf_results['n_folds_used']}")
         print(f"  RMSE (mean)     : ${wf_results['rmse_mean']:,.2f}")
@@ -530,4 +612,5 @@ if __name__ == "__main__":
         window_days=window,
         gamma=args.gamma,
         model_version=args.model_version,
+        horizon=args.horizon,
     )

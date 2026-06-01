@@ -78,6 +78,11 @@ _FEAR_GREED_CACHE = _PROJECT_ROOT / "data" / "sample" / "fear_greed.csv"
 # ── Constants ──────────────────────────────────────────────────────────────────
 SEQ_LEN = 60          # Number of past days used as input
 HORIZON = 7           # Number of future steps predicted in one forward pass
+# SEQ_LEN per horizon — longer look-back for longer forecasts
+HORIZON_SEQ_LEN_MAP: dict[int, int] = {7: 60, 15: 90, 60: 120}
+# Training window (days of history) per horizon — larger horizon needs more data
+# 0 = use all available data
+HORIZON_WINDOW_DAYS_MAP: dict[int, int] = {7: 730, 15: 1095, 60: 0}
 N_FEATURES = 9        # Number of input features
 TRAIN_RATIO = 0.80
 VAL_RATIO = 0.10
@@ -442,6 +447,7 @@ def load_and_preprocess(
     with_fear_greed: bool = True,
     window_days: int | None = 730,
     with_vol_target: bool = False,
+    horizon: int = HORIZON,
 ) -> tuple:
     """
     Full preprocessing pipeline.
@@ -468,6 +474,10 @@ def load_and_preprocess(
     scaler, last_price_usd
     [, y_vol_train, y_vol_val, y_vol_test]   # only when with_vol_target=True
     """
+    # Auto-select seq_len from horizon map when the caller used the default
+    if seq_len == SEQ_LEN:
+        seq_len = HORIZON_SEQ_LEN_MAP.get(horizon, SEQ_LEN)
+
     df = _load_csv(csv_path)
     if window_days is not None:
         df = df.iloc[-window_days:].reset_index(drop=True)
@@ -534,14 +544,14 @@ def load_and_preprocess(
     scaler.last_price_usd_ = last_price_usd
 
     # ── Create MIMO sequences ─────────────────────────────────────────────────
-    X_train, y_train = _create_sequences(scaled_train, seq_len, horizon=HORIZON)
-    X_val,   y_val   = _create_sequences(scaled_val,   seq_len, horizon=HORIZON)
-    X_test,  y_test  = _create_sequences(scaled_test,  seq_len, horizon=HORIZON)
+    X_train, y_train = _create_sequences(scaled_train, seq_len, horizon=horizon)
+    X_val,   y_val   = _create_sequences(scaled_val,   seq_len, horizon=horizon)
+    X_test,  y_test  = _create_sequences(scaled_test,  seq_len, horizon=horizon)
 
     # ── Create direction label sequences ──────────────────────────────────────
-    y_dir_train = _create_direction_sequences(dir_train, seq_len, horizon=HORIZON)
-    y_dir_val   = _create_direction_sequences(dir_val,   seq_len, horizon=HORIZON)
-    y_dir_test  = _create_direction_sequences(dir_test,  seq_len, horizon=HORIZON)
+    y_dir_train = _create_direction_sequences(dir_train, seq_len, horizon=horizon)
+    y_dir_val   = _create_direction_sequences(dir_val,   seq_len, horizon=horizon)
+    y_dir_test  = _create_direction_sequences(dir_test,  seq_len, horizon=horizon)
 
     logger.info(
         "Split sizes — train: %d, val: %d, test: %d sequences",
@@ -568,8 +578,8 @@ def load_and_preprocess(
     # fwd_vol[i] = std of log_return_1d over next 7 days
     N_clean = len(features)
     fwd_vol = np.full(N_clean, np.nan)
-    for i in range(N_clean - 7):
-        fwd_vol[i] = np.std(raw_log_rets[i + 1 : i + 8], ddof=1)
+    for i in range(N_clean - horizon):
+        fwd_vol[i] = np.std(raw_log_rets[i + 1 : i + horizon + 1], ddof=1)
 
     fvol_train = fwd_vol[:train_end_raw]
     fvol_val   = fwd_vol[train_end_raw:val_end_raw]
@@ -594,9 +604,9 @@ def load_and_preprocess(
             ).ravel().astype(np.float32)
         return result
 
-    y_vol_train = _create_vol_sequences(_scale_vol(fvol_train), seq_len, HORIZON)
-    y_vol_val   = _create_vol_sequences(_scale_vol(fvol_val),   seq_len, HORIZON)
-    y_vol_test  = _create_vol_sequences(_scale_vol(fvol_test),  seq_len, HORIZON)
+    y_vol_train = _create_vol_sequences(_scale_vol(fvol_train), seq_len, horizon)
+    y_vol_val   = _create_vol_sequences(_scale_vol(fvol_val),   seq_len, horizon)
+    y_vol_test  = _create_vol_sequences(_scale_vol(fvol_test),  seq_len, horizon)
 
     logger.info(
         "Vol target shapes — train: %s, val: %s, test: %s",
@@ -646,6 +656,9 @@ def load_for_fold(
     -----------------
     X_tr, y_tr, y_dir_tr, X_vl, y_vl, y_dir_vl, scaler_fold, last_price
     """
+    if seq_len == SEQ_LEN:
+        seq_len = HORIZON_SEQ_LEN_MAP.get(horizon, SEQ_LEN)
+
     effective_start = max(0, train_end_idx - window_days)
 
     df_fold     = df_raw.iloc[effective_start:val_end_idx].reset_index(drop=True)
