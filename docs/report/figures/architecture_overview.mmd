@@ -1,0 +1,54 @@
+%%{init: {"theme": "base", "themeVariables": {"background": "#FFFFFF", "lineColor": "#374151"}}}%%
+flowchart LR
+
+    CG(["CoinGecko API"])
+    CSV(["CSV lịch sử"])
+
+    subgraph INGEST["Thu thập"]
+        PROD["Kafka Producer\n600s/lần"]
+        KF[["Kafka\ncrypto_raw"]]
+        PROD --> KF
+    end
+
+    subgraph PROCESS["Xử lý"]
+        SS["Spark Streaming\nSMA, RSI, Bollinger"]
+        SB["Spark Batch\nThống kê hàng ngày"]
+    end
+
+    MDB[("MongoDB")]
+
+    LSTM["LSTM\nDự báo 7 ngày"]
+
+    subgraph FRONTEND["Giao diện"]
+        API["FastAPI\n:8000"]
+        REACT["React\n:3000"]
+        DASH["Streamlit\n:8501"]
+        API --> REACT & DASH
+    end
+
+    CG --> PROD
+    KF --> SS
+    CSV --> SB
+    SS & SB --> MDB
+    MDB --> LSTM --> MDB
+    MDB --> API
+
+    classDef ext    fill:#E0F2FE,stroke:#0284C7,color:#0C4A6E
+    classDef ingest fill:#FEF3C7,stroke:#D97706,color:#451A03
+    classDef proc   fill:#DCFCE7,stroke:#16A34A,color:#14532D
+    classDef store  fill:#FEF9C3,stroke:#CA8A04,color:#713F12
+    classDef ml     fill:#F3E8FF,stroke:#9333EA,color:#3B0764
+    classDef api    fill:#DBEAFE,stroke:#2563EB,color:#1E3A8A
+    classDef fe     fill:#FCE7F3,stroke:#DB2777,color:#831843
+
+    class CG,CSV ext
+    class PROD,KF ingest
+    class SS,SB proc
+    class MDB store
+    class LSTM ml
+    class API api
+    class REACT,DASH fe
+
+    style INGEST  fill:#FFFBEB,stroke:#FDE68A
+    style PROCESS fill:#F0FDF4,stroke:#86EFAC
+    style FRONTEND fill:#FDF2F8,stroke:#F9A8D4

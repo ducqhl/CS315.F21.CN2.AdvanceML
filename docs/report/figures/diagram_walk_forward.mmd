@@ -1,0 +1,32 @@
+%%{init: {"theme": "base", "themeVariables": {"background": "#FFFFFF", "doneTaskBkgColor": "#CFFAFE", "doneTaskBorderColor": "#0891B2", "activeTaskBkgColor": "#DCFCE7", "activeTaskBorderColor": "#16A34A", "critBkgColor": "#FEE2E2", "critBorderColor": "#DC2626", "critTextColor": "#7F1D1D", "taskTextColor": "#1E293B", "taskTextOutsideColor": "#1E293B", "sectionBkgColor": "#F8FAFC", "altSectionBkgColor": "#F1F5F9", "gridColor": "#CBD5E1", "titleColor": "#1E293B"}}}%%
+gantt
+    title Walk-Forward Validation — 6 Folds (730-day rolling window, fold size = 60 days)
+    dateFormat YYYY-MM-DD
+    axisFormat %b %Y
+
+    section Fold 1
+    Train window (730 d)   :done,    f1tr, 2023-07-01, 2025-06-30
+    Validation (60 d)      :active,  f1vl, 2025-07-01, 2025-08-31
+
+    section Fold 2
+    Train window (730 d)   :done,    f2tr, 2023-09-01, 2025-08-31
+    Validation (60 d)      :active,  f2vl, 2025-09-01, 2025-10-31
+
+    section Fold 3
+    Train window (730 d)   :done,    f3tr, 2023-11-01, 2025-10-31
+    Validation (60 d)      :active,  f3vl, 2025-11-01, 2025-12-31
+
+    section Fold 4
+    Train window (730 d)   :done,    f4tr, 2024-01-01, 2025-12-31
+    Validation (60 d)      :active,  f4vl, 2026-01-01, 2026-02-28
+
+    section Fold 5
+    Train window (730 d)   :done,    f5tr, 2024-03-01, 2026-02-28
+    Validation (60 d)      :active,  f5vl, 2026-03-01, 2026-04-30
+
+    section Fold 6
+    Train window (730 d)   :done,    f6tr, 2024-05-01, 2026-04-30
+    Validation (60 d)      :active,  f6vl, 2026-05-01, 2026-05-31
+
+    section Backtest (unseen)
+    Hold-out test set      :crit,    bk,   2026-01-23, 2026-05-29

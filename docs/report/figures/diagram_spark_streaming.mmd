@@ -1,0 +1,14 @@
+sequenceDiagram
+    participant P as Producer
+    participant K as Kafka
+    participant S as Spark Streaming
+    participant M as MongoDB
+
+    P->>K: Publish price tick (crypto_raw)
+    K->>S: Read micro-batch
+    S->>S: Parse & watermark (10 min)
+    S->>S: Window aggregation (20 min / 5 min slide)
+    S->>M: Write window_stats
+    S->>S: Compute indicators (SMA, RSI, VWAP, Bollinger)
+    S->>M: Write realtime_prices
+    S-->>M: Write alert (if |change_24h| > 5%)

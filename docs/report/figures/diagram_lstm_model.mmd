@@ -1,0 +1,24 @@
+flowchart LR
+    RAW["Historical Price Data\nMongoDB / CSV"]
+    FEAT["Feature Engineering\nReturns · SMA · RSI\nVWAP · Volatility"]
+    SEQ["Sequence Windows\n60-step sliding windows"]
+    LSTM["LSTM Encoder\n2 layers · 128 hidden units"]
+    PRICE["Price Head\n7-day forecast (USD)"]
+    VOL["Volatility Head\n7-day confidence band"]
+    OUT["Predictions\nMongoDB · predictions collection"]
+
+    RAW --> FEAT --> SEQ --> LSTM
+    LSTM --> PRICE --> OUT
+    LSTM --> VOL --> OUT
+
+    classDef data  fill:#E0F2FE,stroke:#0284C7,color:#0C4A6E
+    classDef proc  fill:#DCFCE7,stroke:#16A34A,color:#14532D
+    classDef model fill:#FEF9C3,stroke:#CA8A04,color:#713F12
+    classDef head  fill:#DBEAFE,stroke:#2563EB,color:#1E3A8A
+    classDef out   fill:#F3E8FF,stroke:#9333EA,color:#3B0764
+
+    class RAW data
+    class FEAT,SEQ proc
+    class LSTM model
+    class PRICE,VOL head
+    class OUT out

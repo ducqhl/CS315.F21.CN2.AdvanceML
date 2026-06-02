@@ -1,0 +1,99 @@
+\relax 
+\providecommand\hyper@newdestlabel[2]{}
+\providecommand*\HyPL@Entry[1]{}
+\ProvideDocumentCommand \xpg@aux {mm}{}
+\HyPL@Entry{0<</S/D>>}
+\@writefile{toc}{\xpg@aux {}{vietnamese}}
+\HyPL@Entry{1<</S/D>>}
+\citation{ref3}
+\@writefile{toc}{\contentsline {section}{\numberline {1}Giới thiệu}{3}{section.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {1.1}Thông tin sinh viên}{3}{subsection.1.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {1.2}Bối cảnh đồ án}{3}{subsection.1.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {1.3}Phạm vi tài liệu}{3}{subsection.1.3}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {2}Kiến trúc Hệ thống}{3}{section.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {2.1}Lý do chọn Lambda Architecture}{3}{subsection.2.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {2.2}Sơ đồ kiến trúc tổng quan}{4}{subsection.2.2}\protected@file@percent }
+\@writefile{lof}{\contentsline {figure}{\numberline {1}{\ignorespaces \xpg@aux {}{vietnamese}Sơ đồ tổng quan hệ thống: toàn bộ luồng từ nguồn dữ liệu CoinGecko đến các giao diện người dùng. Màu xanh dương: Batch Layer; màu xanh lá: Speed Layer; màu tím: Serving Layer; màu đỏ: ML Pipeline.}}{4}{figure.caption.1}\protected@file@percent }
+\providecommand*\caption@xref[2]{\@setref\relax\@undefined{#1}}
+\newlabel{fig:arch_overview}{{1}{4}{\xpg@aux {\xpg@current@opts }{\languagename }Sơ đồ tổng quan hệ thống: toàn bộ luồng từ nguồn dữ liệu CoinGecko đến các giao diện người dùng. Màu xanh dương: Batch Layer; màu xanh lá: Speed Layer; màu tím: Serving Layer; màu đỏ: ML Pipeline}{figure.caption.1}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {2.3}C4 Container Model}{5}{subsection.2.3}\protected@file@percent }
+\@writefile{lof}{\contentsline {figure}{\numberline {2}{\ignorespaces \xpg@aux {}{vietnamese}C4 Container Diagram: các container chính (Kafka, Spark, MongoDB, FastAPI, React, Streamlit) và luồng tương tác. Mỗi container có tên, công nghệ sử dụng, và mô tả trách nhiệm ngắn gọn.}}{5}{figure.caption.2}\protected@file@percent }
+\newlabel{fig:c4_container}{{2}{5}{\xpg@aux {\xpg@current@opts }{\languagename }C4 Container Diagram: các container chính (Kafka, Spark, MongoDB, FastAPI, React, Streamlit) và luồng tương tác. Mỗi container có tên, công nghệ sử dụng, và mô tả trách nhiệm ngắn gọn}{figure.caption.2}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {2.4}Luồng dữ liệu end-to-end}{6}{subsection.2.4}\protected@file@percent }
+\@writefile{lof}{\contentsline {figure}{\numberline {3}{\ignorespaces \xpg@aux {}{vietnamese}Sơ đồ luồng dữ liệu từ nguồn CoinGecko API đến sink cuối là React/Streamlit dashboard. Màu xanh lá: Speed Path; màu xanh dương: Batch Path; màu đỏ: ML Path. Mũi tên thể hiện hướng dữ liệu di chuyển.}}{6}{figure.caption.3}\protected@file@percent }
+\newlabel{fig:dataflow}{{3}{6}{\xpg@aux {\xpg@current@opts }{\languagename }Sơ đồ luồng dữ liệu từ nguồn CoinGecko API đến sink cuối là React/Streamlit dashboard. Màu xanh lá: Speed Path; màu xanh dương: Batch Path; màu đỏ: ML Path. Mũi tên thể hiện hướng dữ liệu di chuyển}{figure.caption.3}{}}
+\@writefile{toc}{\contentsline {section}{\numberline {3}Các Thành phần và Trách nhiệm}{7}{section.3}\protected@file@percent }
+\@writefile{lot}{\contentsline {table}{\numberline {1}{\ignorespaces \xpg@aux {}{vietnamese}Tổng quan các thành phần hệ thống và trách nhiệm}}{7}{table.caption.4}\protected@file@percent }
+\newlabel{tab:components}{{1}{7}{\xpg@aux {\xpg@current@opts }{\languagename }Tổng quan các thành phần hệ thống và trách nhiệm}{table.caption.4}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {3.1}CoinGecko Producer}{8}{subsection.3.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {3.2}Speed Layer: Kafka + Spark Structured Streaming}{8}{subsection.3.2}\protected@file@percent }
+\@writefile{lof}{\contentsline {figure}{\numberline {4}{\ignorespaces \xpg@aux {}{vietnamese}Luồng xử lý của Spark Structured Streaming: từ Kafka micro-batch qua parse và watermark, đến window aggregation và indicator computation, cuối cùng ghi vào MongoDB.}}{8}{figure.caption.5}\protected@file@percent }
+\newlabel{fig:spark_streaming_diag}{{4}{8}{\xpg@aux {\xpg@current@opts }{\languagename }Luồng xử lý của Spark Structured Streaming: từ Kafka micro-batch qua parse và watermark, đến window aggregation và indicator computation, cuối cùng ghi vào MongoDB}{figure.caption.5}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {3.3}Batch Layer: Spark Batch Job}{9}{subsection.3.3}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {3.4}MongoDB Serving Layer}{9}{subsection.3.4}\protected@file@percent }
+\@writefile{lof}{\contentsline {figure}{\numberline {5}{\ignorespaces \xpg@aux {}{vietnamese}Sơ đồ MongoDB schema: 5 collections với document structure, indexes, và TTL policies. \texttt  {realtime\_prices} có TTL 7 ngày; các collection khác lưu trữ lâu dài với compound index trên \texttt  {(coin\_name, date)}.}}{10}{figure.caption.6}\protected@file@percent }
+\newlabel{fig:mongo_schema}{{5}{10}{\xpg@aux {\xpg@current@opts }{\languagename }Sơ đồ MongoDB schema: 5 collections với document structure, indexes, và TTL policies. \texttt {realtime\_prices} có TTL 7 ngày; các collection khác lưu trữ lâu dài với compound index trên \texttt {(coin\_name, date)}}{figure.caption.6}{}}
+\@writefile{lot}{\contentsline {table}{\numberline {2}{\ignorespaces \xpg@aux {}{vietnamese}Năm MongoDB collections và mục đích sử dụng}}{11}{table.caption.7}\protected@file@percent }
+\newlabel{tab:mongo_collections}{{2}{11}{\xpg@aux {\xpg@current@opts }{\languagename }Năm MongoDB collections và mục đích sử dụng}{table.caption.7}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {3.5}ML Pipeline: LSTM Forecasting}{11}{subsection.3.5}\protected@file@percent }
+\@writefile{lof}{\contentsline {figure}{\numberline {6}{\ignorespaces \xpg@aux {}{vietnamese}Kiến trúc LSTM v3 với dual-head output: LSTM Encoder (2 lớp, 128 hidden units) xử lý chuỗi 60 ngày, hidden state $h_T$ được đưa vào Price Head (7-day forecast) và Volatility Head (confidence band) song song.}}{12}{figure.caption.8}\protected@file@percent }
+\newlabel{fig:lstm_arch}{{6}{12}{\xpg@aux {\xpg@current@opts }{\languagename }Kiến trúc LSTM v3 với dual-head output: LSTM Encoder (2 lớp, 128 hidden units) xử lý chuỗi 60 ngày, hidden state $h_T$ được đưa vào Price Head (7-day forecast) và Volatility Head (confidence band) song song}{figure.caption.8}{}}
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {3.5.1}Feature Engineering}{12}{subsubsection.3.5.1}\protected@file@percent }
+\@writefile{lot}{\contentsline {table}{\numberline {3}{\ignorespaces \xpg@aux {}{vietnamese}9 features đầu vào của LSTM và ý nghĩa}}{13}{table.caption.9}\protected@file@percent }
+\newlabel{tab:features}{{3}{13}{\xpg@aux {\xpg@current@opts }{\languagename }9 features đầu vào của LSTM và ý nghĩa}{table.caption.9}{}}
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {3.5.2}Kiến trúc Mô hình}{13}{subsubsection.3.5.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {3.5.3}Huấn luyện và Đánh giá}{14}{subsubsection.3.5.3}\protected@file@percent }
+\@writefile{lof}{\contentsline {figure}{\numberline {7}{\ignorespaces \xpg@aux {}{vietnamese}Đường cong loss trong quá trình huấn luyện BTC (trái) và DOGE (phải). Điểm vàng: best validation checkpoint. Val loss tăng sau best checkpoint là dấu hiệu overfitting --- được kiểm soát bởi early stopping (patience=7).}}{14}{figure.caption.10}\protected@file@percent }
+\newlabel{fig:loss_curves}{{7}{14}{\xpg@aux {\xpg@current@opts }{\languagename }Đường cong loss trong quá trình huấn luyện BTC (trái) và DOGE (phải). Điểm vàng: best validation checkpoint. Val loss tăng sau best checkpoint là dấu hiệu overfitting --- được kiểm soát bởi early stopping (patience=7)}{figure.caption.10}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {3.6}FastAPI Backend}{15}{subsection.3.6}\protected@file@percent }
+\@writefile{lof}{\contentsline {figure}{\numberline {8}{\ignorespaces \xpg@aux {}{vietnamese}Sequence diagram cho luồng request API điển hình: từ React client qua JWT middleware, đến MongoDB query, và trả về JSON response.}}{15}{figure.caption.11}\protected@file@percent }
+\newlabel{fig:api_sequence}{{8}{15}{\xpg@aux {\xpg@current@opts }{\languagename }Sequence diagram cho luồng request API điển hình: từ React client qua JWT middleware, đến MongoDB query, và trả về JSON response}{figure.caption.11}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {3.7}Presentation Layer: React Frontend và Streamlit}{15}{subsection.3.7}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {3.8}Inference Scheduler}{16}{subsection.3.8}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {4}Triển khai Hệ thống}{16}{section.4}\protected@file@percent }
+\@writefile{lof}{\contentsline {figure}{\numberline {9}{\ignorespaces \xpg@aux {}{vietnamese}Sơ đồ triển khai Docker Compose: 9 containers với network topology, port mapping, và volume mounts. Kafka/Zookeeper trong network riêng; MongoDB với persistent volume; Nginx reverse proxy cho React frontend.}}{16}{figure.caption.12}\protected@file@percent }
+\newlabel{fig:arch_deployment}{{9}{16}{\xpg@aux {\xpg@current@opts }{\languagename }Sơ đồ triển khai Docker Compose: 9 containers với network topology, port mapping, và volume mounts. Kafka/Zookeeper trong network riêng; MongoDB với persistent volume; Nginx reverse proxy cho React frontend}{figure.caption.12}{}}
+\@writefile{lot}{\contentsline {table}{\numberline {4}{\ignorespaces \xpg@aux {}{vietnamese}Chín Docker services, dependencies, và port}}{17}{table.caption.13}\protected@file@percent }
+\newlabel{tab:docker_services}{{4}{17}{\xpg@aux {\xpg@current@opts }{\languagename }Chín Docker services, dependencies, và port}{table.caption.13}{}}
+\@writefile{toc}{\contentsline {section}{\numberline {5}Đảm bảo Chất lượng: Kiểm thử E2E}{17}{section.5}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {5.1}Chiến lược Kiểm thử}{17}{subsection.5.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {5.2}Layer 1: Producer $\to $ Kafka}{17}{subsection.5.2}\protected@file@percent }
+\@writefile{lot}{\contentsline {table}{\numberline {5}{\ignorespaces \xpg@aux {}{vietnamese}E2E Layer 1 --- Producer to Kafka: test cases và assertion}}{18}{table.caption.14}\protected@file@percent }
+\newlabel{tab:e2e_layer1}{{5}{18}{\xpg@aux {\xpg@current@opts }{\languagename }E2E Layer 1 --- Producer to Kafka: test cases và assertion}{table.caption.14}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {5.3}Layer 2: Spark Batch $\to $ MongoDB}{18}{subsection.5.3}\protected@file@percent }
+\@writefile{lot}{\contentsline {table}{\numberline {6}{\ignorespaces \xpg@aux {}{vietnamese}E2E Layer 2 --- Spark Batch to MongoDB: test cases và assertion}}{19}{table.caption.15}\protected@file@percent }
+\newlabel{tab:e2e_layer2}{{6}{19}{\xpg@aux {\xpg@current@opts }{\languagename }E2E Layer 2 --- Spark Batch to MongoDB: test cases và assertion}{table.caption.15}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {5.4}Layer 3: ML Pipeline $\to $ MongoDB}{19}{subsection.5.4}\protected@file@percent }
+\@writefile{lot}{\contentsline {table}{\numberline {7}{\ignorespaces \xpg@aux {}{vietnamese}E2E Layer 3 --- ML Pipeline to MongoDB: test cases và assertion}}{20}{table.caption.16}\protected@file@percent }
+\newlabel{tab:e2e_layer3}{{7}{20}{\xpg@aux {\xpg@current@opts }{\languagename }E2E Layer 3 --- ML Pipeline to MongoDB: test cases và assertion}{table.caption.16}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {5.5}Ma trận Phủ Kiểm thử}{20}{subsection.5.5}\protected@file@percent }
+\citation{ref9}
+\@writefile{lot}{\contentsline {table}{\numberline {8}{\ignorespaces \xpg@aux {}{vietnamese}Ma trận phủ kiểm thử: thành phần và cấp kiểm thử}}{21}{table.caption.17}\protected@file@percent }
+\newlabel{tab:test_coverage}{{8}{21}{\xpg@aux {\xpg@current@opts }{\languagename }Ma trận phủ kiểm thử: thành phần và cấp kiểm thử}{table.caption.17}{}}
+\@writefile{toc}{\contentsline {section}{\numberline {6}Đánh giá Mô hình LSTM}{21}{section.6}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {6.1}Walk-Forward Validation}{21}{subsection.6.1}\protected@file@percent }
+\@writefile{lof}{\contentsline {figure}{\numberline {10}{\ignorespaces \xpg@aux {}{vietnamese}Sơ đồ walk-forward validation với 6 folds: mỗi fold mở rộng training window theo thời gian (rolling 730 ngày), validation window 60 ngày ngay sau training. Không có overlap giữa các val window.}}{21}{figure.caption.18}\protected@file@percent }
+\newlabel{fig:wf_diag}{{10}{21}{\xpg@aux {\xpg@current@opts }{\languagename }Sơ đồ walk-forward validation với 6 folds: mỗi fold mở rộng training window theo thời gian (rolling 730 ngày), validation window 60 ngày ngay sau training. Không có overlap giữa các val window}{figure.caption.18}{}}
+\@writefile{lot}{\contentsline {table}{\numberline {9}{\ignorespaces \xpg@aux {}{vietnamese}Kết quả walk-forward 6 fold --- Bitcoin ($H = 7$)}}{22}{table.caption.19}\protected@file@percent }
+\newlabel{tab:wf_detail}{{9}{22}{\xpg@aux {\xpg@current@opts }{\languagename }Kết quả walk-forward 6 fold --- Bitcoin ($H = 7$)}{table.caption.19}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {6.2}Backtest 6 Tháng}{22}{subsection.6.2}\protected@file@percent }
+\@writefile{lof}{\contentsline {figure}{\numberline {11}{\ignorespaces \xpg@aux {}{vietnamese}Phân tích backtest 6 tháng BTC (H=7): RMSE per-window (trái), directional accuracy tích lũy (giữa), và signed prediction bias (phải). Directional accuracy ổn định trên 50\% từ cửa sổ thứ 7 trở đi.}}{22}{figure.caption.20}\protected@file@percent }
+\newlabel{fig:backtest_detail}{{11}{22}{\xpg@aux {\xpg@current@opts }{\languagename }Phân tích backtest 6 tháng BTC (H=7): RMSE per-window (trái), directional accuracy tích lũy (giữa), và signed prediction bias (phải). Directional accuracy ổn định trên 50\% từ cửa sổ thứ 7 trở đi}{figure.caption.20}{}}
+\citation{ref7}
+\@writefile{lof}{\contentsline {figure}{\numberline {12}{\ignorespaces \xpg@aux {}{vietnamese}Directional accuracy theo từng fold: BTC (xanh dương) và DOGE (cam). Đường nét đứt đỏ là ngưỡng 50\% (random baseline). DOGE nhất quán dưới BTC do noise-to-signal ratio cao hơn.}}{23}{figure.caption.21}\protected@file@percent }
+\newlabel{fig:wf_dir_acc}{{12}{23}{\xpg@aux {\xpg@current@opts }{\languagename }Directional accuracy theo từng fold: BTC (xanh dương) và DOGE (cam). Đường nét đứt đỏ là ngưỡng 50\% (random baseline). DOGE nhất quán dưới BTC do noise-to-signal ratio cao hơn}{figure.caption.21}{}}
+\@writefile{lot}{\contentsline {table}{\numberline {10}{\ignorespaces \xpg@aux {}{vietnamese}Backtest BTC theo ba horizon (01/2026 -- 05/2026)}}{23}{table.caption.22}\protected@file@percent }
+\newlabel{tab:backtest_multi}{{10}{23}{\xpg@aux {\xpg@current@opts }{\languagename }Backtest BTC theo ba horizon (01/2026 -- 05/2026)}{table.caption.22}{}}
+\@writefile{toc}{\contentsline {section}{\numberline {7}Giới hạn Kỹ thuật}{23}{section.7}\protected@file@percent }
+\bibstyle{unsrtnat}
+\bibdata{references}
+\bibcite{ref3}{{1}{2015}{{Marz and Warren}}{{}}}
+\bibcite{ref2}{{2}{2016}{{Zaharia et~al.}}{{Zaharia, Xin, Wendell, Das, Armbrust, Dave, Meng, Rosen, Venkataraman, Franklin, Ghodsi, Gonzalez, Shenker, and Stoica}}}
+\bibcite{ref1}{{3}{2018}{{Fischer and Krauss}}{{}}}
+\bibcite{ref6}{{4}{1999}{{Murphy}}{{}}}
+\bibcite{ref5}{{5}{2021}{{Lim et~al.}}{{Lim, Ar{\i }k, Loeff, and Pfister}}}
+\@writefile{toc}{\contentsline {section}{\numberline {8}Kết luận}{24}{section.8}\protected@file@percent }
+\bibcite{ref4}{{6}{1997}{{Hochreiter and Schmidhuber}}{{}}}
+\bibcite{ref9}{{7}{2020}{{Cerqueira et~al.}}{{Cerqueira, Torgo, and Mozeti{\v {c}}}}}
+\bibcite{ref7}{{8}{2024}{{CoinGecko}}{{}}}
+\gdef \@abspage@last{26}

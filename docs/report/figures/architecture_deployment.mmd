@@ -1,0 +1,66 @@
+%%{init: {"theme": "base", "themeVariables": {"background": "#FFFFFF", "lineColor": "#374151"}, "flowchart": {"rankSpacing": 55, "nodeSpacing": 35}}}%%
+flowchart TD
+
+    subgraph DOCKER["Docker Compose — 9 Services"]
+
+        subgraph MSG["Messaging Infrastructure"]
+            direction LR
+            ZK["Zookeeper\nCoordinates Kafka broker cluster"]
+            KF[["Kafka Broker\nPorts 9092 and 29092\ncrypto_raw and crypto_alerts topics"]]
+            KUI["Kafka UI\nPort 8080\nBrowse topics, offsets, messages"]
+            ZK --> KF
+            KF -.->|monitor| KUI
+        end
+
+        subgraph COMPUTE["Compute"]
+            direction LR
+            SPM["Spark Master\nPorts 8081 and 7077\nCoordinates batch and streaming jobs"]
+            SPW["Spark Worker\nPort 8082\nExecutes Spark tasks assigned by master"]
+            SPM --> SPW
+        end
+
+        MDB[("MongoDB\nPort 27017\nRealtime prices, batch stats, predictions")]
+
+        subgraph APP["Application Services"]
+            direction LR
+            PRD["Kafka Producer\nPolls CoinGecko every 600 s\nPublishes price events to crypto_raw"]
+            INF["Inference Scheduler\nLSTM forward pass every 5 min\nUpserts 7-day forecast into predictions"]
+            APIBOX["FastAPI\nPort 8000\nJWT authentication and REST endpoints"]
+        end
+
+        subgraph FE["Frontend Services"]
+            direction LR
+            DSH["Streamlit\nPort 8501\nInteractive analytics dashboard"]
+            REACT["React via Nginx\nPort 3000\nFull trading and prediction dashboard"]
+        end
+
+    end
+
+    PRD -->|publish price events| KF
+    KF -->|stream to| SPM
+    SPM -->|write enriched data| MDB
+    INF -->|read history and write forecast| MDB
+    APIBOX -->|query collections| MDB
+    DSH & REACT -->|REST requests| APIBOX
+
+    classDef infra   fill:#F1F5F9,stroke:#64748B,stroke-width:2px,color:#1E293B
+    classDef compute fill:#CFFAFE,stroke:#0891B2,stroke-width:2px,color:#164E63
+    classDef ingest  fill:#FEF3C7,stroke:#D97706,stroke-width:2px,color:#451A03
+    classDef ml      fill:#F3E8FF,stroke:#9333EA,stroke-width:2px,color:#3B0764
+    classDef storage fill:#FEF9C3,stroke:#CA8A04,stroke-width:2px,color:#713F12
+    classDef api     fill:#DBEAFE,stroke:#2563EB,stroke-width:2px,color:#1E3A8A
+    classDef fe      fill:#FCE7F3,stroke:#DB2777,stroke-width:2px,color:#831843
+
+    class ZK,KF,KUI infra
+    class SPM,SPW compute
+    class PRD ingest
+    class INF ml
+    class APIBOX api
+    class MDB storage
+    class DSH,REACT fe
+
+    style DOCKER fill:#F8FAFC,stroke:#CBD5E1,stroke-width:1px
+    style MSG fill:#F0F9FF,stroke:#BAE6FD,stroke-width:1px
+    style COMPUTE fill:#ECFEFF,stroke:#A5F3FC,stroke-width:1px
+    style APP fill:#FAFAFA,stroke:#D1D5DB,stroke-width:1px
+    style FE fill:#FDF2F8,stroke:#F9A8D4,stroke-width:1px

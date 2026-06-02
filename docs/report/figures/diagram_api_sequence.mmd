@@ -1,0 +1,33 @@
+%%{init: {"theme": "base", "themeVariables": {"actorBkg": "#DBEAFE", "actorBorder": "#2563EB", "actorTextColor": "#1E3A8A", "actorLineColor": "#93C5FD", "noteBkgColor": "#FEF9C3", "noteTextColor": "#713F12", "noteBorderColor": "#CA8A04", "activationBkgColor": "#DCFCE7", "activationBorderColor": "#16A34A", "labelBoxBkgColor": "#F3E8FF", "labelBoxBorderColor": "#9333EA", "labelTextColor": "#3B0764", "loopTextColor": "#1E293B", "signalColor": "#374151", "signalTextColor": "#111827"}, "sequence": {"actorMargin": 80, "width": 220, "messageMargin": 40, "mirrorActors": false}}}%%
+sequenceDiagram
+    actor User as Browser / React :3000
+    participant API as FastAPI :8000
+    participant DB as MongoDB :27017
+    participant ML as Inference Scheduler
+
+    Note over ML,DB: Background — runs every 5 minutes
+    ML->>DB: Read realtime_prices — last 60 rows as seed data
+    ML->>ML: LSTM forward pass — 7-day price and vol forecast
+    ML->>DB: Upsert predictions collection with new forecast
+
+    Note over User,DB: Authentication
+    User->>API: POST /auth/login with username and password
+    API->>API: Verify credentials against stored hash
+    API-->>User: Return access_token valid for 24 hours
+
+    Note over User,DB: Authenticated data request
+    User->>API: GET /api/predictions  coin=bitcoin  horizon=7
+    API->>API: Verify JWT signature and check expiry
+    API->>DB: Query predictions sorted by created_at descending
+    DB-->>API: Return latest prediction document
+    API-->>User: Return prices, volatility, direction arrays for 7 days
+
+    Note over User,API: Token expiry — handled by Axios response interceptor
+    User->>API: GET /api/prices/realtime with expired token
+    API-->>User: 401 Unauthorized
+    User->>API: POST /auth/refresh with refresh_token
+    API-->>User: Return new access_token
+    User->>API: Retry GET /api/prices/realtime with new token
+    API->>DB: Query realtime_prices sorted by event_time desc  limit 100
+    DB-->>API: Return price records with technical indicators
+    API-->>User: Return JSON array to update RealtimePage chart

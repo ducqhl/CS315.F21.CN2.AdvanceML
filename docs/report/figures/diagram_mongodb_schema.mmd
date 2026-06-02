@@ -1,0 +1,93 @@
+%%{init: {"theme": "base", "themeVariables": {"background": "#FFFFFF", "primaryColor": "#DBEAFE", "primaryBorderColor": "#2563EB", "primaryTextColor": "#1E3A8A", "lineColor": "#374151", "attributeBackgroundColorEven": "#EFF6FF", "attributeBackgroundColorOdd": "#DBEAFE", "fontFamily": "sans-serif"}, "er": {"layoutDirection": "LR", "minEntityWidth": 130, "minEntityHeight": 80, "entityPadding": 20}}}%%
+erDiagram
+    realtime_prices {
+        ObjectId _id PK
+        string coin
+        float price_usd
+        float volume_24h
+        float market_cap
+        float change_24h
+        float sma_5
+        float sma_20
+        float rsi_14
+        float vwap
+        float bb_mid
+        float bb_upper
+        float bb_lower
+        float open
+        float high
+        float low
+        float close
+        timestamp event_time
+        string source
+        timestamp created_at
+    }
+
+    window_stats {
+        ObjectId _id PK
+        string coin
+        timestamp event_time
+        timestamp window_end
+        float price_usd
+        float sma_20
+        float high_window
+        float low_window
+        float total_volume
+        float avg_volume
+        timestamp created_at
+    }
+
+    daily_stats {
+        ObjectId _id PK
+        string coin_name
+        date date
+        float close
+        float volume
+        float avg_price
+        float price_std
+    }
+
+    historical_sma {
+        ObjectId _id PK
+        string coin_name
+        date date
+        float sma_7
+        float sma_30
+        float sma_90
+    }
+
+    coin_correlation {
+        ObjectId _id PK
+        date date
+        float corr_30d
+        float btc_close
+        float doge_close
+    }
+
+    predictions {
+        ObjectId _id PK
+        string coin
+        date prediction_date
+        array prices_7d
+        array volatility_7d
+        array direction_7d
+        float last_known_price
+        string model_version
+        timestamp created_at
+    }
+
+    accuracy_tracker {
+        ObjectId _id PK
+        string coin
+        date window_start
+        float rmse
+        float mae
+        float directional_accuracy
+        int horizon
+        timestamp evaluated_at
+    }
+
+    realtime_prices ||--o{ window_stats : "aggregated into"
+    realtime_prices ||--o{ predictions : "seeds LSTM inference"
+    daily_stats ||--o{ historical_sma : "extended with SMA"
+    predictions ||--o{ accuracy_tracker : "evaluated against actuals"

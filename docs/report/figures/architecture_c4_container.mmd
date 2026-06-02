@@ -1,0 +1,64 @@
+%%{init: {"theme": "base", "themeVariables": {"background": "#FFFFFF", "lineColor": "#374151"}}}%%
+flowchart TB
+
+    USER(["Analyst / Trader\nViews real-time prices, predictions,\nand correlations via web dashboard"])
+    CG(["CoinGecko API\nLive and historical BTC and DOGE market data"])
+
+    subgraph SYS["Lambda Architecture System"]
+
+        subgraph FE_ROW["Frontend Layer"]
+            direction LR
+            REACT["React Frontend\nReact 19 + Vite + Tailwind\nDashboard · Realtime · Technical\nPredictions · Correlation  port 3000"]
+            STREAMLIT["Streamlit Dashboard\nPython + Streamlit\nInteractive analytics  port 8501"]
+        end
+
+        API["FastAPI Backend\nPython + FastAPI\nJWT authentication and REST endpoints\nport 8000"]
+
+        subgraph PROC["Processing and Compute Layer"]
+            direction LR
+            PROD["Kafka Producer\nPython + pycoingecko\nPolls every 600 s\nacks=all, retries=3"]
+            KAFKA[["Kafka Broker\nApache Kafka\ncrypto_raw · crypto_alerts"]]
+            SS["Spark Streaming\nPySpark\nSMA, RSI, VWAP, Bollinger, ATR\n5-min sliding windows"]
+            SB["Spark Batch\nPySpark\nDaily OHLCV aggregation\nHistorical SMA and correlation"]
+            LSTM["LSTM Scheduler\nPyTorch 2-layer LSTM\n7-day price and vol forecast\nruns every 5 minutes"]
+        end
+
+        MONGO[("MongoDB\nMongoDB 6\nAll collections  port 27017")]
+
+    end
+
+    USER -->|"HTTPS  port 3000"| REACT
+    USER -->|"HTTPS  port 8501"| STREAMLIT
+    REACT & STREAMLIT -->|"REST/JSON  port 8000"| API
+    API -->|"pymongo — read"| MONGO
+    CG -->|"REST poll every 600 s"| PROD
+    PROD -->|"topic: crypto_raw"| KAFKA
+    KAFKA -->|"Structured Streaming consumer"| SS
+    SS -->|"foreachBatch sink"| MONGO
+    SB -->|"daily_stats, historical_sma, coin_correlation"| MONGO
+    LSTM -->|"reads realtime_prices — 60-day seed"| MONGO
+    LSTM -->|"upserts predictions — 7-day forecast"| MONGO
+
+    classDef user    fill:#FEF3C7,stroke:#D97706,stroke-width:2px,color:#451A03
+    classDef ext     fill:#E0F2FE,stroke:#0284C7,stroke-width:2px,color:#0C4A6E
+    classDef ingest  fill:#FEF3C7,stroke:#D97706,stroke-width:2px,color:#451A03
+    classDef speed   fill:#DCFCE7,stroke:#16A34A,stroke-width:2px,color:#14532D
+    classDef batch   fill:#CFFAFE,stroke:#0891B2,stroke-width:2px,color:#164E63
+    classDef ml      fill:#F3E8FF,stroke:#9333EA,stroke-width:2px,color:#3B0764
+    classDef storage fill:#FEF9C3,stroke:#CA8A04,stroke-width:2px,color:#713F12
+    classDef api     fill:#DBEAFE,stroke:#2563EB,stroke-width:2px,color:#1E3A8A
+    classDef fe      fill:#FCE7F3,stroke:#DB2777,stroke-width:2px,color:#831843
+
+    class USER user
+    class CG ext
+    class PROD,KAFKA ingest
+    class SS speed
+    class SB batch
+    class LSTM ml
+    class MONGO storage
+    class API api
+    class REACT,STREAMLIT fe
+
+    style SYS fill:#F8FAFC,stroke:#CBD5E1,stroke-width:1px
+    style FE_ROW fill:#FDF2F8,stroke:#F9A8D4,stroke-width:1px
+    style PROC fill:#FAFAFA,stroke:#D1D5DB,stroke-width:1px

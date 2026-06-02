@@ -1,0 +1,38 @@
+%%{init: {"theme": "base", "themeVariables": {"background": "#FFFFFF", "lineColor": "#374151"}}}%%
+flowchart LR
+
+    CG(["CoinGecko API"])
+    CSV(["CSV lịch sử"])
+
+    PROD["Kafka Producer"]
+    KF[["Kafka"]]
+    SS["Spark Streaming\nSpeed Layer"]
+    SB["Spark Batch\nBatch Layer"]
+
+    MDB[("MongoDB\nServing Layer")]
+
+    LSTM["LSTM\nInference"]
+
+    API["FastAPI"]
+    UI["React / Streamlit"]
+
+    CG --> PROD --> KF --> SS --> MDB
+    CSV --> SB --> MDB
+    MDB -->|60 ngày seed| LSTM -->|dự báo 7 ngày| MDB
+    MDB --> API --> UI
+
+    classDef ext   fill:#E0F2FE,stroke:#0284C7,color:#0C4A6E
+    classDef speed fill:#DCFCE7,stroke:#16A34A,color:#14532D
+    classDef batch fill:#CFFAFE,stroke:#0891B2,color:#164E63
+    classDef store fill:#FEF9C3,stroke:#CA8A04,color:#713F12
+    classDef ml    fill:#F3E8FF,stroke:#9333EA,color:#3B0764
+    classDef api   fill:#DBEAFE,stroke:#2563EB,color:#1E3A8A
+    classDef fe    fill:#FCE7F3,stroke:#DB2777,color:#831843
+
+    class CG,CSV ext
+    class PROD,KF,SS speed
+    class SB batch
+    class MDB store
+    class LSTM ml
+    class API api
+    class UI fe
