@@ -40,6 +40,7 @@ ADMIN_USERNAME = os.environ.get("ADMIN_USERNAME", "admin")
 ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "password123")
 JWT_SECRET = os.environ.get("JWT_SECRET_KEY", "crypto_quantum_terminal_secret_2026")
 JWT_EXPIRE_HOURS = int(os.environ.get("JWT_EXPIRE_HOURS", "8"))
+SECURE_COOKIES = os.environ.get("SECURE_COOKIES", "false").lower() == "true"
 
 # ── MongoDB ──────────────────────────────────────────────────────────────────────
 mongo_client = pymongo.MongoClient(MONGO_URI, serverSelectionTimeoutMS=5000)
@@ -273,7 +274,8 @@ def login(req: LoginRequest, response: Response) -> dict:
         key=COOKIE_NAME,
         value=token,
         httponly=True,
-        samesite="lax",
+        samesite="none" if SECURE_COOKIES else "lax",
+        secure=SECURE_COOKIES,
         max_age=JWT_EXPIRE_HOURS * 3600,
         path="/",
     )
@@ -287,7 +289,7 @@ def login(req: LoginRequest, response: Response) -> dict:
 
 @app.post("/api/auth/logout")
 def logout(response: Response) -> dict:
-    response.delete_cookie(key=COOKIE_NAME, path="/")
+    response.delete_cookie(key=COOKIE_NAME, path="/", samesite="none" if SECURE_COOKIES else "lax", secure=SECURE_COOKIES)
     return {"status": "logged out"}
 
 
