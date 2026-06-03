@@ -1,0 +1,319 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>MongoDB — CS315</title>
+<link rel="stylesheet" href="style.css">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/prism-themes@1.9.0/themes/prism-vsc-dark-plus.min.css" crossorigin="anonymous">
+<script defer src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-core.min.js" crossorigin="anonymous"></script>
+<script defer src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/plugins/autoloader/prism-autoloader.min.js" crossorigin="anonymous"></script>
+</head>
+<body>
+<a href="#main-content" class="skip-link">Bỏ qua điều hướng</a>
+<button class="nav-toggle" aria-label="Mở menu điều hướng" aria-expanded="false" aria-controls="sidebar-nav" onclick="toggleNav(this)">☰</button>
+<div class="nav-overlay" id="nav-overlay" onclick="closeNav()"></div>
+<div class="layout">
+<nav id="sidebar-nav" aria-label="Điều hướng trang">
+  <div class="logo"><h2>CS315.F12.CN2</h2><p>Lê Quang Hoài Đức · 25410034</p></div>
+  <div class="nav-group"><div class="nav-label">Tổng quan</div>
+    <a href="index.html">🏠 Trang chủ</a>
+    <a href="01_architecture.html">🏗️ Lambda Architecture</a>
+  </div>
+  <div class="nav-group"><div class="nav-label">Data Pipeline</div>
+    <a href="02_producer.html">📡 CoinGecko Producer</a>
+    <a href="03_spark_streaming.html">⚡ Spark Streaming</a>
+    <a href="04_spark_batch.html">📦 Spark Batch</a>
+    <a href="05_mongodb.html" class="active">🗄️ MongoDB</a>
+  </div>
+  <div class="nav-group"><div class="nav-label">ML Pipeline</div><a href="06_lstm.html">🧠 LSTM Model</a></div>
+  <div class="nav-group"><div class="nav-label">Serving Layer</div>
+    <a href="07_api.html">🔌 FastAPI Backend</a>
+    <a href="08_frontend.html">🖥️ React + Streamlit</a>
+  </div>
+  <div class="nav-group"><div class="nav-label">Quality & Ops</div>
+    <a href="09_testing.html">🧪 E2E Testing</a>
+    <a href="10_deployment.html">🐳 Docker Compose</a>
+    <a href="11_interview_qa.html">🎯 Phản biện Q&A <span class="badge">HOT</span></a>
+  </div>
+</nav>
+<main id="main-content" role="main">
+  <a href="index.html" class="back-link">← Trang chủ</a>
+  <h1>MongoDB — Serving Layer
+    <span class="sub">Single serving store cho toàn bộ hệ thống · 7+ collections</span>
+  </h1>
+
+  <div class="callout info">
+    <strong>Design principle:</strong> MongoDB là <em>single source of truth</em> cho serving layer. Tất cả writers (Spark Streaming, Spark Batch, Inference Scheduler, Producer) ghi vào MongoDB. Tất cả readers (FastAPI, Streamlit) đọc từ MongoDB. Không có cache layer trung gian — giảm complexity vận hành.
+  </div>
+
+  <!-- ═══════════════════════════════════════════
+       COLLECTIONS TABLE
+  ════════════════════════════════════════════ -->
+  <h2>7+ Collections — Cấu trúc tổng quan</h2>
+  <div class="table-wrap">
+  <table>
+    <thead>
+      <tr><th>Collection</th><th>Layer</th><th>Writer</th><th>TTL</th><th>Index</th><th>Nội dung</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><code>live_prices</code></td>
+        <td><span class="tag amber">Speed</span></td>
+        <td>Producer (direct)</td>
+        <td>—</td>
+        <td>(coin, timestamp)</td>
+        <td>Raw tick từ Producer (8 fields): coin symbol, price_usd (giá tức thời), volume_24h (khối lượng GD), market_cap (vốn hóa), change_24h (% biến động). Không qua Spark — API đọc ngay lập tức.</td>
+      </tr>
+      <tr>
+        <td><code>realtime_prices</code></td>
+        <td><span class="tag amber">Speed</span></td>
+        <td>Spark Streaming</td>
+        <td>7 ngày</td>
+        <td>(coin, event_time)</td>
+        <td>Enriched tick (18 columns): OHLC + sma_5/20 (xu hướng ngắn/trung hạn), rsi_14 (momentum oscillator 0–100), vwap (giá tham chiếu theo volume), bb_mid/upper/lower (kênh Bollinger ±2σ). Output từ Spark Streaming Query B.</td>
+      </tr>
+      <tr>
+        <td><code>window_stats</code></td>
+        <td><span class="tag amber">Speed</span></td>
+        <td>Spark Streaming</td>
+        <td>—</td>
+        <td>(coin, window.start)</td>
+        <td>Sliding window 20-min/5-min: sma_20 (price avg trong window), high_window (đỉnh), low_window (đáy), total_volume (khối lượng tích lũy). Output từ Spark Streaming Query A.</td>
+      </tr>
+      <tr>
+        <td><code>alerts</code></td>
+        <td><span class="tag amber">Speed</span></td>
+        <td>Spark Streaming</td>
+        <td>30 ngày</td>
+        <td>(coin, timestamp)</td>
+        <td>PRICE_SPIKE events khi |change_24h| &gt; 5%.</td>
+      </tr>
+      <tr>
+        <td><code>daily_stats</code></td>
+        <td><span class="tag green">Batch</span></td>
+        <td>Spark Batch</td>
+        <td>—</td>
+        <td>(coin_name, date)</td>
+        <td>Daily OHLCV, avg_price (mean giá trong ngày), price_std (std giá nội ngày — proxy volatility). Primary input cho LSTM training: rolling window 730 ngày gần nhất.</td>
+      </tr>
+      <tr>
+        <td><code>historical_sma</code></td>
+        <td><span class="tag green">Batch</span></td>
+        <td>Spark Batch</td>
+        <td>—</td>
+        <td>(coin_name, date)</td>
+        <td>SMA-7 (1 tuần), SMA-14 (2 tuần), SMA-30 (1 tháng), SMA-90 (1 quý) trên toàn bộ 4.165 ngày — cho phép so sánh cross-window trend trên cùng chart.</td>
+      </tr>
+      <tr>
+        <td><code>coin_correlation</code></td>
+        <td><span class="tag green">Batch</span></td>
+        <td>Spark Batch</td>
+        <td>—</td>
+        <td>(date)</td>
+        <td>Rolling 30-ngày Pearson correlation BTC-DOGE. r tổng thể = 0.528.</td>
+      </tr>
+      <tr>
+        <td><code>predictions</code></td>
+        <td><span class="tag purple">ML</span></td>
+        <td>Inference Scheduler</td>
+        <td>—</td>
+        <td>(coin, prediction_date)</td>
+        <td>LSTM 7-day forecast: predicted_price (USD, inverse-transform từ cumsum log-return), predicted_volatility (confidence σ từ Volatility Head), model_version, horizon_step (1–7). Upsert key: (coin, prediction_date) — idempotent.</td>
+      </tr>
+    </tbody>
+  </table>
+  </div>
+
+  <!-- ═══════════════════════════════════════════
+       DOCUMENT SCHEMAS
+  ════════════════════════════════════════════ -->
+  <h2>Document Schema Examples</h2>
+
+  <h3>realtime_prices — Speed Layer Output</h3>
+  <pre><code class="language-json">{
+  "_id": ObjectId("..."),
+  "coin": "BTC",
+  "coin_id": "bitcoin",
+  "price_usd": 77473.37,
+  "volume_24h": 32816206284.10,
+  "market_cap": 1548812855182.45,
+  "change_24h": -1.24,
+  "event_time": ISODate("2026-06-02T10:30:00Z"),
+  "open":  77200.00,
+  "high":  77600.00,
+  "low":   77100.00,
+  "close": 77473.37,
+  "sma_5":    77350.00,
+  "sma_20":   76900.00,
+  "rsi_14":   58.3,
+  "vwap":     77200.50,
+  "bb_mid":   76900.00,
+  "bb_upper": 78500.00,
+  "bb_lower": 75300.00,
+  "created_at": ISODate("2026-06-02T10:30:05Z"),
+  "batch_id": 1234
+}</code></pre>
+
+  <h3>predictions — ML Pipeline Output</h3>
+  <pre><code class="language-json">{
+  "_id": ObjectId("..."),
+  "coin": "bitcoin",
+  "prediction_date": ISODate("2026-06-09T00:00:00Z"),  // t+7
+  "predicted_price": 79500.00,
+  "predicted_volatility": 0.032,                         // ~3.2% std dev
+  "model_version": "lstm_bitcoin_v2",
+  "created_at": ISODate("2026-06-02T10:35:00Z"),
+  "horizon_step": 7                                      // 1-7
+}</code></pre>
+
+  <h3>daily_stats — Batch Layer Output</h3>
+  <pre><code class="language-json">{
+  "_id": ObjectId("..."),
+  "date": "2026-05-29",
+  "coin_name": "bitcoin",
+  "close": 95000.00,
+  "volume": 32000000000.00,
+  "avg_price": 94800.00,
+  "price_std": 450.00,
+  "high": 95500.00,
+  "low":  94200.00
+}</code></pre>
+
+  <!-- ═══════════════════════════════════════════
+       UPSERT PATTERN
+  ════════════════════════════════════════════ -->
+  <h2>Upsert Pattern cho Predictions</h2>
+  <p>Inference Scheduler chạy mỗi 5 phút — idempotency là bắt buộc để tránh tích lũy duplicate documents.</p>
+  <pre><code class="language-python"># Key = (coin, prediction_date) — unique per coin per day
+collection.update_one(
+    filter={"coin": coin, "prediction_date": pred_date},
+    update={"$set": document},
+    upsert=True   # Insert if not exists, update if exists
+)
+
+# Chạy 2 lần → vẫn chỉ 7 documents (không phải 14)
+# Sau 1 tháng (8640 lần) → vẫn chỉ 7 documents</code></pre>
+
+  <div class="callout success">
+    <strong>Tại sao upsert idempotency quan trọng?</strong> Inference Scheduler chạy mỗi 5 phút = 288 lần/ngày = 8.640 lần/tháng. Nếu dùng insert thay vì upsert, sau 1 tháng sẽ có 60.480 duplicate prediction documents cho một coin. Upsert key (coin, prediction_date) đảm bảo mỗi cặp coin+ngày chỉ có tối đa 1 prediction.
+  </div>
+
+  <!-- ═══════════════════════════════════════════
+       TTL INDEX
+  ════════════════════════════════════════════ -->
+  <h2>TTL Index — Automatic Data Expiry</h2>
+  <pre><code class="language-javascript">// realtime_prices: xóa sau 7 ngày
+db.realtime_prices.createIndex(
+    { "created_at": 1 },
+    { "expireAfterSeconds": 604800 }  // 7 × 24 × 3600
+)
+
+// alerts: xóa sau 30 ngày
+db.alerts.createIndex(
+    { "timestamp": 1 },
+    { "expireAfterSeconds": 2592000 }  // 30 × 24 × 3600
+)</code></pre>
+
+  <div class="callout info">
+    <strong>TTL cho realtime_prices:</strong> Với poll interval 600s, 1 tuần = 1.008 price ticks × 2 coins = 2.016 documents. TTL giữ collection nhỏ và queries nhanh. <code>daily_stats</code> không cần TTL vì là historical data dùng cho LSTM — cần giữ lại vĩnh viễn.
+  </div>
+
+  <!-- ═══════════════════════════════════════════
+       INDEXES
+  ════════════════════════════════════════════ -->
+  <h2>Indexes cho Query Performance</h2>
+  <div class="table-wrap">
+  <table>
+    <thead>
+      <tr><th>Collection</th><th>Index</th><th>Query Pattern</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><code>realtime_prices</code></td>
+        <td><code>(coin, event_time DESC)</code></td>
+        <td>Latest N records for a specific coin</td>
+      </tr>
+      <tr>
+        <td><code>daily_stats</code></td>
+        <td><code>(coin_name, date)</code> — unique</td>
+        <td>Date range query for LSTM training window (730 days)</td>
+      </tr>
+      <tr>
+        <td><code>historical_sma</code></td>
+        <td><code>(coin_name, date)</code></td>
+        <td>Historical SMA lookup by coin and date range</td>
+      </tr>
+      <tr>
+        <td><code>coin_correlation</code></td>
+        <td><code>(date DESC)</code></td>
+        <td>Rolling correlation time series</td>
+      </tr>
+      <tr>
+        <td><code>predictions</code></td>
+        <td><code>(coin, prediction_date)</code> — unique</td>
+        <td>Upsert key + lookup latest predictions per coin</td>
+      </tr>
+    </tbody>
+  </table>
+  </div>
+
+  <!-- ═══════════════════════════════════════════
+       CONNECTION CONFIG
+  ════════════════════════════════════════════ -->
+  <h2>MongoDB Connection Configuration</h2>
+  <pre><code class="language-python">MONGO_URI = "mongodb://admin:password123@mongodb:27017/crypto_db?authSource=admin"
+# Trong Docker network: hostname = "mongodb" (service name trong docker-compose)
+# Ngoài Docker (local dev): hostname = "localhost"
+
+# Python connection via PyMongo
+from pymongo import MongoClient
+client = MongoClient(MONGO_URI)
+db = client["crypto_db"]</code></pre>
+
+  <div class="callout warning">
+    <strong>Security:</strong> Credentials hardcoded trong <code>docker-compose.yml</code> và <code>.env</code> là cho demo. Production cần secrets management: Docker Secrets, HashiCorp Vault, hoặc Kubernetes Secrets. Không commit credentials vào Git — dùng <code>.env.example</code> làm template.
+  </div>
+
+  <!-- ═══════════════════════════════════════════
+       TRADE-OFF ANALYSIS
+  ════════════════════════════════════════════ -->
+  <h2>Trade-off: MongoDB vs. Alternatives</h2>
+  <div class="table-wrap">
+  <table>
+    <thead>
+      <tr><th>Option</th><th>Phù hợp khi</th><th>Hạn chế với hệ thống này</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><strong>MongoDB (chọn)</strong></td>
+        <td>Flexible schema, throughput thấp (poll 600s), cần single serving store đơn giản</td>
+        <td>Không tối ưu cho time series queries với hàng triệu records/ngày</td>
+      </tr>
+      <tr>
+        <td><strong>PostgreSQL</strong></td>
+        <td>Cần ACID transactions, complex joins, fixed schema</td>
+        <td>Schema migration phức tạp khi thêm collection mới. Cần ALTER TABLE.</td>
+      </tr>
+      <tr>
+        <td><strong>InfluxDB</strong></td>
+        <td>Time series chuyên dụng, tick-by-tick data (hàng triệu/ngày)</td>
+        <td>Overkill cho throughput thấp. ML pipeline cần flexible document format cho predictions.</td>
+      </tr>
+      <tr>
+        <td><strong>Cassandra</strong></td>
+        <td>Horizontal scale, high write throughput, multi-datacenter</td>
+        <td>Operational complexity quá cao cho single-machine demo. Query patterns đơn giản không cần Cassandra.</td>
+      </tr>
+    </tbody>
+  </table>
+  </div>
+</main>
+</div>
+<script>
+function toggleNav(btn){var nav=document.getElementById("sidebar-nav");var overlay=document.getElementById("nav-overlay");var isOpen=nav.classList.toggle("open");overlay.classList.toggle("open",isOpen);btn.setAttribute("aria-expanded",isOpen);btn.setAttribute("aria-label",isOpen?"Đóng menu":"Mở menu điều hướng");}
+function closeNav(){var nav=document.getElementById("sidebar-nav");var overlay=document.getElementById("nav-overlay");var btn=document.querySelector(".nav-toggle");nav.classList.remove("open");overlay.classList.remove("open");if(btn){btn.setAttribute("aria-expanded","false");btn.setAttribute("aria-label","Mở menu điều hướng");}}
+document.addEventListener("keydown",function(e){if(e.key==="Escape")closeNav();});
+</script>
+</body>
+</html>

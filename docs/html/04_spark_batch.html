@@ -1,0 +1,327 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Spark Batch — CS315</title>
+<link rel="stylesheet" href="style.css">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/prism-themes@1.9.0/themes/prism-vsc-dark-plus.min.css" crossorigin="anonymous">
+<script defer src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-core.min.js" crossorigin="anonymous"></script>
+<script defer src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/plugins/autoloader/prism-autoloader.min.js" crossorigin="anonymous"></script>
+</head>
+<body>
+<a href="#main-content" class="skip-link">Bỏ qua điều hướng</a>
+<button class="nav-toggle" aria-label="Mở menu điều hướng" aria-expanded="false" aria-controls="sidebar-nav" onclick="toggleNav(this)">☰</button>
+<div class="nav-overlay" id="nav-overlay" onclick="closeNav()"></div>
+<div class="layout">
+<nav id="sidebar-nav" aria-label="Điều hướng trang">
+  <div class="logo"><h2>CS315.F12.CN2</h2><p>Lê Quang Hoài Đức · 25410034</p></div>
+  <div class="nav-group"><div class="nav-label">Tổng quan</div>
+    <a href="index.html">🏠 Trang chủ</a>
+    <a href="01_architecture.html">🏗️ Lambda Architecture</a>
+  </div>
+  <div class="nav-group"><div class="nav-label">Data Pipeline</div>
+    <a href="02_producer.html">📡 CoinGecko Producer</a>
+    <a href="03_spark_streaming.html">⚡ Spark Streaming</a>
+    <a href="04_spark_batch.html" class="active">📦 Spark Batch</a>
+    <a href="05_mongodb.html">🗄️ MongoDB</a>
+  </div>
+  <div class="nav-group"><div class="nav-label">ML Pipeline</div><a href="06_lstm.html">🧠 LSTM Model</a></div>
+  <div class="nav-group"><div class="nav-label">Serving Layer</div>
+    <a href="07_api.html">🔌 FastAPI Backend</a>
+    <a href="08_frontend.html">🖥️ React + Streamlit</a>
+  </div>
+  <div class="nav-group"><div class="nav-label">Quality & Ops</div>
+    <a href="09_testing.html">🧪 E2E Testing</a>
+    <a href="10_deployment.html">🐳 Docker Compose</a>
+    <a href="11_interview_qa.html">🎯 Phản biện Q&A <span class="badge">HOT</span></a>
+  </div>
+</nav>
+<main id="main-content" role="main">
+  <a href="index.html" class="back-link">← Trang chủ</a>
+  <h1>Spark Batch Job — Batch Layer
+    <span class="sub">src/spark/batch_job.py — xử lý dữ liệu lịch sử 4.165 ngày</span>
+  </h1>
+
+  <!-- ═══════════════════════════════════════════
+       TRÁCH NHIỆM
+  ════════════════════════════════════════════ -->
+  <h2>Trách nhiệm</h2>
+  <p>Batch Layer tính toán ba aggregation mà Speed Layer không thể cung cấp do thiếu context dài hạn. Kết quả chính xác hơn streaming vì có toàn bộ lịch sử 4.165 ngày. Đây là lý do cốt lõi tại sao hệ thống cần Lambda thay vì chỉ có Speed Layer.</p>
+
+  <div class="card-grid">
+    <div class="card accent-green">
+      <h3>daily_stats</h3>
+      <p>Thống kê hàng ngày: OHLCV (open/high/low/close/volume), avg_price (mean giá trong ngày), price_std (biến động nội ngày) cho BTC và DOGE.</p>
+      <p><strong>Dùng bởi:</strong> LSTM Training (rolling window 730 ngày làm input), Historical Charts API (hiển thị price history)</p>
+      <p><strong>Index:</strong> <code>(coin_name, date)</code></p>
+    </div>
+    <div class="card accent-green">
+      <h3>historical_sma</h3>
+      <p>SMA-7 (xu hướng 1 tuần), SMA-14 (2 tuần), SMA-30 (1 tháng), SMA-90 (3 tháng) trên toàn bộ chuỗi lịch sử — cho phép so sánh cross-window trend cùng lúc.</p>
+      <p><strong>Dùng bởi:</strong> Technical Analysis page (overlay chart), Correlation page (benchmark trend)</p>
+      <p><strong>Index:</strong> <code>(coin_name, date)</code></p>
+    </div>
+    <div class="card accent-green">
+      <h3>coin_correlation</h3>
+      <p>Rolling Pearson correlation 30 ngày giữa log-return BTC và DOGE.</p>
+      <p><strong>Dùng bởi:</strong> Correlation page trên React Frontend</p>
+      <p><strong>Kết quả:</strong> r = 0.528 tổng thể, r = 0.637 trung bình 30-ngày</p>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════════════════════════
+       TẠI SAO CẦN BATCH
+  ════════════════════════════════════════════ -->
+  <h2>Tại sao cần Batch Layer?</h2>
+  <div class="table-wrap">
+  <table>
+    <thead>
+      <tr><th>Aggregation</th><th>Speed Layer có làm được?</th><th>Vấn đề nếu chỉ dùng Speed</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><strong>SMA-90</strong></td>
+        <td>Có thể, nhưng cần 90 rows trong window state</td>
+        <td>Với poll interval 600s, cần ~15 giờ data trong window mới có đủ 90 points. State memory tăng. Restart mất hết state.</td>
+      </tr>
+      <tr>
+        <td><strong>Correlation BTC-DOGE 30 ngày</strong></td>
+        <td>Có thể với cross-stream join</td>
+        <td>Cross-stream join phức tạp, dễ lỗi trong Spark Streaming. Alignment theo date giữa 2 coin streams cần careful watermark design.</td>
+      </tr>
+      <tr>
+        <td><strong>daily_stats cho LSTM training</strong></td>
+        <td>Không</td>
+        <td>LSTM cần 730 ngày history nhất quán. Streaming data có gaps (service restart, 429 errors) → không reliable cho training.</td>
+      </tr>
+    </tbody>
+  </table>
+  </div>
+
+  <!-- ═══════════════════════════════════════════
+       JOB 1: DAILY STATS
+  ════════════════════════════════════════════ -->
+  <h2>Spark Batch Jobs</h2>
+
+  <h3>Job 1 — daily_stats</h3>
+  <p>Đọc CSV lịch sử, tính OHLCV aggregation hàng ngày cho mỗi coin.</p>
+  <pre><code class="language-python">df = spark.read.csv(CSV_PATH, header=True, inferSchema=True)
+
+daily_stats = df.groupBy("date", "coin_name").agg(
+    F.first("close").alias("close"),
+    F.sum("total_volume").alias("volume"),
+    F.avg("close").alias("avg_price"),
+    F.stddev("close").alias("price_std"),
+    F.max("close").alias("high"),         # proxy high (chỉ có close trong CSV)
+    F.min("close").alias("low"),          # proxy low
+)
+
+# Ghi vào MongoDB
+write_to_mongo(daily_stats, "daily_stats")</code></pre>
+
+  <h3>Job 2 — historical_sma</h3>
+  <p>Tính SMA với nhiều window sizes sử dụng PySpark Window Functions.</p>
+  <pre><code class="language-python">w7  = Window.partitionBy("coin_name").orderBy("date").rowsBetween(-6, 0)
+w14 = Window.partitionBy("coin_name").orderBy("date").rowsBetween(-13, 0)
+w30 = Window.partitionBy("coin_name").orderBy("date").rowsBetween(-29, 0)
+w90 = Window.partitionBy("coin_name").orderBy("date").rowsBetween(-89, 0)
+
+sma_df = daily_stats \
+    .withColumn("sma_7",  F.avg("close").over(w7)) \
+    .withColumn("sma_14", F.avg("close").over(w14)) \
+    .withColumn("sma_30", F.avg("close").over(w30)) \
+    .withColumn("sma_90", F.avg("close").over(w90))
+
+write_to_mongo(sma_df, "historical_sma")</code></pre>
+
+  <h3>Job 3 — coin_correlation</h3>
+  <p>Tính rolling Pearson correlation 30 ngày giữa log-return BTC và DOGE.</p>
+  <pre><code class="language-python"># Tách BTC và DOGE
+btc_df  = daily_stats.filter(F.col("coin_name") == "bitcoin").alias("btc")
+doge_df = daily_stats.filter(F.col("coin_name") == "dogecoin").alias("doge")
+
+# Inner join trên date (aligned timestamps)
+joined = btc_df.join(doge_df, on="date")
+
+# Tính log-returns
+w_day = Window.orderBy("date")
+btc_ret  = F.log(F.col("btc.close")  / F.lag("btc.close").over(w_day))
+doge_ret = F.log(F.col("doge.close") / F.lag("doge.close").over(w_day))
+
+# Rolling 30-day Pearson correlation
+w30 = Window.orderBy("date").rowsBetween(-29, 0)
+corr_df = joined.withColumn("corr_30d", F.corr(btc_ret, doge_ret).over(w30))
+
+write_to_mongo(corr_df, "coin_correlation")</code></pre>
+
+  <!-- ═══════════════════════════════════════════
+       KẾT QUẢ TƯƠNG QUAN
+  ════════════════════════════════════════════ -->
+  <h2>Kết quả Phân tích Tương quan BTC-DOGE</h2>
+  <div class="table-wrap">
+  <table>
+    <thead>
+      <tr><th>Metric</th><th>Giá trị</th><th>Nhận xét</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>Tương quan tổng thể (Pearson r)</td>
+        <td><strong>0.528</strong></td>
+        <td>Tương quan dương vừa phải — không đủ cao để thay thế nhau</td>
+      </tr>
+      <tr>
+        <td>Tương quan trượt 30 ngày (trung bình)</td>
+        <td><strong>0.637</strong></td>
+        <td>Trong ngắn hạn, hai coin thường di chuyển cùng chiều theo dòng tiền thị trường</td>
+      </tr>
+      <tr>
+        <td>Biên độ dao động</td>
+        <td>0.2 – 0.85</td>
+        <td>Đặc biệt thấp khi DOGE có pump độc lập (2021, tweet Elon Musk)</td>
+      </tr>
+      <tr>
+        <td>Kết luận mô hình</td>
+        <td>2 mô hình riêng biệt</td>
+        <td>Tương quan biến thiên mạnh → cần train model riêng cho BTC và DOGE, không dùng chung</td>
+      </tr>
+    </tbody>
+  </table>
+  </div>
+
+  <div class="callout info">
+    <strong>Tại sao train hai mô hình riêng?</strong> Tương quan BTC-DOGE dao động từ &lt;0.2 đến &gt;0.8 theo thời gian. Trong giai đoạn DOGE pump độc lập (tháng 5/2021), tương quan xuống dưới 0.2 — mô hình chung sẽ không capture được dynamics riêng của mỗi coin. Hai mô hình riêng biệt cho phép mỗi mô hình học regime của coin đó.
+  </div>
+
+  <!-- ═══════════════════════════════════════════
+       CHẠY BATCH
+  ════════════════════════════════════════════ -->
+  <h2>Chạy Batch Job</h2>
+  <pre><code class="language-bash"># Cách 1: make command (khuyến nghị)
+make batch
+
+# Cách 2: script trực tiếp
+bash scripts/run_batch.sh
+
+# Cách 3: spark-submit thủ công
+spark-submit \
+  --master spark://localhost:7077 \
+  --packages org.mongodb.spark:mongo-spark-connector_2.12:10.3.0 \
+  src/spark/batch_job.py
+
+# Cách 4: chạy sau batch để populate predictions
+bash scripts/run_inference.sh</code></pre>
+
+  <div class="callout warning">
+    <strong>Khi nào chạy batch?</strong> Batch job nên chạy hàng ngày (cron job) hoặc thủ công trước khi train LSTM. Hiện tại chưa có auto-scheduling trong Docker Compose — đây là limitation cần cải thiện (Airflow, cron, hoặc Spark scheduler).
+  </div>
+
+  <!-- ═══════════════════════════════════════════
+       PERFORMANCE
+  ════════════════════════════════════════════ -->
+  <h2>Performance</h2>
+  <div class="table-wrap">
+  <table>
+    <thead>
+      <tr><th>Dataset</th><th>Thời gian</th><th>Ghi chú</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>BTC CSV (4.136 rows sau warmup)</td>
+        <td>~45 giây</td>
+        <td>Local Spark master, single worker</td>
+      </tr>
+      <tr>
+        <td>DOGE CSV (~4.000 rows)</td>
+        <td>~40 giây</td>
+        <td>Similar size</td>
+      </tr>
+      <tr>
+        <td>Correlation (joined 4k×4k)</td>
+        <td>~15 giây</td>
+        <td>Sau khi individual stats đã được tính</td>
+      </tr>
+      <tr>
+        <td>Tổng batch job</td>
+        <td>~2–3 phút</td>
+        <td>Ba jobs tuần tự</td>
+      </tr>
+    </tbody>
+  </table>
+  </div>
+
+  <div class="callout info">
+    <strong>Single-node limitation:</strong> <code>spark.sql.shuffle.partitions=3</code> (thay vì default 200) vì chạy local mode. Với nhiều coin hơn hoặc tick-by-tick data (hàng triệu records/ngày), cần Spark cluster thực với YARN hoặc Kubernetes.
+  </div>
+
+  <!-- ═══════════════════════════════════════════
+       E2E TEST CONTRACT
+  ════════════════════════════════════════════ -->
+  <h2>E2E Test Contract (Layer 2)</h2>
+  <p>File: <code>tests/e2e/test_batch_mongo.py</code>. Xác nhận Spark Batch Job tạo ra đúng aggregation và ghi vào MongoDB với schema hợp lệ:</p>
+
+  <div class="table-wrap">
+  <table>
+    <thead>
+      <tr><th>Class</th><th>Test</th><th>Assertion</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td rowspan="4"><strong>TestDailyStats</strong></td>
+        <td><code>test_row_count_positive</code></td>
+        <td>Collection không rỗng sau batch job</td>
+      </tr>
+      <tr>
+        <td><code>test_only_btc_and_doge</code></td>
+        <td>Scope coins đúng — không có ETH hay coin khác</td>
+      </tr>
+      <tr>
+        <td><code>test_required_columns</code></td>
+        <td>Schema contract: date, close, volume, avg_price, price_std</td>
+      </tr>
+      <tr>
+        <td><code>test_prices_are_positive</code></td>
+        <td>Data quality: không có giá âm hoặc zero</td>
+      </tr>
+      <tr>
+        <td rowspan="3"><strong>TestHistoricalSma</strong></td>
+        <td><code>test_row_count_matches</code></td>
+        <td>SMA count = daily_stats count (join không mất rows)</td>
+      </tr>
+      <tr>
+        <td><code>test_has_sma_columns</code></td>
+        <td>SMA-7, SMA-14, SMA-30, SMA-90 đều tồn tại</td>
+      </tr>
+      <tr>
+        <td><code>test_only_btc_and_doge</code></td>
+        <td>Coin scope nhất quán với daily_stats</td>
+      </tr>
+      <tr>
+        <td rowspan="4"><strong>TestCoinCorrelation</strong></td>
+        <td><code>test_exactly_one_pair</code></td>
+        <td>Chỉ 1 pair BTC-DOGE, không duplicate</td>
+      </tr>
+      <tr>
+        <td><code>test_pair_is_btc_doge</code></td>
+        <td>Coin names đúng (bitcoin, dogecoin)</td>
+      </tr>
+      <tr>
+        <td><code>test_pearson_value_in_range</code></td>
+        <td>Correlation ∈ [−1, 1] — mathematical constraint</td>
+      </tr>
+      <tr>
+        <td><code>test_no_ethereum</code></td>
+        <td>ETH không xuất hiện — scope isolation</td>
+      </tr>
+    </tbody>
+  </table>
+  </div>
+</main>
+</div>
+<script>
+function toggleNav(btn){var nav=document.getElementById("sidebar-nav");var overlay=document.getElementById("nav-overlay");var isOpen=nav.classList.toggle("open");overlay.classList.toggle("open",isOpen);btn.setAttribute("aria-expanded",isOpen);btn.setAttribute("aria-label",isOpen?"Đóng menu":"Mở menu điều hướng");}
+function closeNav(){var nav=document.getElementById("sidebar-nav");var overlay=document.getElementById("nav-overlay");var btn=document.querySelector(".nav-toggle");nav.classList.remove("open");overlay.classList.remove("open");if(btn){btn.setAttribute("aria-expanded","false");btn.setAttribute("aria-label","Mở menu điều hướng");}}
+document.addEventListener("keydown",function(e){if(e.key==="Escape")closeNav();});
+</script>
+</body>
+</html>

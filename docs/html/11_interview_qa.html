@@ -1,0 +1,430 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Phản biện Q&A — CS315</title>
+<link rel="stylesheet" href="style.css">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/prism-themes@1.9.0/themes/prism-vsc-dark-plus.min.css" crossorigin="anonymous">
+<script defer src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-core.min.js" crossorigin="anonymous"></script>
+<script defer src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/plugins/autoloader/prism-autoloader.min.js" crossorigin="anonymous"></script>
+</head>
+<body>
+<a href="#main-content" class="skip-link">Bỏ qua điều hướng</a>
+<button class="nav-toggle" aria-label="Mở menu điều hướng" aria-expanded="false" aria-controls="sidebar-nav" onclick="toggleNav(this)">☰</button>
+<div class="nav-overlay" id="nav-overlay" onclick="closeNav()"></div>
+<div class="layout">
+<nav id="sidebar-nav" aria-label="Điều hướng trang">
+  <div class="logo"><h2>CS315.F12.CN2</h2><p>Lê Quang Hoài Đức · 25410034</p></div>
+  <div class="nav-group"><div class="nav-label">Tổng quan</div>
+    <a href="index.html">🏠 Trang chủ</a>
+    <a href="01_architecture.html">🏗️ Lambda Architecture</a>
+  </div>
+  <div class="nav-group"><div class="nav-label">Data Pipeline</div>
+    <a href="02_producer.html">📡 CoinGecko Producer</a>
+    <a href="03_spark_streaming.html">⚡ Spark Streaming</a>
+    <a href="04_spark_batch.html">📦 Spark Batch</a>
+    <a href="05_mongodb.html">🗄️ MongoDB</a>
+  </div>
+  <div class="nav-group"><div class="nav-label">ML Pipeline</div><a href="06_lstm.html">🧠 LSTM Model</a></div>
+  <div class="nav-group"><div class="nav-label">Serving Layer</div>
+    <a href="07_api.html">🔌 FastAPI Backend</a>
+    <a href="08_frontend.html">🖥️ React + Streamlit</a>
+  </div>
+  <div class="nav-group"><div class="nav-label">Quality & Ops</div>
+    <a href="09_testing.html">🧪 E2E Testing</a>
+    <a href="10_deployment.html">🐳 Docker Compose</a>
+    <a href="11_interview_qa.html" class="active">🎯 Phản biện Q&A <span class="badge">HOT</span></a>
+  </div>
+</nav>
+<main id="main-content" role="main">
+  <a href="index.html" class="back-link">← Trang chủ</a>
+  <h1>Câu hỏi Phản biện — Q&amp;A
+    <span class="sub">25+ câu hỏi thường gặp trong buổi bảo vệ đồ án CS315</span>
+  </h1>
+
+  <div class="callout warning">
+    <strong>Cách dùng trang này:</strong> Đọc câu hỏi, thử trả lời trong đầu trước khi đọc đáp án. Mỗi câu trả lời có 3-5 điểm chính — chỉ cần nhớ điểm chính, không cần thuộc lòng từng chữ. Số liệu quan trọng nhất: 4.165 ngày, 9 features, 60 seq_len, 7-day forecast, 61.1% dir acc.
+  </div>
+
+  <!-- ═══════════════════════════════════════════
+       KIẾN TRÚC
+  ════════════════════════════════════════════ -->
+  <h2>Kiến trúc Hệ thống</h2>
+
+  <div class="qa-item">
+    <div class="qa-q">1. Tại sao chọn Lambda Architecture thay vì Kappa Architecture?</div>
+    <div class="qa-a">
+      <p>Ba lý do cụ thể, không phải abstract:</p>
+      <ul>
+        <li><strong>LSTM cần batch training nhất quán:</strong> Model cần rolling window 730 ngày được preprocessing với cùng StandardScaler fit một lần trên fixed dataset. Stream processing fit scaler incremental → scaler thay đổi theo thời gian → model inference sai khi giá trị mới ra ngoài range training.</li>
+        <li><strong>Chi phí reprocessing không cần thiết:</strong> SMA-90 và rolling correlation 30 ngày phải scan 4.165 ngày mỗi khi có update mới. Với Batch Layer, tính một lần mỗi ngày, cache trong MongoDB. Với Kappa, phải reprocess toàn bộ mỗi khi có tick mới.</li>
+        <li><strong>Hai SLA khác nhau:</strong> Historical correlation (batch) cần correctness trên full dataset. Realtime RSI/VWAP (speed) cần latency dưới 1 giây. Một hệ thống không thể đáp ứng cả hai — Lambda giải quyết độc lập.</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="qa-item">
+    <div class="qa-q">2. Tại sao dùng foreachBatch thay vì MongoDB Spark Connector?</div>
+    <div class="qa-a">
+      <ul>
+        <li><strong>MongoDB Spark Connector vấn đề checkpointing:</strong> <code>com.mongodb.spark</code> không ổn định trong Spark Structured Streaming mode — checkpoint state bị corrupt sau restart.</li>
+        <li><strong>foreachBatch + PyMongo = exactly-once:</strong> Pattern delete_many(batch_id) → insert_many. Nếu micro-batch bị retry (Spark failure), delete trước khi insert loại bỏ duplicates. Chạy lại với cùng batch_id cho kết quả y hệt.</li>
+        <li><strong>Kiểm soát tốt hơn:</strong> Retry logic, error handling, schema validation nằm trong Python code — dễ debug và test. Không phụ thuộc vào Spark Connector configuration.</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="qa-item">
+    <div class="qa-q">3. Tại sao dùng MongoDB thay vì PostgreSQL hoặc Cassandra?</div>
+    <div class="qa-a">
+      <ul>
+        <li><strong>Flexible schema:</strong> Các collections có document structure khác nhau (realtime_prices 18 fields, predictions 7 fields, alerts 5 fields). MongoDB không cần ALTER TABLE khi thêm field mới.</li>
+        <li><strong>Single serving store:</strong> Đơn giản hóa — không phải maintain 2-3 databases với sync logic. Tất cả writers/readers dùng cùng 1 connection string.</li>
+        <li><strong>Throughput thấp nên MongoDB đủ:</strong> Với poll interval 600s, chỉ có 2 messages/10 phút. Không cần time series database chuyên dụng như InfluxDB hay Cassandra.</li>
+        <li><strong>Giới hạn thừa nhận:</strong> Nếu scale lên hàng triệu ticks/ngày, InfluxDB hoặc Cassandra phù hợp hơn. Nhưng với bài toán này, MongoDB là over-engineered đủ.</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="qa-item">
+    <div class="qa-q">4. Tại sao Kafka cần acks=all? Acks=1 không đủ sao?</div>
+    <div class="qa-a">
+      <ul>
+        <li><strong>acks=1 vấn đề:</strong> Leader broker xác nhận nhận message, nhưng chưa chắc đã replicate. Nếu leader crash trước khi replicate → message mất vĩnh viễn.</li>
+        <li><strong>acks=all đảm bảo:</strong> Tất cả ISR (In-Sync Replicas) xác nhận → message không mất dù leader crash sau khi acknowledge.</li>
+        <li><strong>Hậu quả mất tick giá:</strong> Gap trong time series → SMA-5 tính trên 4 điểm thay vì 5 → sai. RSI-14 trên 13 điểm → sai. Các indicators downstream đều bị ảnh hưởng.</li>
+        <li><strong>Kết hợp max_in_flight_requests_per_connection=1:</strong> Đảm bảo message ordering khi retry. Nếu để &gt;1 và retry xảy ra, messages có thể đến sai thứ tự.</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="qa-item">
+    <div class="qa-q">5. Watermark 10 phút trong Spark Streaming có nghĩa gì? Tại sao 10 phút?</div>
+    <div class="qa-a">
+      <ul>
+        <li><strong>Watermark định nghĩa:</strong> Spark chấp nhận xử lý data trễ tối đa 10 phút sau event_time đã qua. Data trễ hơn 10 phút bị discard (không xử lý).</li>
+        <li><strong>Không có watermark → OOM:</strong> Spark giữ state cho tất cả windows chưa đóng → RAM tăng không giới hạn → OutOfMemory sau vài ngày running.</li>
+        <li><strong>Tại sao 10 phút:</strong> Producer poll mỗi 600 giây (10 phút). Nếu một poll bị delay vì network chậm, data sẽ đến trễ tối đa ~1 poll cycle. Watermark = poll interval = không bỏ sót data hợp lệ trong điều kiện mạng bình thường.</li>
+      </ul>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════════════════════════
+       MACHINE LEARNING
+  ════════════════════════════════════════════ -->
+  <h2>Machine Learning</h2>
+
+  <div class="qa-item">
+    <div class="qa-q">6. Tại sao dùng LSTM thay vì Transformer/BERT cho time series?</div>
+    <div class="qa-a">
+      <ul>
+        <li><strong>Dataset quá nhỏ cho Transformer:</strong> Chỉ có ~4.000 ngày lịch sử = ~3.000 training samples sau sliding window. Transformer cần 10k+ samples để train hiệu quả và không overfit.</li>
+        <li><strong>Sequential inductive bias:</strong> LSTM có built-in assumption rằng data là sequential — đúng với time series tài chính. Transformer phải học temporal ordering từ đầu qua positional encoding.</li>
+        <li><strong>Complexity phù hợp:</strong> LSTM 2 lớp ~220K params phù hợp với dataset size. Transformer tương đương sẽ overfit trầm trọng.</li>
+        <li><strong>Hướng cải tiến:</strong> Temporal Fusion Transformer (TFT) có attention mechanism giải thích được, phù hợp cho bài toán tài chính với nhiều data hơn. Đây là hướng phát triển tiếp theo.</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="qa-item">
+    <div class="qa-q">7. Tại sao dùng MIMO thay vì Autoregressive forecasting?</div>
+    <div class="qa-a">
+      <ul>
+        <li><strong>Autoregressive tích lũy lỗi:</strong> Predict t+1, dùng làm input cho t+2, ... Nếu t+1 sai 2%, t+7 có thể sai 14% (error propagation). Với crypto volatile, lỗi nhỏ ban đầu phóng đại nhanh.</li>
+        <li><strong>MIMO (Multiple Input Multiple Output):</strong> Predict tất cả 7 steps trong 1 forward pass từ h_T. Không có error accumulation — tất cả predictions độc lập nhau.</li>
+        <li><strong>Confidence interval từ Volatility Head:</strong> MIMO + Volatility Head cho confidence band cho cả 7 steps. Autoregressive phải làm nhiều forward passes để estimate uncertainty.</li>
+        <li><strong>Trade-off:</strong> MIMO không cho per-step uncertainty từ LSTM. Volatility Head bù đắp bằng cách predict confidence band riêng.</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="qa-item">
+    <div class="qa-q">8. Tại sao Walk-Forward thay vì K-Fold Cross-Validation?</div>
+    <div class="qa-a">
+      <ul>
+        <li><strong>K-Fold gây temporal leakage:</strong> Shuffle ngẫu nhiên → fold train trên data tháng 6/2025, test trên tháng 3/2025 → model "nhìn thấy tương lai" khi training. Directional accuracy ~65-70% với K-Fold là ảo.</li>
+        <li><strong>Walk-Forward tôn trọng thứ tự thời gian:</strong> Fold k luôn train trên [t0, tk), validate trên [tk, tk+Δ). Không có overlap và không có temporal leakage.</li>
+        <li><strong>Rolling window 730 ngày:</strong> Simulate realistic production scenario — model chỉ dùng 2 năm data gần nhất, không expand vô hạn. Phù hợp với đặc tính crypto thay đổi regime nhanh.</li>
+        <li><strong>Số liệu thực tế:</strong> Walk-forward cho 49.4% dir acc (realistic), backtest trên 6 tháng unseen data cho 61.1%. Hai kết quả này cùng nhau cho đánh giá toàn diện nhất.</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="qa-item">
+    <div class="qa-q">9. Tại sao dùng log_return thay vì price trực tiếp làm feature và target?</div>
+    <div class="qa-a">
+      <ul>
+        <li><strong>Price không dừng (non-stationary):</strong> ADF test BTC price → p-value = 0.683 → không reject unit root hypothesis → random walk. LSTM train trên non-stationary series không generalize tốt.</li>
+        <li><strong>Log-return dừng mạnh:</strong> ADF test BTC log-return → p ≈ 0 → strongly stationary. Model có thể học patterns ổn định, không bị drift theo thời gian.</li>
+        <li><strong>Cộng dồn được:</strong> R(t, t+k) = Σ r(t+i) — dễ reconstruct price USD từ cumulative log-returns. price_t+k = last_price × exp(cumsum(log_returns)).</li>
+        <li><strong>Đơn vị tương đối và scale-invariant:</strong> Return 5% có cùng ý nghĩa dù giá $100 hay $100.000. Giúp model generalize qua các mức giá khác nhau trong lịch sử 11 năm.</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="qa-item">
+    <div class="qa-q">10. Tại sao dùng StandardScaler thay vì MinMaxScaler?</div>
+    <div class="qa-a">
+      <ul>
+        <li><strong>MinMaxScaler giới hạn range [0,1]:</strong> Dựa trên min/max trong training set. Nếu test set có giá trị ngoài range (BTC đạt đỉnh mới $124.753, vượt max training), feature sẽ &gt;1 hoặc &lt;0 — LSTM không thấy pattern này khi training.</li>
+        <li><strong>StandardScaler (z-score) robust hơn:</strong> Dựa trên mean và std. Giá trị ngoài training range vẫn có z-score hợp lý (z=3 = 3 std above mean) — LSTM vẫn hiểu được vị trí tương đối.</li>
+        <li><strong>Crypto có outlier mạnh:</strong> DOGE kurtosis 77.02 → rất nhiều extreme values. StandardScaler ít bị ảnh hưởng bởi outlier hơn MinMaxScaler.</li>
+        <li><strong>Scaler fit chỉ trên train:</strong> Val và test được transform bằng scaler của train tương ứng — tránh look-ahead bias từ future statistics.</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="qa-item">
+    <div class="qa-q">11. Tại sao sequence length = 60? Tại sao không 30 hoặc 90?</div>
+    <div class="qa-a">
+      <ul>
+        <li><strong>60 ngày ≈ 2 tháng:</strong> Capture được short-term momentum (1-2 tuần) và medium-term trend (1-2 tháng). Với crypto, market cycle thường 4-8 tuần.</li>
+        <li><strong>Trade-off:</strong> Quá ngắn (30 ngày) → không đủ context cho trend. Quá dài (120 ngày) → nhiều noise từ distant past, BPTT (Backpropagation Through Time) khó hơn, training chậm hơn.</li>
+        <li><strong>Practical constraint:</strong> SMA-30 warmup cần 30 rows. seq_len=60 yêu cầu load 60+30=90 rows mỗi inference. Balanced.</li>
+        <li><strong>Adaptive seq_len:</strong> Cho horizon 15 ngày, dùng seq_len=90. Cho horizon 60 ngày, seq_len=120 — HORIZON_SEQ_LEN_MAP adaptive theo forecast horizon.</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="qa-item">
+    <div class="qa-q">12. Tại sao Softplus trong Volatility Head thay vì ReLU hoặc e^x?</div>
+    <div class="qa-a">
+      <ul>
+        <li><strong>Volatility phải &gt; 0:</strong> Standard deviation luôn dương — output âm là phi lý.</li>
+        <li><strong>ReLU vấn đề dying neurons:</strong> ReLU = max(0, x) → gradient = 0 khi x &lt; 0. Nếu nhiều activations âm, neurons "chết" và không update nữa — Volatility Head không học được.</li>
+        <li><strong>e^x vấn đề overflow:</strong> Với x lớn (e.g., x=100), e^100 = 2.7e43 → NaN trong float32. Numerically unstable.</li>
+        <li><strong>Softplus = ln(1+e^x):</strong> Luôn &gt; 0. Gradient = sigmoid(x) → luôn ≠ 0 (không có dying neurons). Smooth không có kink. Numerically stable (không overflow).</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="qa-item">
+    <div class="qa-q">13. fear_greed = 0.5 constant — đây có phải vấn đề nghiêm trọng không?</div>
+    <div class="qa-a">
+      <ul>
+        <li><strong>Thừa nhận thẳng thắn:</strong> Đây là placeholder được biết rõ. Feature không đóng góp thông tin thực sự vào model.</li>
+        <li><strong>Tác động thực tế tối thiểu:</strong> Sau StandardScaler, constant feature có std=0 → z-score = 0 với thể mọi giá trị. Model học weight ≈ 0 cho feature này. Xóa feature 8 sẽ không làm giảm performance đáng kể.</li>
+        <li><strong>Giải pháp:</strong> Tích hợp Alternative.me Fear &amp; Greed Index API (1 call/ngày, miễn phí). Hoặc tính proxy từ price + volume (high realized vol → fear, giá tăng mạnh → greed).</li>
+        <li><strong>Lý do giữ lại:</strong> Giữ N_FEATURES=9 nhất quán, placeholder cho future improvement. Software engineering decision.</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="qa-item">
+    <div class="qa-q">14. Model đạt 61.1% directional accuracy — điều này có ý nghĩa thực tiễn không?</div>
+    <div class="qa-a">
+      <ul>
+        <li><strong>Statistical significance:</strong> 18 windows là sample nhỏ. Confidence interval rộng. Cần 50+ windows để kết luận chắc chắn về edge &gt;50%.</li>
+        <li><strong>Vượt random 11.1 điểm %:</strong> 61.1% vs 50% random baseline. Mean Error = 0.37% — không có systematic bias theo một chiều.</li>
+        <li><strong>Practical trading caveat:</strong> Edge 11% không đủ profitable sau transaction costs và slippage. Nhưng có thể dùng như một signal trong ensemble strategy.</li>
+        <li><strong>Honest evaluation:</strong> Backtest với hindsight bias — thực tế deploy sẽ thấp hơn. Inference Scheduler track accuracy rolling theo thời gian thực — đây là honest long-term evaluation.</li>
+        <li><strong>Failure mode:</strong> Sideway market → dir acc xuống 38.9%. Model tốt nhất khi thị trường có xu hướng rõ.</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="qa-item">
+    <div class="qa-q">15. Tại sao chọn 9 features? Cơ sở gì để chọn bộ này?</div>
+    <div class="qa-a">
+      <ul>
+        <li><strong>Mỗi feature nhóm nắm bắt một khía cạnh khác nhau:</strong> Momentum (log_return_1d, momentum_30d), Volatility (realized_vol_14d, atr_norm), Oscillator (RSI_14, macd_norm, bb_pct_b), Volume (log_volume), Sentiment (fear_greed).</li>
+        <li><strong>Tính dừng:</strong> Tất cả features (trừ fear_greed constant) đều dừng hoặc bounded — đảm bảo mô hình học patterns ổn định.</li>
+        <li><strong>Ít redundancy:</strong> Correlation matrix cho thấy hầu hết features có r thấp với nhau. Ngoại lệ: atr_norm và realized_vol_14d r≈0.7 — chấp nhận được vì đo volatility ở thang thời gian khác nhau.</li>
+        <li><strong>v3 thay đổi:</strong> Thêm realized_vol_14d (input cho Volatility Head), thay log_return_7d bằng momentum_30d (ít redundancy hơn với log_return_1d).</li>
+      </ul>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════════════════════════
+       DỮ LIỆU
+  ════════════════════════════════════════════ -->
+  <h2>Dữ liệu và Feature Engineering</h2>
+
+  <div class="qa-item">
+    <div class="qa-q">16. Tại sao chọn BTC và DOGE? Tại sao không thêm ETH?</div>
+    <div class="qa-a">
+      <ul>
+        <li><strong>Rate limiting CoinGecko demo tier:</strong> 10k calls/month. BTC + DOGE: 7.200 calls/month (72% budget). Thêm ETH sẽ thêm ~2.160 price + ~1.440 OHLC = 3.600 calls → exceed quota.</li>
+        <li><strong>Tương quan thú vị cho phân tích:</strong> BTC-DOGE r = 0.528 — có tương quan dương vừa phải nhưng DOGE có dynamics riêng (pump độc lập). Đủ để phân tích correlation meaningfully.</li>
+        <li><strong>Contrast rõ ràng:</strong> BTC = store of value (serious crypto), DOGE = meme coin. Hai loại tài sản khác nhau về risk profile, kurtosis, max drawdown (-83.64% vs -92.21%).</li>
+        <li><strong>ETH có thể thêm:</strong> Bằng cách tăng poll interval lên 900s hoặc dùng Paid tier. Đây là natural extension.</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="qa-item">
+    <div class="qa-q">17. Tại sao kiểm định ADF quan trọng với bài toán này?</div>
+    <div class="qa-a">
+      <ul>
+        <li><strong>Non-stationary series → model không generalize:</strong> Nếu price series có trend (BTC: ADF p=0.683, không dừng), LSTM học "trend chung" thay vì "pattern" → overfit vào mean level của training period.</li>
+        <li><strong>Log-return stationary:</strong> ADF p≈0 cho cả BTC và DOGE log-return. Model học trên stationary space → features có distribution ổn định qua thời gian → generalize tốt hơn.</li>
+        <li><strong>DOGE special case:</strong> ADF p=0.0105 cho DOGE price — "dừng" theo test nhưng đây là artifact của các pump đột biến. Thực tế DOGE price không dừng về kinh tế. Log-return (p≈0) là không gian an toàn hơn.</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="qa-item">
+    <div class="qa-q">18. Adaptive-threshold labelling là gì? Tại sao không dùng ngưỡng tuyệt đối (UP = return > 0)?</div>
+    <div class="qa-a">
+      <ul>
+        <li><strong>Class imbalance với ngưỡng tuyệt đối:</strong> Nếu UP = return &gt; 0, và mean log-return = +0.0014 (dương nhỏ), thì UP chiếm &gt;50% ngày. Class imbalance khiến model bias về một chiều.</li>
+        <li><strong>Adaptive-threshold theo median:</strong> y_dir[k] = UP nếu y[k] &gt; median(y_train[:, k]). Median chia dataset đúng 50-50 → balanced classes → model không bias.</li>
+        <li><strong>Hệ quả:</strong> UP/DOWN là tương đối so với median, không phải tuyệt đối. Điều này cần lưu ý khi diễn giải directional accuracy — đúng chiều nghĩa là "cao hơn/thấp hơn mức trung bình của training set", không phải "tăng/giảm giá tuyệt đối".</li>
+      </ul>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════════════════════════
+       SPARK & DATA PROCESSING
+  ════════════════════════════════════════════ -->
+  <h2>Spark &amp; Data Processing</h2>
+
+  <div class="qa-item">
+    <div class="qa-q">19. Spark Streaming dùng outputMode gì? Tại sao?</div>
+    <div class="qa-a">
+      <ul>
+        <li><strong>Query A và B đều dùng <code>outputMode("append")</code>.</strong> Với watermark, window chỉ output sau khi đóng (sau event_time + watermark delay). Mỗi window/record chỉ được output một lần duy nhất.</li>
+        <li><strong>outputMode("complete") không phù hợp:</strong> Re-output toàn bộ aggregation state mỗi micro-batch → volume tăng không giới hạn theo thời gian.</li>
+        <li><strong>outputMode("update") có thể dùng:</strong> Chỉ output rows đã thay đổi. Nhưng append + watermark đơn giản hơn và đủ cho use case này.</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="qa-item">
+    <div class="qa-q">20. Tại sao Spark Streaming trigger processingTime 30 giây?</div>
+    <div class="qa-a">
+      <ul>
+        <li><strong>Producer poll mỗi 600 giây:</strong> Trong 30 giây thường không có data mới → micro-batch rỗng hoặc rất nhỏ. 30 giây là trade-off hợp lý.</li>
+        <li><strong>Giảm xuống 5 giây:</strong> Overhead của nhiều micro-batch trống (29/30 batches trống). Spark overhead mỗi batch: context switching, checkpoint, etc.</li>
+        <li><strong>Tăng lên 60 giây:</strong> Latency display cao hơn nhưng không có benefit rõ ràng vì producer vẫn poll 600s.</li>
+        <li><strong>Với dữ liệu WebSocket (tick-by-tick):</strong> Có thể dùng continuous trigger với micro-batch thật sự nhỏ. Với poll-based ingestion, processTime trigger hợp lý hơn.</li>
+      </ul>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════════════════════════
+       API & INFRASTRUCTURE
+  ════════════════════════════════════════════ -->
+  <h2>API &amp; Infrastructure</h2>
+
+  <div class="qa-item">
+    <div class="qa-q">21. Tại sao JWT thay vì Session-based authentication?</div>
+    <div class="qa-a">
+      <ul>
+        <li><strong>Stateless:</strong> JWT không cần server lưu session state → không cần shared session store (Redis) giữa FastAPI instances → scale horizontally dễ.</li>
+        <li><strong>Microservices ready:</strong> Nếu thêm service mới cần auth, chỉ cần share SECRET_KEY — không cần centralized session DB.</li>
+        <li><strong>Mobile/SPA friendly:</strong> Token lưu ở client (localStorage), không phụ thuộc cookie mechanism.</li>
+        <li><strong>Trade-off:</strong> JWT không thể revoke ngay lập tức — phải đợi expire (TTL 24h). Session có thể delete ngay. TTL 24h là acceptable trade-off cho use case này.</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="qa-item">
+    <div class="qa-q">22. Tại sao Docker Compose thay vì Kubernetes?</div>
+    <div class="qa-a">
+      <ul>
+        <li><strong>Scale phù hợp:</strong> Hệ thống chạy trên single machine. Kubernetes cho multi-node cluster — overkill và không cần thiết.</li>
+        <li><strong>Complexity:</strong> K8s cần YAML manifests, services, ingress, PVC, secrets management, RBAC... Docker Compose: 1 file YAML, <code>make docker-up</code>.</li>
+        <li><strong>Learning curve:</strong> Docker Compose đủ để demo Lambda Architecture mà không che khuất các concepts chính của đề tài.</li>
+        <li><strong>Migration path:</strong> Docker Compose → Docker Swarm → Kubernetes là natural path khi cần scale lên multi-node hoặc multi-datacenter.</li>
+      </ul>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════════════════════════
+       TESTING
+  ════════════════════════════════════════════ -->
+  <h2>Testing</h2>
+
+  <div class="qa-item">
+    <div class="qa-q">23. Tại sao E2E tests dùng real Kafka container thay vì mock?</div>
+    <div class="qa-a">
+      <ul>
+        <li><strong>Mock không đủ:</strong> Mock Kafka chỉ verify "producer.send() được gọi với đúng arguments" — không verify message thực sự được delivered, serialized đúng, và consumer có thể đọc và parse lại.</li>
+        <li><strong>Integration failures chỉ xảy ra với real Kafka:</strong> Serialization bugs, schema mismatch giữa producer và consumer, partition assignment issues, offset management — tất cả chỉ xuất hiện với real broker.</li>
+        <li><strong>testcontainers:</strong> Spin up real Kafka container trong test, cô lập, reproducible, không cần external Kafka service. Tear down sau mỗi test suite.</li>
+        <li><strong>Chỉ mock CoinGecko API:</strong> External HTTP dependency — mock để kiểm soát input data và tránh phụ thuộc network/quota.</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="qa-item">
+    <div class="qa-q">24. test_upsert_idempotency quan trọng như thế nào?</div>
+    <div class="qa-a">
+      <ul>
+        <li><strong>Số lượng:</strong> Inference Scheduler chạy mỗi 5 phút = 288 lần/ngày = 8.640 lần/tháng. Không idempotent → sau 1 tháng = 60.480 duplicate predictions/coin.</li>
+        <li><strong>Test scenario:</strong> Chạy inference 2 lần liên tiếp với cùng data → count documents = 7 (không phải 14). Upsert key (coin, prediction_date) đảm bảo tối đa 1 prediction/coin/ngày.</li>
+        <li><strong>Restart safety:</strong> Hệ thống có thể restart bất kỳ lúc nào (Docker restart policy, container OOM) mà không gây data corruption.</li>
+        <li><strong>Đây là safety net quan trọng nhất của Layer 3.</strong></li>
+      </ul>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════════════════════════
+       GIỚI HẠN VÀ CẢI TIẾN
+  ════════════════════════════════════════════ -->
+  <h2>Giới hạn và Hướng cải tiến</h2>
+
+  <div class="qa-item">
+    <div class="qa-q">25. Hệ thống có những giới hạn gì? Nếu phải cải thiện, bạn làm gì trước?</div>
+    <div class="qa-a">
+      <p>Năm giới hạn kỹ thuật chính, được xếp theo mức độ ảnh hưởng thực tế:</p>
+      <ul>
+        <li><strong>1. Model không tự retrain (ưu tiên cao nhất):</strong> Inference Scheduler chỉ chạy inference, không retrain. Khi market regime thay đổi (bull→bear), model sẽ degradate mà không tự phát hiện. → Cần weekly retrain cron job với walk-forward evaluation để detect performance drop.</li>
+        <li><strong>2. fear_greed placeholder:</strong> Feature = 0.5 constant, không đóng góp. → Tích hợp Alternative.me API (free, 1 call/ngày).</li>
+        <li><strong>3. Thiếu OHLC đầy đủ:</strong> CoinGecko daily chỉ có close/volume. ATR proxy = |log_return_1d| thay vì True Range. → Dùng Binance WebSocket API (có OHLC đầy đủ, miễn phí).</li>
+        <li><strong>4. Single-node Spark local mode:</strong> Không scale với nhiều coin hoặc tick-by-tick data. → Spark cluster với YARN hoặc EMR nếu cần scale.</li>
+        <li><strong>5. Horizon dài hạn không hiệu quả:</strong> Directional accuracy chỉ 50% (random) cho horizon 15 và 60 ngày. LSTM không phù hợp cho dự đoán dài hạn crypto. → Ensemble model hoặc TFT cho horizon dài.</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="qa-item">
+    <div class="qa-q">26. Nếu CoinGecko API thay đổi schema, hệ thống bị ảnh hưởng thế nào?</div>
+    <div class="qa-a">
+      <ul>
+        <li><strong>Producer graceful defaults:</strong> <code>transform_to_record()</code> dùng <code>.get("usd", 0.0)</code> — graceful default cho trường missing. Không crash nhưng có thể ghi giá = 0.</li>
+        <li><strong>Kafka message schema là contract:</strong> Nếu thêm field mới, Spark Streaming CRYPTO_SCHEMA cần update (nullable field an toàn). Nếu xóa field bắt buộc → Spark parse error downstream.</li>
+        <li><strong>E2E test sẽ catch ngay:</strong> <code>test_message_schema_is_complete</code> verify REQUIRED_FIELDS. Schema change → test fail → developer được alert ngay mà không cần manual check.</li>
+        <li><strong>Mitigation dài hạn:</strong> Schema Registry (Confluent) để version schema Kafka messages, đảm bảo backward compatibility.</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="qa-item">
+    <div class="qa-q">27. Model có thể overfit không? Làm sao biết và ngăn chặn?</div>
+    <div class="qa-a">
+      <ul>
+        <li><strong>Dấu hiệu overfit:</strong> Training loss giảm liên tục nhưng validation loss tăng sau best checkpoint — đường cong loss curves trong báo cáo cho thấy pattern này.</li>
+        <li><strong>Biện pháp ngăn chặn:</strong> Early stopping (patience=7), dropout 0.2 trong LSTM layers, dropout 0.1 trong heads, gradient clipping max_norm=1.0, weight decay 1e-5.</li>
+        <li><strong>Validation:</strong> Walk-forward với 6 folds unseen validation sets + backtest 6 tháng data hoàn toàn unseen. Directional accuracy thực tế (49.4% WF, 61.1% backtest) là honest evaluation — không inflate bởi overfitting.</li>
+        <li><strong>Fear &amp; greed constant ironically helps:</strong> Constant feature sau StandardScaler = z-score 0 → implicit L1-like regularization cho weight của feature đó.</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="qa-item">
+    <div class="qa-q">28. Direction-weighted Huber Loss — tại sao weight = 3 khi sai chiều?</div>
+    <div class="qa-a">
+      <ul>
+        <li><strong>Hành vi nhà đầu tư:</strong> Nhà đầu tư quan tâm đúng chiều (tăng/giảm) hơn đúng magnitude. Dự đoán lên +1% khi thực tế lên +5% là lỗi nhỏ. Dự đoán lên +1% khi thực tế xuống -5% là lỗi nghiêm trọng.</li>
+        <li><strong>w = 1 + 2×I[sai_chiều] = 3:</strong> Phạt gấp 3 lần khi dự đoán sai chiều. Tạo incentive rõ ràng để model ưu tiên đúng direction trước khi lo về magnitude.</li>
+        <li><strong>Tại sao 3, không phải 5 hay 10?</strong> Thực nghiệm cho thấy weight quá cao (5+) làm model overfit vào direction, bỏ qua magnitude hoàn toàn → RMSE tệ. Weight 3 là balance giữa direction incentive và magnitude accuracy.</li>
+        <li><strong>Kết hợp Huber (không phải MSE):</strong> Huber robust với fat tails (DOGE kurtosis 77). MSE bị dominated bởi crash/pump extreme events.</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="callout success">
+    <strong>Tip cuối cho buổi phản biện:</strong> Nếu không nhớ con số chính xác, hãy mô tả trend/pattern. Ví dụ: "Walk-forward fold trên trending market cho accuracy cao hơn sideway khoảng 5-15 điểm %" — đúng hơn là im lặng. Con số quan trọng cần nhớ: <strong>4.165 ngày</strong>, <strong>9 features</strong>, <strong>seq_len=60</strong>, <strong>7-day horizon</strong>, <strong>61.1% dir acc (backtest H7)</strong>, <strong>6 walk-forward folds × 60 ngày</strong>, <strong>730-ngày rolling window</strong>.
+  </div>
+</main>
+</div>
+<script>
+function toggleNav(btn){var nav=document.getElementById("sidebar-nav");var overlay=document.getElementById("nav-overlay");var isOpen=nav.classList.toggle("open");overlay.classList.toggle("open",isOpen);btn.setAttribute("aria-expanded",isOpen);btn.setAttribute("aria-label",isOpen?"Đóng menu":"Mở menu điều hướng");}
+function closeNav(){var nav=document.getElementById("sidebar-nav");var overlay=document.getElementById("nav-overlay");var btn=document.querySelector(".nav-toggle");nav.classList.remove("open");overlay.classList.remove("open");if(btn){btn.setAttribute("aria-expanded","false");btn.setAttribute("aria-label","Mở menu điều hướng");}}
+document.addEventListener("keydown",function(e){if(e.key==="Escape")closeNav();});
+</script>
+</body>
+</html>

@@ -1,0 +1,21 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npm *)",
+      "Bash(npx *)",
+      "Bash(node *)",
+      "Bash(open docs/html/*)",
+      "Bash(open src/frontend/*)",
+      "Write(docs/html/*)",
+      "Edit(docs/html/*)",
+      "Write(src/frontend/src/*)",
+      "Edit(src/frontend/src/*)",
+      "WebFetch(domain:fonts.googleapis.com)",
+      "WebFetch(domain:fonts.gstatic.com)",
+      "WebFetch(domain:cdnjs.cloudflare.com)",
+      "WebFetch(domain:unpkg.com)",
+      "WebFetch(domain:cdn.jsdelivr.net)",
+      "WebFetch(domain:skills.sh)"
+    ]
+  }
+}

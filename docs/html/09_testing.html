@@ -1,0 +1,388 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>E2E Testing — CS315</title>
+<link rel="stylesheet" href="style.css">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/prism-themes@1.9.0/themes/prism-vsc-dark-plus.min.css" crossorigin="anonymous">
+<script defer src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-core.min.js" crossorigin="anonymous"></script>
+<script defer src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/plugins/autoloader/prism-autoloader.min.js" crossorigin="anonymous"></script>
+</head>
+<body>
+<a href="#main-content" class="skip-link">Bỏ qua điều hướng</a>
+<button class="nav-toggle" aria-label="Mở menu điều hướng" aria-expanded="false" aria-controls="sidebar-nav" onclick="toggleNav(this)">☰</button>
+<div class="nav-overlay" id="nav-overlay" onclick="closeNav()"></div>
+<div class="layout">
+<nav id="sidebar-nav" aria-label="Điều hướng trang">
+  <div class="logo"><h2>CS315.F12.CN2</h2><p>Lê Quang Hoài Đức · 25410034</p></div>
+  <div class="nav-group"><div class="nav-label">Tổng quan</div>
+    <a href="index.html">🏠 Trang chủ</a>
+    <a href="01_architecture.html">🏗️ Lambda Architecture</a>
+  </div>
+  <div class="nav-group"><div class="nav-label">Data Pipeline</div>
+    <a href="02_producer.html">📡 CoinGecko Producer</a>
+    <a href="03_spark_streaming.html">⚡ Spark Streaming</a>
+    <a href="04_spark_batch.html">📦 Spark Batch</a>
+    <a href="05_mongodb.html">🗄️ MongoDB</a>
+  </div>
+  <div class="nav-group"><div class="nav-label">ML Pipeline</div><a href="06_lstm.html">🧠 LSTM Model</a></div>
+  <div class="nav-group"><div class="nav-label">Serving Layer</div>
+    <a href="07_api.html">🔌 FastAPI Backend</a>
+    <a href="08_frontend.html">🖥️ React + Streamlit</a>
+  </div>
+  <div class="nav-group"><div class="nav-label">Quality & Ops</div>
+    <a href="09_testing.html" class="active">🧪 E2E Testing</a>
+    <a href="10_deployment.html">🐳 Docker Compose</a>
+    <a href="11_interview_qa.html">🎯 Phản biện Q&A <span class="badge">HOT</span></a>
+  </div>
+</nav>
+<main id="main-content" role="main">
+  <a href="index.html" class="back-link">← Trang chủ</a>
+  <h1>E2E Testing Strategy
+    <span class="sub">tests/ — 3 layer E2E tests + 7 unit test suites · testcontainers</span>
+  </h1>
+
+  <div class="callout info">
+    <strong>Nguyên tắc thiết kế:</strong> E2E tests dùng infrastructure <em>thật</em> (Kafka container, MongoDB container qua testcontainers). Chỉ mock CoinGecko API để kiểm soát input và tránh phụ thuộc network ngoài. Unit tests dùng mock/stub hoàn toàn và không cần infrastructure.
+  </div>
+
+  <!-- ═══════════════════════════════════════════
+       TEST PYRAMID
+  ════════════════════════════════════════════ -->
+  <h2>Test Pyramid</h2>
+  <div class="card-grid">
+    <div class="card accent-green">
+      <h3>Unit Tests — 7 suites</h3>
+      <p>Không cần Docker infrastructure. Chạy ngay với <code>make test</code>.</p>
+      <ul>
+        <li><code>test_lstm.py</code> — model forward pass, loss, output shapes</li>
+        <li><code>test_indicators.py</code> — SMA, RSI, VWAP, Bollinger correctness</li>
+        <li><code>test_batch_job.py</code> — aggregation logic</li>
+        <li><code>test_producer.py</code> — schema building, OHLC logic</li>
+        <li><code>test_mongo_writer.py</code> — upsert pattern</li>
+        <li><code>test_dashboard.py</code> — widget render, data loading</li>
+        <li><code>test_accuracy_tracker.py</code> — comparison logic, metric calculation</li>
+      </ul>
+    </div>
+    <div class="card accent-amber">
+      <h3>E2E Tests — 3 suites</h3>
+      <p>Cần Docker. Đánh dấu <code>@pytest.mark.e2e</code>. Chạy với <code>make e2e</code>. Loại khỏi default <code>pytest</code> run.</p>
+      <ul>
+        <li><code>test_producer_kafka.py</code> — Layer 1</li>
+        <li><code>test_batch_mongo.py</code> — Layer 2</li>
+        <li><code>test_ml_mongo.py</code> — Layer 3</li>
+      </ul>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════════════════════════
+       LAYER 1
+  ════════════════════════════════════════════ -->
+  <h2>Layer 1: Producer → Kafka</h2>
+  <p>File: <code>tests/e2e/test_producer_kafka.py</code></p>
+  <p>Xác nhận CoinGecko Producer hoạt động đúng với Kafka broker thật (testcontainers). Kafka container được spin up, Producer chạy 1 poll cycle, Consumer đọc và verify messages.</p>
+
+  <div class="table-wrap">
+  <table>
+    <thead>
+      <tr><th>Test Case</th><th>Assertion</th><th>Tại sao quan trọng</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><code>test_produces_two_messages_per_cycle</code></td>
+        <td>Đúng 2 messages: BTC + DOGE</td>
+        <td>Contract: mỗi cycle đúng 2 coin. Thêm coin sẽ exceed CoinGecko quota.</td>
+      </tr>
+      <tr>
+        <td><code>test_message_schema_is_complete</code></td>
+        <td>12 required fields có đủ</td>
+        <td>Spark Streaming CRYPTO_SCHEMA cần đủ fields — thiếu 1 field → parse error downstream.</td>
+      </tr>
+      <tr>
+        <td><code>test_only_btc_and_doge_produced</code></td>
+        <td>Không có coin nào khác trong topic</td>
+        <td>Scope isolation — ETH hoặc coin khác không được phép vào pipeline này.</td>
+      </tr>
+      <tr>
+        <td><code>test_ohlc_fields_populated_from_candles</code></td>
+        <td>open/high/low/close từ OHLC data</td>
+        <td>OHLC fetch logic riêng biệt — cần test độc lập với price fetch.</td>
+      </tr>
+      <tr>
+        <td><code>test_message_values_are_correct</code></td>
+        <td>Giá trị khớp với mock CoinGecko data</td>
+        <td>End-to-end correctness: không có data corruption qua JSON serialization.</td>
+      </tr>
+    </tbody>
+  </table>
+  </div>
+
+  <div class="callout info">
+    <strong>Tại sao test này quan trọng?</strong> Đây là điểm đầu vào duy nhất của dữ liệu. Schema contract giữa Producer và Spark Streaming Consumer phải được giữ — nếu Producer thay đổi field names, toàn bộ downstream pipeline thất bại. Test này là safety net chống schema regression.
+  </div>
+
+  <!-- ═══════════════════════════════════════════
+       LAYER 2
+  ════════════════════════════════════════════ -->
+  <h2>Layer 2: Spark Batch → MongoDB</h2>
+  <p>File: <code>tests/e2e/test_batch_mongo.py</code></p>
+  <p>Xác nhận Spark Batch Job tạo ra đúng aggregations và ghi vào MongoDB với schema và giá trị hợp lệ. MongoDB container được spin up; batch job chạy trên test data; collections được verify.</p>
+
+  <div class="table-wrap">
+  <table>
+    <thead>
+      <tr><th>Class</th><th>Test</th><th>Assertion</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td rowspan="4"><strong>TestDailyStats</strong></td>
+        <td><code>test_row_count_positive</code></td>
+        <td>Collection không rỗng sau batch job</td>
+      </tr>
+      <tr>
+        <td><code>test_only_btc_and_doge</code></td>
+        <td>Chỉ có BTC và DOGE, không có coin khác</td>
+      </tr>
+      <tr>
+        <td><code>test_required_columns</code></td>
+        <td>Schema: date, close, volume, avg_price, price_std đều tồn tại</td>
+      </tr>
+      <tr>
+        <td><code>test_prices_are_positive</code></td>
+        <td>Mọi close và volume &gt; 0 — data quality check</td>
+      </tr>
+      <tr>
+        <td rowspan="3"><strong>TestHistoricalSma</strong></td>
+        <td><code>test_row_count_matches</code></td>
+        <td>SMA row count = daily_stats row count (join không mất rows)</td>
+      </tr>
+      <tr>
+        <td><code>test_has_sma_columns</code></td>
+        <td>SMA-7, SMA-14, SMA-30, SMA-90 đều tồn tại</td>
+      </tr>
+      <tr>
+        <td><code>test_only_btc_and_doge</code></td>
+        <td>Coin scope nhất quán với daily_stats</td>
+      </tr>
+      <tr>
+        <td rowspan="4"><strong>TestCoinCorrelation</strong></td>
+        <td><code>test_exactly_one_pair</code></td>
+        <td>Chỉ 1 pair BTC-DOGE trong collection</td>
+      </tr>
+      <tr>
+        <td><code>test_pair_is_btc_doge</code></td>
+        <td>Coin names: "bitcoin" và "dogecoin"</td>
+      </tr>
+      <tr>
+        <td><code>test_pearson_value_in_range</code></td>
+        <td>Pearson r ∈ [−1, 1] — mathematical constraint</td>
+      </tr>
+      <tr>
+        <td><code>test_no_ethereum</code></td>
+        <td>ETH không xuất hiện — scope isolation</td>
+      </tr>
+    </tbody>
+  </table>
+  </div>
+
+  <!-- ═══════════════════════════════════════════
+       LAYER 3
+  ════════════════════════════════════════════ -->
+  <h2>Layer 3: ML Pipeline → MongoDB</h2>
+  <p>File: <code>tests/e2e/test_ml_mongo.py</code></p>
+  <p>Xác nhận toàn bộ ML pipeline: từ LSTM training, lưu artifacts, đến inference và ghi predictions vào MongoDB.</p>
+
+  <div class="table-wrap">
+  <table>
+    <thead>
+      <tr><th>Class</th><th>Test</th><th>Assertion</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td rowspan="6"><strong>TestLstmTraining</strong></td>
+        <td><code>test_training_returns_metrics</code></td>
+        <td>Training pipeline trả về dict chứa RMSE, MAE, dir accuracy</td>
+      </tr>
+      <tr>
+        <td><code>test_model_file_saved</code></td>
+        <td><code>lstm_{coin}_v2.pt</code> tồn tại tại đúng path</td>
+      </tr>
+      <tr>
+        <td><code>test_scaler_file_saved</code></td>
+        <td><code>scaler_{coin}.pkl</code> tồn tại — cần cho inference inverse transform</td>
+      </tr>
+      <tr>
+        <td><code>test_rmse_is_non_negative</code></td>
+        <td>RMSE ≥ 0</td>
+      </tr>
+      <tr>
+        <td><code>test_mae_is_non_negative</code></td>
+        <td>MAE ≥ 0</td>
+      </tr>
+      <tr>
+        <td><code>test_directional_accuracy_in_range</code></td>
+        <td>Dir accuracy ∈ [0, 1]</td>
+      </tr>
+      <tr>
+        <td rowspan="6"><strong>TestInferenceToMongo</strong></td>
+        <td><code>test_writes_7_predictions</code></td>
+        <td>Inference ghi đúng 7 documents (horizon = 7)</td>
+      </tr>
+      <tr>
+        <td><code>test_prediction_document_schema</code></td>
+        <td>Fields bắt buộc: coin, date, predicted_price, model_version</td>
+      </tr>
+      <tr>
+        <td><code>test_predicted_prices_are_positive</code></td>
+        <td>Mọi giá dự đoán &gt; 0</td>
+      </tr>
+      <tr>
+        <td><code>test_prediction_dates_are_in_future</code></td>
+        <td>7 ngày dự đoán đều sau ngày hiện tại</td>
+      </tr>
+      <tr>
+        <td><code>test_prediction_dates_are_unique</code></td>
+        <td>Không có ngày trùng — mỗi ngày chỉ 1 prediction</td>
+      </tr>
+      <tr>
+        <td><code><strong>test_upsert_idempotency</strong></code></td>
+        <td>Chạy inference 2 lần → vẫn chỉ 7 documents (không phải 14)</td>
+      </tr>
+    </tbody>
+  </table>
+  </div>
+
+  <div class="callout warning">
+    <strong>test_upsert_idempotency là test quan trọng nhất của Layer 3:</strong> Inference Scheduler chạy mỗi 5 phút = 288 lần/ngày = 8.640 lần/tháng. Nếu không idempotent → sau 1 tháng có 60.480 duplicate documents. Hệ thống có thể restart bất kỳ lúc nào mà không gây data corruption — đây là property thiết yếu cho production stability.
+  </div>
+
+  <!-- ═══════════════════════════════════════════
+       CHẠY TESTS
+  ════════════════════════════════════════════ -->
+  <h2>Chạy Tests</h2>
+  <pre><code class="language-bash"># Unit tests (không cần Docker)
+make test
+pytest tests/ -v --ignore=tests/e2e
+
+# Specific test suites
+make test-producer      # test_producer.py only
+make test-lstm          # test_lstm.py only
+make test-batch         # test_batch_job.py only
+make test-dashboard     # test_dashboard.py + test_indicators.py + test_mongo_writer.py
+
+# E2E tests (cần Docker running)
+make e2e
+make e2e-layer-1        # Producer → Kafka only
+make e2e-layer-2        # Spark Batch → MongoDB only
+make e2e-layer-3        # ML Pipeline → MongoDB only
+
+# Một test cụ thể
+pytest tests/test_lstm.py::TestLSTMModel::test_forward -v
+
+# Với coverage report
+pytest tests/ --cov=src --cov-report=html
+# → htmlcov/index.html</code></pre>
+
+  <!-- ═══════════════════════════════════════════
+       COVERAGE MATRIX
+  ════════════════════════════════════════════ -->
+  <h2>Ma trận Phủ Kiểm thử</h2>
+  <div class="table-wrap">
+  <table>
+    <thead>
+      <tr><th>Component</th><th>Unit Test</th><th>E2E Test</th><th>Property chính được verify</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><strong>Producer</strong></td>
+        <td>✅ <code>test_producer.py</code></td>
+        <td>✅ Layer 1</td>
+        <td>Schema message đủ 12 fields, OHLC logic (fetch mỗi 3 chu kỳ), giá trị khớp mock CoinGecko, coin scope chỉ BTC+DOGE</td>
+      </tr>
+      <tr>
+        <td><strong>Kafka delivery</strong></td>
+        <td>—</td>
+        <td>✅ Layer 1</td>
+        <td>Message thực sự được delivered đến Kafka broker (không chỉ gọi send()), consumer đọc và parse lại thành công — xác nhận serialization/deserialization correctness</td>
+      </tr>
+      <tr>
+        <td><strong>Spark indicators</strong></td>
+        <td>✅ <code>test_indicators.py</code></td>
+        <td>—</td>
+        <td>SMA (rolling avg), RSI (Wilder EMA smoothing), VWAP (price×volume weighted), Bollinger Bands (SMA±2σ) — numerical correctness với known input/expected output</td>
+      </tr>
+      <tr>
+        <td><strong>Spark Batch output</strong></td>
+        <td>✅ <code>test_batch_job.py</code></td>
+        <td>✅ Layer 2</td>
+        <td>Schema đủ fields (date, close, volume, avg_price, price_std), data quality (price &gt;0, không null), coin scope (chỉ BTC+DOGE), value range hợp lệ</td>
+      </tr>
+      <tr>
+        <td><strong>MongoDB write pattern</strong></td>
+        <td>✅ <code>test_mongo_writer.py</code></td>
+        <td>✅ Layer 2, 3</td>
+        <td>Upsert idempotency, foreachBatch exactly-once</td>
+      </tr>
+      <tr>
+        <td><strong>LSTM forward pass</strong></td>
+        <td>✅ <code>test_lstm.py</code></td>
+        <td>—</td>
+        <td>Output shape đúng (batch, 7) cho cả Price Head và Volatility Head, không có NaN/Inf trong predictions, Softplus đảm bảo vol &gt;0</td>
+      </tr>
+      <tr>
+        <td><strong>LSTM training</strong></td>
+        <td>—</td>
+        <td>✅ Layer 3</td>
+        <td>Artifacts saved to disk, metrics in valid range</td>
+      </tr>
+      <tr>
+        <td><strong>Inference → MongoDB</strong></td>
+        <td>—</td>
+        <td>✅ Layer 3</td>
+        <td>Đúng 7 predictions (horizon 1–7), mọi predicted_price &gt;0 (USD không âm), 7 ngày unique (không trùng), upsert idempotency (chạy 2 lần vẫn 7 docs)</td>
+      </tr>
+      <tr>
+        <td><strong>Accuracy tracker</strong></td>
+        <td>✅ <code>test_accuracy_tracker.py</code></td>
+        <td>—</td>
+        <td>Comparison logic (predicted vs actual price), metric calculation (directional accuracy, RMSE), rolling window tracking theo thời gian thực</td>
+      </tr>
+      <tr>
+        <td><strong>Dashboard</strong></td>
+        <td>✅ <code>test_dashboard.py</code></td>
+        <td>—</td>
+        <td>Widget render không có exception (import + st.* calls), data loading với mocked MongoDB (không cần live connection), sidebar coin selector hoạt động</td>
+      </tr>
+    </tbody>
+  </table>
+  </div>
+
+  <!-- ═══════════════════════════════════════════
+       PYTEST CONFIG
+  ════════════════════════════════════════════ -->
+  <h2>pytest.ini Configuration</h2>
+  <pre><code class="language-ini">[pytest]
+markers =
+    e2e: marks tests as end-to-end (deselect with '-m not e2e')
+
+# E2E tests excluded from default run
+addopts = -m "not e2e"
+
+testpaths = tests/
+python_files = test_*.py
+python_classes = Test*
+python_functions = test_*</code></pre>
+
+  <div class="callout success">
+    <strong>Design rationale:</strong> E2E tests dùng real Kafka/MongoDB containers (testcontainers) — bởi vì mock không đủ. Mock Kafka chỉ verify "có gọi producer.send()" — không verify message thực sự được delivered và consumer có thể đọc lại. Schema mismatch và serialization bugs chỉ xuất hiện với real infrastructure.
+  </div>
+</main>
+</div>
+<script>
+function toggleNav(btn){var nav=document.getElementById("sidebar-nav");var overlay=document.getElementById("nav-overlay");var isOpen=nav.classList.toggle("open");overlay.classList.toggle("open",isOpen);btn.setAttribute("aria-expanded",isOpen);btn.setAttribute("aria-label",isOpen?"Đóng menu":"Mở menu điều hướng");}
+function closeNav(){var nav=document.getElementById("sidebar-nav");var overlay=document.getElementById("nav-overlay");var btn=document.querySelector(".nav-toggle");nav.classList.remove("open");overlay.classList.remove("open");if(btn){btn.setAttribute("aria-expanded","false");btn.setAttribute("aria-label","Mở menu điều hướng");}}
+document.addEventListener("keydown",function(e){if(e.key==="Escape")closeNav();});
+</script>
+</body>
+</html>

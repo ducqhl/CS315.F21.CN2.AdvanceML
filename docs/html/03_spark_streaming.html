@@ -1,0 +1,383 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Spark Streaming — CS315</title>
+<link rel="stylesheet" href="style.css">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css" crossorigin="anonymous">
+<script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js" crossorigin="anonymous"></script>
+<script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/contrib/auto-render.min.js" crossorigin="anonymous"
+  onload="renderMathInElement(document.body,{delimiters:[{left:'\\(',right:'\\)',display:false},{left:'\\[',right:'\\]',display:true}],ignoredTags:['script','noscript','style','textarea','pre','code'],throwOnError:false})"></script>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/prism-themes@1.9.0/themes/prism-vsc-dark-plus.min.css" crossorigin="anonymous">
+<script defer src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-core.min.js" crossorigin="anonymous"></script>
+<script defer src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/plugins/autoloader/prism-autoloader.min.js" crossorigin="anonymous"></script>
+</head>
+<body>
+<a href="#main-content" class="skip-link">Bỏ qua điều hướng</a>
+<button class="nav-toggle" aria-label="Mở menu điều hướng" aria-expanded="false" aria-controls="sidebar-nav" onclick="toggleNav(this)">☰</button>
+<div class="nav-overlay" id="nav-overlay" onclick="closeNav()"></div>
+<div class="layout">
+<nav id="sidebar-nav" aria-label="Điều hướng trang">
+  <div class="logo"><h2>CS315.F12.CN2</h2><p>Lê Quang Hoài Đức · 25410034</p></div>
+  <div class="nav-group"><div class="nav-label">Tổng quan</div>
+    <a href="index.html">🏠 Trang chủ</a>
+    <a href="01_architecture.html">🏗️ Lambda Architecture</a>
+  </div>
+  <div class="nav-group"><div class="nav-label">Data Pipeline</div>
+    <a href="02_producer.html">📡 CoinGecko Producer</a>
+    <a href="03_spark_streaming.html" class="active">⚡ Spark Streaming</a>
+    <a href="04_spark_batch.html">📦 Spark Batch</a>
+    <a href="05_mongodb.html">🗄️ MongoDB</a>
+  </div>
+  <div class="nav-group"><div class="nav-label">ML Pipeline</div><a href="06_lstm.html">🧠 LSTM Model</a></div>
+  <div class="nav-group"><div class="nav-label">Serving Layer</div>
+    <a href="07_api.html">🔌 FastAPI Backend</a>
+    <a href="08_frontend.html">🖥️ React + Streamlit</a>
+  </div>
+  <div class="nav-group"><div class="nav-label">Quality & Ops</div>
+    <a href="09_testing.html">🧪 E2E Testing</a>
+    <a href="10_deployment.html">🐳 Docker Compose</a>
+    <a href="11_interview_qa.html">🎯 Phản biện Q&A <span class="badge">HOT</span></a>
+  </div>
+</nav>
+<main id="main-content" role="main">
+  <a href="index.html" class="back-link">← Trang chủ</a>
+  <h1>Spark Structured Streaming — Speed Layer
+    <span class="sub">src/spark/streaming_job.py — xử lý realtime indicators, 2 parallel queries</span>
+  </h1>
+  <div class="spec-row" aria-label="Thông số chính của Spark Streaming">
+    <span class="spec-badge"><strong>2</strong> parallel queries</span>
+    <span class="spec-badge amber"><strong>30s</strong> trigger interval</span>
+    <span class="spec-badge"><strong>10 min</strong> watermark</span>
+    <span class="spec-badge green"><strong>5</strong> indicators (Query B)</span>
+    <span class="spec-badge red"><strong>foreachBatch</strong> exactly-once</span>
+    <span class="spec-badge"><strong>outputMode</strong> = append</span>
+  </div>
+
+  <!-- ═══════════════════════════════════════════
+       PIPELINE OVERVIEW
+  ════════════════════════════════════════════ -->
+  <h2>Pipeline Tổng quan</h2>
+  <p>Speed Layer sử dụng Spark Structured Streaming với <strong>hai parallel queries</strong>. Query A tính windowed aggregations (20-min tumbling windows, 5-min slide). Query B tính per-record technical indicators (RSI, Bollinger, VWAP, ATR). Cả hai ghi vào MongoDB qua pattern <code>foreachBatch</code>.</p>
+
+  <div class="card-grid" style="margin-bottom:8px">
+    <div class="card accent-blue">
+      <h3>Query A — Window Aggregation</h3>
+      <p><strong>Output:</strong> <code>window_stats</code></p>
+      <p><strong>Type:</strong> Stateful — groupBy + sliding window (20min/5min)</p>
+      <p><strong>State:</strong> Giữ window state trong memory cho đến khi watermark pass</p>
+      <p><strong>Checkpoint:</strong> Lớn hơn (offset + aggregation state)</p>
+    </div>
+    <div class="card accent-amber">
+      <h3>Query B — Per-Record Enrichment</h3>
+      <p><strong>Output:</strong> <code>realtime_prices</code> + <code>alerts</code></p>
+      <p><strong>Type:</strong> Stateless per-batch — PySpark Window Functions</p>
+      <p><strong>State:</strong> Không giữ state giữa các micro-batch</p>
+      <p><strong>Checkpoint:</strong> Nhỏ hơn (chỉ offset)</p>
+    </div>
+  </div>
+
+  <div class="flow" role="img" aria-label="Query A pipeline: Kafka → Parse JSON → Watermark → Window Aggregation → window_stats MongoDB">
+    <div class="flow-node kafka">Kafka<br><small>crypto_raw</small></div>
+    <div class="flow-arrow">→</div>
+    <div class="flow-node spark">Parse JSON<br><small>CRYPTO_SCHEMA</small></div>
+    <div class="flow-arrow">→</div>
+    <div class="flow-node spark">Watermark<br><small>10 min</small></div>
+    <div class="flow-arrow">→</div>
+    <div class="flow-node spark">Query A<br><small>window agg 20min/5min</small></div>
+    <div class="flow-arrow">→</div>
+    <div class="flow-node mongo">window_stats</div>
+  </div>
+  <div class="flow" style="margin-top: 8px;" role="img" aria-label="Query B pipeline: từ Watermark → Per-record Enrichment → realtime_prices + alerts MongoDB">
+    <div class="flow-node" aria-hidden="true" style="visibility:hidden">Kafka</div>
+    <div class="flow-arrow" aria-hidden="true" style="visibility:hidden">→</div>
+    <div class="flow-node" aria-hidden="true" style="visibility:hidden">Parse</div>
+    <div class="flow-arrow" aria-hidden="true" style="visibility:hidden">→</div>
+    <div class="flow-node" aria-hidden="true" style="visibility:hidden">Watermark</div>
+    <div class="flow-arrow">→</div>
+    <div class="flow-node spark">Query B<br><small>per-record enrichment</small></div>
+    <div class="flow-arrow">→</div>
+    <div class="flow-node mongo">realtime_prices</div>
+    <div class="flow-arrow">+</div>
+    <div class="flow-node" style="border-color:#f87171;color:#fca5a5">alerts<br><small>spike &gt;5%</small></div>
+  </div>
+
+  <!-- ═══════════════════════════════════════════
+       BƯỚC 1: ĐỌC KAFKA
+  ════════════════════════════════════════════ -->
+  <h2>Bước 1 — Đọc Stream từ Kafka</h2>
+  <pre><code class="language-python">df_raw = spark.readStream \
+    .format("kafka") \
+    .option("kafka.bootstrap.servers", KAFKA_BOOTSTRAP)   # kafka:29092 (internal)
+    .option("subscribe", KAFKA_TOPIC_RAW)                  # crypto_raw
+    .option("startingOffsets", "latest")
+    .option("maxOffsetsPerTrigger", "1000")
+    .option("failOnDataLoss", "false")
+    .load()</code></pre>
+
+  <div class="callout info">
+    <strong>failOnDataLoss=false:</strong> Nếu Kafka topic bị xóa hoặc offset bị reset (retention policy), Spark không crash — tiếp tục từ earliest available. Phù hợp cho demo setup. Production cần <code>true</code> nếu at-least-once delivery là bắt buộc.
+  </div>
+
+  <!-- ═══════════════════════════════════════════
+       BƯỚC 2: WATERMARK
+  ════════════════════════════════════════════ -->
+  <h2>Bước 2 — Parse JSON và Watermark</h2>
+  <pre><code class="language-python"># Parse value bytes → JSON → typed DataFrame
+parsed_df = df_raw.select(
+    F.from_json(F.col("value").cast("string"), CRYPTO_SCHEMA).alias("data"),
+    F.col("timestamp").alias("kafka_ts")
+).select("data.*", "kafka_ts")
+
+# Convert event_time string → TimestampType (UTC)
+parsed_df = parsed_df.withColumn(
+    "event_time",
+    F.to_timestamp(F.col("timestamp"), "yyyy-MM-dd'T'HH:mm:ssXXX")
+)
+
+# Watermark: tolerate data late up to 10 minutes
+parsed_df = parsed_df.withWatermark("event_time", "10 minutes")</code></pre>
+
+  <div class="table-wrap">
+  <table aria-label="So sánh hành vi Spark Streaming có và không có watermark">
+    <caption style="text-align:left;font-size:12px;color:var(--muted);padding:0 0 8px;caption-side:top">Watermark = <strong style="color:var(--text)">10 phút</strong> — bằng đúng 1 poll cycle của Producer (600s), tránh bỏ sót data hợp lệ</caption>
+    <thead>
+      <tr>
+        <th scope="col" style="color:var(--accent4)">❌ Không có watermark</th>
+        <th scope="col" style="color:var(--accent2)">✅ Với watermark 10 phút</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>Spark giữ state cho <em>tất cả</em> windows chưa đóng → RAM tăng không giới hạn → OOM sau vài ngày</td>
+        <td>Spark chỉ giữ state cho windows trong vòng 10 phút qua event_time. State được released sau khi watermark vượt qua.</td>
+      </tr>
+      <tr>
+        <td>Data trễ luôn được xử lý (không sustainable với long-running job)</td>
+        <td>Data trễ hơn 10 phút bị discard. Acceptable vì producer poll mỗi 10 phút — data không thể trễ hơn 1 poll cycle.</td>
+      </tr>
+    </tbody>
+  </table>
+  </div>
+
+  <!-- ═══════════════════════════════════════════
+       QUERY A
+  ════════════════════════════════════════════ -->
+  <h2>Query A — Window Aggregation</h2>
+  <p>Tính OHLCV rollups theo sliding window 20 phút / 5 phút slide. Kết quả ghi vào <code>window_stats</code>.</p>
+  <pre><code class="language-python">windowed = parsed_df \
+    .groupBy(
+        F.window("event_time", "20 minutes", "5 minutes"),  # 20-min window, 5-min slide
+        "coin"
+    ) \
+    .agg(
+        F.avg("price_usd").alias("sma_20"),
+        F.max("price_usd").alias("high_window"),
+        F.min("price_usd").alias("low_window"),
+        F.sum("volume_24h").alias("total_volume"),
+        F.last("market_cap").alias("market_cap"),
+    )
+
+windowed.writeStream \
+    .trigger(processingTime="30 seconds") \
+    .outputMode("append") \
+    .foreachBatch(lambda df, id: write_batch(df, "window_stats", batch_id=id)) \
+    .option("checkpointLocation", f"{CHECKPOINT_DIR}/window_stats") \
+    .start()</code></pre>
+
+  <div class="callout info">
+    <strong>Sliding vs Tumbling window:</strong> Window 20 phút slide mỗi 5 phút → 1 event thuộc tối đa 4 windows chồng lên nhau. Cho SMA-20 mượt hơn tumbling window (không có biên cứng). <code>outputMode("append")</code> phù hợp vì với watermark, mỗi window chỉ được output sau khi đóng.
+  </div>
+
+  <!-- ═══════════════════════════════════════════
+       QUERY B
+  ════════════════════════════════════════════ -->
+  <h2>Query B — Per-Record Enrichment</h2>
+  <p>Mỗi micro-batch là một static DataFrame. Các indicators được tính bằng PySpark Window Functions trên dữ liệu đã tích lũy:</p>
+
+  <div class="table-wrap">
+  <table aria-label="5 technical indicators computed in Query B per-record enrichment">
+    <colgroup>
+      <col><col><col><col>
+      <col style="min-width:260px">
+    </colgroup>
+    <caption style="text-align:left;font-size:12px;color:var(--muted);padding:0 0 8px;caption-side:top">Tính bằng <strong style="color:var(--text)">PySpark Window Functions</strong> trên mỗi micro-batch. Warmup rows cần đủ window size mới cho kết quả chính xác.</caption>
+    <thead>
+      <tr><th scope="col">Indicator</th><th scope="col">Loại</th><th scope="col">Công thức</th><th scope="col">Window</th><th scope="col">Ý nghĩa</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><strong>SMA-5</strong></td>
+        <td><span class="tag blue">Trend</span></td>
+        <td><code>avg(price_usd)<br/>.over(Window.rowsBetween(-4, 0))</code></td>
+        <td>5 rows</td>
+        <td>Short-term trend — phản ứng nhanh với biến động giá</td>
+      </tr>
+      <tr>
+        <td><strong>SMA-20</strong></td>
+        <td><span class="tag blue">Trend</span></td>
+        <td><code>avg(price_usd)<br/>.over(Window.rowsBetween(-19, 0))</code></td>
+        <td>20 rows</td>
+        <td>Medium-term trend — ít noise hơn SMA-5, dùng cho Bollinger midline</td>
+      </tr>
+      <tr>
+        <td><strong>RSI-14</strong></td>
+        <td><span class="tag amber">Momentum</span></td>
+        <td>\(100 - \dfrac{100}{1 + \bar{U}_{14}/\bar{D}_{14}}\), Wilder smoothed</td>
+        <td>14 rows</td>
+        <td>Momentum oscillator [0,100]. &gt;70: overbought, &lt;30: oversold</td>
+      </tr>
+      <tr>
+        <td><strong>VWAP-60</strong></td>
+        <td><span class="tag green">Volume</span></td>
+        <td>\(\dfrac{\sum p_i v_i}{\sum v_i}\) over 60 rows</td>
+        <td>60 rows</td>
+        <td>Volume-weighted average price — institutional reference price cho intraday</td>
+      </tr>
+      <tr>
+        <td><strong>Bollinger Bands-20</strong></td>
+        <td><span class="tag purple">Volatility</span></td>
+        <td>\(\text{SMA}_{20} \pm 2\sigma_{20}\)</td>
+        <td>20 rows</td>
+        <td>Price channel: bb_upper, bb_mid, bb_lower. Giá vượt band = breakout signal.</td>
+      </tr>
+    </tbody>
+  </table>
+  </div>
+
+  <h3>Alert Logic — PRICE_SPIKE Events</h3>
+  <pre><code class="language-python"># Sau khi tính indicators, scan batch cho price spikes
+ALERT_THRESHOLD_PCT = 5.0  # 5%
+
+alerts = batch.filter(F.abs(F.col("change_24h")) > ALERT_THRESHOLD_PCT)
+
+if alerts.count() > 0:
+    # Ghi vào MongoDB alerts collection
+    upsert_alerts(alerts)
+    # Đồng thời publish lên Kafka topic crypto_alerts
+    for row in alerts.collect():
+        kafka_producer.send("crypto_alerts", key=row["coin"],
+                           value={"type": "PRICE_SPIKE", "change": row["change_24h"]})</code></pre>
+
+  <!-- ═══════════════════════════════════════════
+       FOREACH BATCH
+  ════════════════════════════════════════════ -->
+  <h2>foreachBatch Pattern — Exactly-Once Writes</h2>
+  <pre><code class="language-python">def write_batch(batch_df: DataFrame, collection_name: str, batch_id: int):
+    """
+    Idempotent write: delete existing records for this batch_id,
+    then insert new ones. Safe to retry.
+    """
+    records = batch_df.toPandas().to_dict("records")
+    if not records:
+        return
+
+    col = db[collection_name]
+    # Step 1: Remove any previous attempt with same batch_id (idempotent)
+    col.delete_many({"batch_id": batch_id})
+    # Step 2: Insert current batch
+    for r in records:
+        r["batch_id"] = batch_id
+        r["created_at"] = datetime.utcnow()
+    col.insert_many(records)</code></pre>
+
+  <div class="card-grid" style="margin:16px 0 8px">
+    <div class="card accent-green">
+      <h3>Idempotency guarantee</h3>
+      <p>Chạy lại cùng <code>batch_id</code> → cùng kết quả. <code>delete_many(batch_id)</code> trước <code>insert_many</code> loại bỏ duplicates từ Spark retry.</p>
+    </div>
+    <div class="card accent-red">
+      <h3>Tại sao không dùng Connector?</h3>
+      <p><code>com.mongodb.spark</code> không ổn định trong streaming mode — checkpoint state bị corrupt sau restart. <code>foreachBatch</code> + PyMongo cho full control.</p>
+    </div>
+  </div>
+  <div class="callout success">
+    <strong>Tại sao foreachBatch thay vì MongoDB Spark Connector?</strong> MongoDB Spark Connector (<code>com.mongodb.spark</code>) có vấn đề về checkpointing trong streaming mode — không ổn định với Spark Structured Streaming. <code>foreachBatch</code> gọi PyMongo trực tiếp, cho phép exactly-once semantics thông qua delete+insert với <code>batch_id</code>. Pattern này đảm bảo: nếu micro-batch bị retry (Spark failure), delete_many trước khi insert loại bỏ duplicates.
+  </div>
+
+  <!-- ═══════════════════════════════════════════
+       CHECKPOINT
+  ════════════════════════════════════════════ -->
+  <h2>Checkpoint &amp; Fault Tolerance</h2>
+  <div class="table-wrap">
+  <table aria-label="Checkpoint configuration for Query A and Query B">
+    <caption style="text-align:left;font-size:12px;color:var(--muted);padding:0 0 8px;caption-side:top"><strong style="color:var(--accent4)">⚠️ Production gap:</strong> Checkpoint ở <code>/tmp</code> — mất khi container restart. Production cần persistent volume (HDFS, S3, Docker named volume).</caption>
+    <thead>
+      <tr><th scope="col">Query</th><th scope="col">Checkpoint Dir</th><th scope="col">Nội dung được lưu</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>Query A (window_stats)</td>
+        <td><code>/tmp/spark-checkpoints/window_stats</code></td>
+        <td>Lưu Kafka offset đã xử lý + window aggregation state. Khi restart, tiếp tục từ offset cũ mà không reprocess.</td>
+      </tr>
+      <tr>
+        <td>Query B (enrichment)</td>
+        <td><code>/tmp/spark-checkpoints/enrichment</code></td>
+        <td>Lưu offset. Per-record enrichment không có stateful aggregation nên checkpoint nhỏ hơn Query A.</td>
+      </tr>
+    </tbody>
+  </table>
+  </div>
+
+  <div class="callout warning">
+    <strong>Checkpoint ở /tmp:</strong> Mất khi container restart. Sau restart, Spark đọc lại từ <code>startingOffsets="latest"</code> — bỏ qua data trong thời gian downtime. Trong production, checkpoint nên ở persistent storage (HDFS, S3, hoặc Docker volume mount). Đây là trade-off cho simplicity trong demo setup.
+  </div>
+
+  <!-- ═══════════════════════════════════════════
+       TECHNICAL INDICATORS TABLE
+  ════════════════════════════════════════════ -->
+  <h2>Các chỉ số kỹ thuật — Công thức chi tiết</h2>
+  <div class="table-wrap">
+  <table aria-label="Technical indicator formulas with practical meaning">
+    <thead>
+      <tr><th scope="col">Chỉ số</th><th scope="col">Loại</th><th scope="col">Công thức</th><th scope="col">Ý nghĩa thực tiễn</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><strong>SMA-n</strong></td>
+        <td><span class="tag blue">Trend</span></td>
+        <td>\(\displaystyle\frac{1}{n}\sum_{i=0}^{n-1} p_{t-i}\)</td>
+        <td>Trung bình động n kỳ — lọc noise, xác định xu hướng ngắn/trung hạn</td>
+      </tr>
+      <tr>
+        <td><strong>RSI-14</strong></td>
+        <td><span class="tag amber">Momentum</span></td>
+        <td>\(100 - \dfrac{100}{1 + \bar{U}_{14}/\bar{D}_{14}}\)</td>
+        <td>Sức mạnh tương đối [0–100]. &gt;70: overbought (có thể sắp giảm), &lt;30: oversold (có thể sắp tăng)</td>
+      </tr>
+      <tr>
+        <td><strong>Bollinger Bands</strong></td>
+        <td><span class="tag purple">Volatility</span></td>
+        <td>\(\text{SMA}_{20} \pm 2\sigma_{20}\)</td>
+        <td>Dải giá ±2 std. Giá vượt band upper/lower = breakout signal. Band giãn nở = volatility tăng</td>
+      </tr>
+      <tr>
+        <td><strong>VWAP</strong></td>
+        <td><span class="tag green">Volume</span></td>
+        <td>\(\displaystyle\frac{\sum_i p_i\, v_i}{\sum_i v_i}\)</td>
+        <td>Giá trung bình có trọng số theo khối lượng — benchmark cho institutional traders</td>
+      </tr>
+      <tr>
+        <td><strong>ATR-14</strong></td>
+        <td><span class="tag purple">Volatility</span></td>
+        <td>\(\displaystyle\frac{1}{14}\sum_{i=1}^{14} TR_i\)</td>
+        <td>Biên độ dao động thực trung bình 14 kỳ — đo volatility không phân biệt hướng tăng/giảm</td>
+      </tr>
+    </tbody>
+  </table>
+  </div>
+
+  <div class="callout info">
+    <strong>RSI warmup limitation:</strong> RSI-14 cần đủ 14 data points để chính xác. Trong streaming mode, các record đầu tiên của session (ít data trong window) RSI sẽ không chính xác. Đây là inherent limitation của streaming calculation — batch layer tính RSI chính xác trên full history, streaming RSI là approximate cho realtime display.
+  </div>
+</main>
+</div>
+<script>
+function toggleNav(btn){var nav=document.getElementById("sidebar-nav");var overlay=document.getElementById("nav-overlay");var isOpen=nav.classList.toggle("open");overlay.classList.toggle("open",isOpen);btn.setAttribute("aria-expanded",isOpen);btn.setAttribute("aria-label",isOpen?"Đóng menu":"Mở menu điều hướng");}
+function closeNav(){var nav=document.getElementById("sidebar-nav");var overlay=document.getElementById("nav-overlay");var btn=document.querySelector(".nav-toggle");nav.classList.remove("open");overlay.classList.remove("open");if(btn){btn.setAttribute("aria-expanded","false");btn.setAttribute("aria-label","Mở menu điều hướng");}}
+document.addEventListener("keydown",function(e){if(e.key==="Escape")closeNav();});
+</script>
+</body>
+</html>

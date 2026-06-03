@@ -1,0 +1,297 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>FastAPI Backend — CS315</title>
+<link rel="stylesheet" href="style.css">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/prism-themes@1.9.0/themes/prism-vsc-dark-plus.min.css" crossorigin="anonymous">
+<script defer src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-core.min.js" crossorigin="anonymous"></script>
+<script defer src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/plugins/autoloader/prism-autoloader.min.js" crossorigin="anonymous"></script>
+</head>
+<body>
+<a href="#main-content" class="skip-link">Bỏ qua điều hướng</a>
+<button class="nav-toggle" aria-label="Mở menu điều hướng" aria-expanded="false" aria-controls="sidebar-nav" onclick="toggleNav(this)">☰</button>
+<div class="nav-overlay" id="nav-overlay" onclick="closeNav()"></div>
+<div class="layout">
+<nav id="sidebar-nav" aria-label="Điều hướng trang">
+  <div class="logo"><h2>CS315.F12.CN2</h2><p>Lê Quang Hoài Đức · 25410034</p></div>
+  <div class="nav-group"><div class="nav-label">Tổng quan</div>
+    <a href="index.html">🏠 Trang chủ</a>
+    <a href="01_architecture.html">🏗️ Lambda Architecture</a>
+  </div>
+  <div class="nav-group"><div class="nav-label">Data Pipeline</div>
+    <a href="02_producer.html">📡 CoinGecko Producer</a>
+    <a href="03_spark_streaming.html">⚡ Spark Streaming</a>
+    <a href="04_spark_batch.html">📦 Spark Batch</a>
+    <a href="05_mongodb.html">🗄️ MongoDB</a>
+  </div>
+  <div class="nav-group"><div class="nav-label">ML Pipeline</div><a href="06_lstm.html">🧠 LSTM Model</a></div>
+  <div class="nav-group"><div class="nav-label">Serving Layer</div>
+    <a href="07_api.html" class="active">🔌 FastAPI Backend</a>
+    <a href="08_frontend.html">🖥️ React + Streamlit</a>
+  </div>
+  <div class="nav-group"><div class="nav-label">Quality & Ops</div>
+    <a href="09_testing.html">🧪 E2E Testing</a>
+    <a href="10_deployment.html">🐳 Docker Compose</a>
+    <a href="11_interview_qa.html">🎯 Phản biện Q&A <span class="badge">HOT</span></a>
+  </div>
+</nav>
+<main id="main-content" role="main">
+  <a href="index.html" class="back-link">← Trang chủ</a>
+  <h1>FastAPI Backend — Serving Layer
+    <span class="sub">src/api/main.py · port 8000 · JWT stateless authentication</span>
+  </h1>
+
+  <!-- ═══════════════════════════════════════════
+       TRÁCH NHIỆM
+  ════════════════════════════════════════════ -->
+  <h2>Trách nhiệm</h2>
+  <p>FastAPI là lớp giao tiếp <strong>duy nhất</strong> giữa MongoDB và các client (React Frontend, Streamlit). Nó xử lý authentication, truy vấn MongoDB, merge batch + speed views, và format JSON response cho từng endpoint.</p>
+
+  <div class="callout info">
+    <strong>Sequence diagram request điển hình:</strong> React client → JWT middleware (verify token) → MongoDB query → JSON response. Không có caching layer — mỗi request là fresh MongoDB query. Acceptable vì throughput thấp (poll 600s).
+  </div>
+
+  <!-- ═══════════════════════════════════════════
+       ENDPOINTS
+  ════════════════════════════════════════════ -->
+  <h2>API Endpoints</h2>
+  <div class="table-wrap">
+  <table>
+    <thead>
+      <tr><th>Method</th><th>Endpoint</th><th>Auth</th><th>MongoDB Source</th><th>Mô tả</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><span class="tag green">POST</span></td>
+        <td><code>/auth/login</code></td>
+        <td>—</td>
+        <td>—</td>
+        <td>Đăng nhập, nhận JWT token (TTL 24h)</td>
+      </tr>
+      <tr>
+        <td><span class="tag green">POST</span></td>
+        <td><code>/auth/refresh</code></td>
+        <td>JWT</td>
+        <td>—</td>
+        <td>Refresh token trước khi hết hạn</td>
+      </tr>
+      <tr>
+        <td><span class="tag blue">GET</span></td>
+        <td><code>/api/prices/realtime</code></td>
+        <td>JWT</td>
+        <td><code>realtime_prices</code></td>
+        <td>Latest N ticks với enriched indicators từ Speed Layer</td>
+      </tr>
+      <tr>
+        <td><span class="tag blue">GET</span></td>
+        <td><code>/api/prices/historical</code></td>
+        <td>JWT</td>
+        <td><code>daily_stats</code></td>
+        <td>Daily OHLCV từ Batch Layer (date range query)</td>
+      </tr>
+      <tr>
+        <td><span class="tag blue">GET</span></td>
+        <td><code>/api/indicators</code></td>
+        <td>JWT</td>
+        <td><code>realtime_prices</code></td>
+        <td>RSI, MACD, Bollinger Bands, VWAP từ Speed Layer</td>
+      </tr>
+      <tr>
+        <td><span class="tag blue">GET</span></td>
+        <td><code>/api/correlation</code></td>
+        <td>JWT</td>
+        <td><code>coin_correlation</code></td>
+        <td>Rolling BTC-DOGE Pearson correlation từ Batch Layer</td>
+      </tr>
+      <tr>
+        <td><span class="tag blue">GET</span></td>
+        <td><code>/api/predictions</code></td>
+        <td>JWT</td>
+        <td><code>predictions</code></td>
+        <td>LSTM 7-day forecast + confidence band (volatility)</td>
+      </tr>
+      <tr>
+        <td><span class="tag blue">GET</span></td>
+        <td><code>/api/predictions/accuracy</code></td>
+        <td>JWT</td>
+        <td><code>predictions</code></td>
+        <td>Historical accuracy tracking — so sánh dự đoán cũ vs giá thực</td>
+      </tr>
+      <tr>
+        <td><span class="tag blue">GET</span></td>
+        <td><code>/api/models</code></td>
+        <td>JWT</td>
+        <td>—</td>
+        <td>Model registry — list versions, metrics (RMSE, MAE, dir accuracy)</td>
+      </tr>
+      <tr>
+        <td><span class="tag green">POST</span></td>
+        <td><code>/api/model/retrain</code></td>
+        <td>JWT</td>
+        <td>—</td>
+        <td>Trigger on-demand LSTM retraining (chạy background job)</td>
+      </tr>
+      <tr>
+        <td><span class="tag blue">GET</span></td>
+        <td><code>/health</code></td>
+        <td>—</td>
+        <td>—</td>
+        <td>Health check — Docker HEALTHCHECK sử dụng endpoint này</td>
+      </tr>
+    </tbody>
+  </table>
+  </div>
+
+  <!-- ═══════════════════════════════════════════
+       JWT AUTH FLOW
+  ════════════════════════════════════════════ -->
+  <h2>JWT Authentication Flow</h2>
+  <div class="steps">
+    <div class="step">
+      <div class="step-body">
+        <h4>Client gửi POST /auth/login</h4>
+        <p>FastAPI verify credentials, tạo JWT token với payload: <code>{sub: user_id, exp: now + 24h}</code>, ký bằng <code>SECRET_KEY</code> (HS256 algorithm).</p>
+      </div>
+    </div>
+    <div class="step">
+      <div class="step-body">
+        <h4>Client lưu token ở localStorage</h4>
+        <p>React Frontend lưu token. Axios interceptor tự động thêm <code>Authorization: Bearer {token}</code> vào <em>mọi</em> request tiếp theo. Client không cần quản lý manually.</p>
+      </div>
+    </div>
+    <div class="step">
+      <div class="step-body">
+        <h4>FastAPI verify JWT mỗi request</h4>
+        <p>Middleware decode token, verify signature với SECRET_KEY, kiểm tra expiry. 401 Unauthorized nếu token invalid, expired, hoặc missing.</p>
+      </div>
+    </div>
+    <div class="step">
+      <div class="step-body">
+        <h4>Auto-refresh khi nhận 401</h4>
+        <p>Axios response interceptor: nhận 401 → gọi <code>POST /auth/refresh</code> → lưu token mới vào localStorage → retry original request tự động. User không thấy interruption.</p>
+      </div>
+    </div>
+  </div>
+
+  <h2>JWT vs Session Authentication</h2>
+  <div class="table-wrap">
+  <table>
+    <thead>
+      <tr><th>JWT (dùng trong đề tài)</th><th>Session-based</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>Stateless — server không lưu gì. Token là self-contained.</td>
+        <td>Stateful — server lưu session trong DB/Redis.</td>
+      </tr>
+      <tr>
+        <td>Scale horizontally dễ — mọi instance verify cùng SECRET_KEY.</td>
+        <td>Scale phức tạp — cần shared session store (Redis) giữa instances.</td>
+      </tr>
+      <tr>
+        <td>Cannot revoke ngay lập tức (phải đợi expire). TTL 24h là trade-off.</td>
+        <td>Có thể delete session ngay (logout immediate).</td>
+      </tr>
+      <tr>
+        <td>Phù hợp cho SPA + REST API. Token ở client.</td>
+        <td>Phù hợp cho server-side rendered apps. Session ở server.</td>
+      </tr>
+    </tbody>
+  </table>
+  </div>
+
+  <!-- ═══════════════════════════════════════════
+       SWAGGER UI
+  ════════════════════════════════════════════ -->
+  <h2>Swagger UI — Interactive Documentation</h2>
+  <p>FastAPI tự động generate Swagger UI tại <a href="http://localhost:8000/docs" style="color:var(--accent)">http://localhost:8000/docs</a>. Cho phép test tất cả endpoints trực tiếp từ browser, kể cả các endpoint yêu cầu JWT (dùng "Authorize" button để nhập token).</p>
+  <p>ReDoc alternative: <a href="http://localhost:8000/redoc" style="color:var(--accent)">http://localhost:8000/redoc</a></p>
+
+  <!-- ═══════════════════════════════════════════
+       MERGE VIEW
+  ════════════════════════════════════════════ -->
+  <h2>Merging Batch + Speed Views</h2>
+  <p>Một số endpoints merge dữ liệu từ cả batch layer và speed layer để cung cấp view đầy đủ nhất:</p>
+  <pre><code class="language-python">@app.get("/api/prices/merged")
+async def get_merged_prices(coin: str, days: int = 30, user = Depends(verify_jwt)):
+    """
+    Merge historical (batch) + realtime (speed) views.
+    - Batch: daily_stats cho ngày trước (chính xác, đầy đủ)
+    - Speed: realtime_prices cho hôm nay (approximate, low latency)
+    """
+    # Fetch historical from batch layer
+    historical = db.daily_stats.find(
+        {"coin_name": coin,
+         "date": {"$gte": (datetime.now() - timedelta(days=days)).date().isoformat()}},
+        sort=[("date", 1)]
+    )
+
+    # Fetch latest from speed layer
+    realtime = db.realtime_prices.find_one(
+        {"coin": coin.upper()},
+        sort=[("event_time", -1)]
+    )
+
+    return {
+        "historical": list(historical),
+        "realtime":   realtime,
+        "merged_at":  datetime.utcnow().isoformat()
+    }</code></pre>
+
+  <!-- ═══════════════════════════════════════════
+       MODEL REGISTRY
+  ════════════════════════════════════════════ -->
+  <h2>Model Registry</h2>
+  <p><code>GET /api/models</code> trả về danh sách tất cả model versions đã train, kèm metrics:</p>
+  <pre><code class="language-json">{
+  "models": [
+    {
+      "model_id": "lstm_bitcoin_v2",
+      "coin": "bitcoin",
+      "version": "v2",
+      "trained_at": "2026-06-02T08:00:00Z",
+      "metrics": {
+        "rmse": 1799.50,
+        "mae":  1288.92,
+        "directional_accuracy": 0.40,
+        "epochs_trained": 10
+      },
+      "artifact_path": "src/ml/model/lstm_bitcoin_v2.pt",
+      "scaler_path":   "src/ml/model/scaler_bitcoin.pkl"
+    }
+  ]
+}</code></pre>
+
+  <div class="callout success">
+    <strong>On-demand retrain:</strong> <code>POST /api/model/retrain</code> trigger LSTM retraining qua FastAPI. Kết quả được ghi vào model registry. UI hiển thị version history và accuracy per fold trong Model Registry modal.
+  </div>
+
+  <!-- ═══════════════════════════════════════════
+       INFERENCE SCHEDULER
+  ════════════════════════════════════════════ -->
+  <h2>Inference Scheduler</h2>
+  <p>Inference Scheduler chạy như background service độc lập, không phải qua API. Thực hiện hai nhiệm vụ theo chu kỳ 5 phút:</p>
+
+  <div class="card-grid">
+    <div class="card accent-blue">
+      <h3>Task 1 — Run Inference</h3>
+      <p>Load LSTM model từ disk, đọc 60+30 ngày gần nhất từ MongoDB/CSV, tính features, forward pass, upsert 7 predictions vào <code>predictions</code> collection.</p>
+      <p><strong>Chu kỳ:</strong> Mỗi 5 phút</p>
+    </div>
+    <div class="card accent-green">
+      <h3>Task 2 — Track Accuracy</h3>
+      <p>So sánh các predictions cũ với giá thực tế hiện tại. Tính directional accuracy rolling. Dữ liệu hiển thị trên trang Predictions của React Frontend.</p>
+      <p><strong>Chu kỳ:</strong> Mỗi 5 phút (sau inference)</p>
+    </div>
+  </div>
+</main>
+</div>
+<script>
+function toggleNav(btn){var nav=document.getElementById("sidebar-nav");var overlay=document.getElementById("nav-overlay");var isOpen=nav.classList.toggle("open");overlay.classList.toggle("open",isOpen);btn.setAttribute("aria-expanded",isOpen);btn.setAttribute("aria-label",isOpen?"Đóng menu":"Mở menu điều hướng");}
+function closeNav(){var nav=document.getElementById("sidebar-nav");var overlay=document.getElementById("nav-overlay");var btn=document.querySelector(".nav-toggle");nav.classList.remove("open");overlay.classList.remove("open");if(btn){btn.setAttribute("aria-expanded","false");btn.setAttribute("aria-label","Mở menu điều hướng");}}
+document.addEventListener("keydown",function(e){if(e.key==="Escape")closeNav();});
+</script>
+</body>
+</html>

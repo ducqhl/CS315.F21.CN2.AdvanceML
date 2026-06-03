@@ -1,0 +1,385 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Lambda Architecture — CS315</title>
+<link rel="stylesheet" href="style.css">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/prism-themes@1.9.0/themes/prism-vsc-dark-plus.min.css" crossorigin="anonymous">
+<script defer src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-core.min.js" crossorigin="anonymous"></script>
+<script defer src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/plugins/autoloader/prism-autoloader.min.js" crossorigin="anonymous"></script>
+</head>
+<body>
+<a href="#main-content" class="skip-link">Bỏ qua điều hướng</a>
+<button class="nav-toggle" aria-label="Mở menu điều hướng" aria-expanded="false" aria-controls="sidebar-nav" onclick="toggleNav(this)">☰</button>
+<div class="nav-overlay" id="nav-overlay" onclick="closeNav()"></div>
+<div class="layout">
+<nav id="sidebar-nav" aria-label="Điều hướng trang">
+  <div class="logo"><h2>CS315.F12.CN2</h2><p>Lê Quang Hoài Đức · 25410034</p></div>
+  <div class="nav-group"><div class="nav-label">Tổng quan</div>
+    <a href="index.html">🏠 Trang chủ</a>
+    <a href="01_architecture.html" class="active">🏗️ Lambda Architecture</a>
+  </div>
+  <div class="nav-group"><div class="nav-label">Data Pipeline</div>
+    <a href="02_producer.html">📡 CoinGecko Producer</a>
+    <a href="03_spark_streaming.html">⚡ Spark Streaming</a>
+    <a href="04_spark_batch.html">📦 Spark Batch</a>
+    <a href="05_mongodb.html">🗄️ MongoDB</a>
+  </div>
+  <div class="nav-group"><div class="nav-label">ML Pipeline</div>
+    <a href="06_lstm.html">🧠 LSTM Model</a>
+  </div>
+  <div class="nav-group"><div class="nav-label">Serving Layer</div>
+    <a href="07_api.html">🔌 FastAPI Backend</a>
+    <a href="08_frontend.html">🖥️ React + Streamlit</a>
+  </div>
+  <div class="nav-group"><div class="nav-label">Quality & Ops</div>
+    <a href="09_testing.html">🧪 E2E Testing</a>
+    <a href="10_deployment.html">🐳 Docker Compose</a>
+    <a href="11_interview_qa.html">🎯 Phản biện Q&A <span class="badge">HOT</span></a>
+  </div>
+</nav>
+<main id="main-content" role="main">
+  <a href="index.html" class="back-link">← Trang chủ</a>
+  <h1>Lambda Architecture
+    <span class="sub">Tổng quan kiến trúc hệ thống — thiết kế ba layer và lý do lựa chọn</span>
+  </h1>
+
+  <!-- ═══════════════════════════════════════════
+       GIỚI THIỆU
+  ════════════════════════════════════════════ -->
+  <h2>Lambda Architecture là gì?</h2>
+  <p>Lambda Architecture là mô hình xử lý dữ liệu do Nathan Marz đề xuất, phân tách rõ ràng ba concern khác nhau thành ba layer độc lập. Mỗi layer tối ưu cho một yêu cầu riêng về độ trễ, độ chính xác, và khối lượng dữ liệu xử lý.</p>
+
+  <div class="card-grid">
+    <div class="card accent-green">
+      <h3>📦 Batch Layer</h3>
+      <p><strong>Mục tiêu:</strong> Độ chính xác tuyệt đối, không ràng buộc về latency</p>
+      <p><strong>Input:</strong> Toàn bộ dữ liệu lịch sử (4.165 ngày)</p>
+      <p><strong>Output:</strong> <code>daily_stats</code> (tổng hợp OHLCV hàng ngày — nguồn chính cho LSTM training), <code>historical_sma</code> (SMA trên 4 window: 7/14/30/90 ngày full history), <code>coin_correlation</code> (Pearson r BTC-DOGE rolling 30 ngày)</p>
+      <p><strong>Chạy khi:</strong> Hàng ngày, theo lịch hoặc thủ công</p>
+      <p><strong>Công nghệ:</strong> Apache Spark 3.5, CSV lịch sử BTC/DOGE</p>
+    </div>
+    <div class="card accent-amber">
+      <h3>⚡ Speed Layer</h3>
+      <p><strong>Mục tiêu:</strong> Latency thấp (dưới 1 giây), kết quả xấp xỉ</p>
+      <p><strong>Input:</strong> Streaming data từ Kafka mỗi 10 phút (600s)</p>
+      <p><strong>Output:</strong> <code>realtime_prices</code> (tick enriched với 5 technical indicators: SMA, RSI, VWAP, Bollinger), <code>window_stats</code> (aggregation 20-min/5-min OHLCV), <code>alerts</code> (PRICE_SPIKE khi biến động &gt;5%)</p>
+      <p><strong>Chạy khi:</strong> Liên tục (micro-batch trigger 30 giây)</p>
+      <p><strong>Công nghệ:</strong> Kafka + Spark Structured Streaming</p>
+    </div>
+    <div class="card" style="border-left:3px solid #c084fc">
+      <h3>🗄️ Serving Layer</h3>
+      <p><strong>Mục tiêu:</strong> Merge batch + speed results, phục vụ query nhanh</p>
+      <p><strong>Công nghệ:</strong> MongoDB 6.0 (single store) + FastAPI</p>
+      <p><strong>Client:</strong> React Frontend (port 3000), Streamlit Dashboard (port 8501)</p>
+      <p><strong>Pattern:</strong> Batch ghi overwrite, Speed ghi append với TTL 7 ngày</p>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════════════════════════
+       TẠI SAO LAMBDA THAY VÌ KAPPA
+  ════════════════════════════════════════════ -->
+  <h2>Tại sao chọn Lambda thay vì Kappa?</h2>
+
+  <div class="callout info">
+    <strong>Kappa Architecture</strong> = chỉ có Speed Layer. Khi cần historical view, reprocess toàn bộ dữ liệu từ đầu qua stream processor. Đơn giản hơn nhưng <strong>không phù hợp</strong> cho hệ thống này vì ba lý do dưới đây.
+  </div>
+
+  <div class="steps">
+    <div class="step">
+      <div class="step-body">
+        <h4>Chi phí reprocessing quá cao</h4>
+        <p>Với 4.165 ngày lịch sử, tính SMA-90 và rolling correlation 30 ngày phải scan toàn bộ dataset mỗi khi có update mới. Với Batch Layer, các phép tính này chỉ chạy một lần mỗi ngày và kết quả được cache trong MongoDB — tính một lần, dùng nhiều lần.</p>
+      </div>
+    </div>
+    <div class="step">
+      <div class="step-body">
+        <h4>LSTM cần batch training nhất quán</h4>
+        <p>Mô hình LSTM cần rolling window 730 ngày được preprocessing <em>nhất quán</em> với cùng <code>StandardScaler</code>. Stream processing không thể đảm bảo điều này vì dữ liệu đến dần dần — scaler phải được fit trên toàn bộ fixed dataset, không phải fit incremental từng điểm dữ liệu mới.</p>
+      </div>
+    </div>
+    <div class="step">
+      <div class="step-body">
+        <h4>Hai loại query có SLA khác nhau hoàn toàn</h4>
+        <p>Historical correlation (batch) cần toàn bộ 4.165 ngày để chính xác — không thể compromise. Realtime RSI/VWAP (speed) cần latency thấp nhưng chỉ cần ~60 data points gần nhất. Lambda giải quyết cả hai independently thay vì một hệ thống duy nhất phải đáp ứng cả hai SLA trái ngược nhau.</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════════════════════════
+       LUỒNG DỮ LIỆU
+  ════════════════════════════════════════════ -->
+  <h2>Ba luồng dữ liệu song song</h2>
+
+  <h3>Speed Path — Realtime (~30s latency)</h3>
+  <div class="flow">
+    <div class="flow-node kafka">CoinGecko API</div>
+    <div class="flow-arrow">→</div>
+    <div class="flow-node kafka">Producer<br><small>poll 600s, acks=all</small></div>
+    <div class="flow-arrow">→</div>
+    <div class="flow-node kafka">Kafka<br><small>topic: crypto_raw</small></div>
+    <div class="flow-arrow">→</div>
+    <div class="flow-node spark">Spark Streaming<br><small>watermark 10min<br>micro-batch 30s</small></div>
+    <div class="flow-arrow">→</div>
+    <div class="flow-node mongo">MongoDB<br><small>realtime_prices<br>window_stats<br>alerts</small></div>
+  </div>
+
+  <h3>Batch Path — Lịch sử (daily cadence)</h3>
+  <div class="flow">
+    <div class="flow-node">CSV lịch sử<br><small>4.165 ngày BTC/DOGE</small></div>
+    <div class="flow-arrow">→</div>
+    <div class="flow-node spark">Spark Batch<br><small>DataFrame API<br>submit thủ công</small></div>
+    <div class="flow-arrow">→</div>
+    <div class="flow-node mongo">MongoDB<br><small>daily_stats<br>historical_sma<br>coin_correlation</small></div>
+  </div>
+
+  <h3>ML Path — Predictions (mỗi 5 phút)</h3>
+  <div class="flow">
+    <div class="flow-node mongo">MongoDB<br><small>daily_stats</small></div>
+    <div class="flow-arrow">→</div>
+    <div class="flow-node lstm">Feature Eng.<br><small>9 features</small></div>
+    <div class="flow-arrow">→</div>
+    <div class="flow-node lstm">LSTM v3<br><small>Training + Inference</small></div>
+    <div class="flow-arrow">→</div>
+    <div class="flow-node mongo">MongoDB<br><small>predictions</small></div>
+  </div>
+
+  <h3>Serving Path — Client Queries</h3>
+  <div class="flow">
+    <div class="flow-node mongo">MongoDB<br><small>tất cả collections</small></div>
+    <div class="flow-arrow">→</div>
+    <div class="flow-node api">FastAPI<br><small>JWT auth · port 8000</small></div>
+    <div class="flow-arrow">→</div>
+    <div class="flow-node ui">React Frontend<br><small>port 3000</small></div>
+  </div>
+  <div class="flow" style="margin-top: 8px;">
+    <div class="flow-node mongo">MongoDB</div>
+    <div class="flow-arrow">→</div>
+    <div class="flow-node ui">Streamlit<br><small>direct · port 8501</small></div>
+  </div>
+
+  <!-- ═══════════════════════════════════════════
+       CÁC THÀNH PHẦN
+  ════════════════════════════════════════════ -->
+  <h2>Các thành phần và trách nhiệm</h2>
+  <div class="table-wrap">
+  <table>
+    <thead>
+      <tr><th>Thành phần</th><th>Công nghệ</th><th>Trách nhiệm chính</th><th>Port</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><strong>CoinGecko Producer</strong></td>
+        <td>Python, pycoingecko</td>
+        <td>Thu thập giá BTC/DOGE mỗi 600s; đẩy JSON vào Kafka với <code>acks=all</code></td>
+        <td>—</td>
+      </tr>
+      <tr>
+        <td><strong>Kafka Broker</strong></td>
+        <td>Confluent Kafka 7.4</td>
+        <td>Hàng đợi bền vững cho dữ liệu streaming; at-least-once delivery</td>
+        <td>9092</td>
+      </tr>
+      <tr>
+        <td><strong>Spark Streaming</strong></td>
+        <td>Apache Spark 3.5</td>
+        <td>Tính chỉ số kỹ thuật realtime (SMA, RSI, VWAP, Bollinger); watermark 10 phút</td>
+        <td>—</td>
+      </tr>
+      <tr>
+        <td><strong>Spark Batch</strong></td>
+        <td>Apache Spark 3.5</td>
+        <td>Tổng hợp <code>daily_stats</code>, <code>historical_sma</code>, <code>coin_correlation</code> từ lịch sử</td>
+        <td>8081</td>
+      </tr>
+      <tr>
+        <td><strong>MongoDB</strong></td>
+        <td>MongoDB 6.0</td>
+        <td>Single serving store; lưu trữ tất cả 7+ collections từ tất cả layers</td>
+        <td>27017</td>
+      </tr>
+      <tr>
+        <td><strong>FastAPI Backend</strong></td>
+        <td>Python, FastAPI + Uvicorn</td>
+        <td>REST API với JWT authentication; cầu nối giữa MongoDB và clients</td>
+        <td>8000</td>
+      </tr>
+      <tr>
+        <td><strong>React Frontend</strong></td>
+        <td>React 19, TypeScript, Vite</td>
+        <td>Giao diện web chính; 5 trang phân tích với biểu đồ realtime</td>
+        <td>3000</td>
+      </tr>
+      <tr>
+        <td><strong>Streamlit Dashboard</strong></td>
+        <td>Streamlit 1.32</td>
+        <td>Dashboard phân tích nhanh cho nội bộ; kết nối trực tiếp MongoDB</td>
+        <td>8501</td>
+      </tr>
+      <tr>
+        <td><strong>Inference Scheduler</strong></td>
+        <td>PyTorch 2.2, schedule</td>
+        <td>Chạy LSTM inference mỗi 5 phút; lưu 7-day predictions vào MongoDB</td>
+        <td>—</td>
+      </tr>
+    </tbody>
+  </table>
+  </div>
+
+  <!-- ═══════════════════════════════════════════
+       QUYẾT ĐỊNH THIẾT KẾ
+  ════════════════════════════════════════════ -->
+  <h2>Các quyết định thiết kế quan trọng</h2>
+
+  <div class="table-wrap">
+  <table>
+    <thead>
+      <tr><th>Quyết định</th><th>Lựa chọn</th><th>Lý do</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><strong>Stream processor</strong></td>
+        <td>Spark Structured Streaming</td>
+        <td>Cùng DataFrame API với batch job — dùng chung codebase indicators. Watermark cho late data, foreachBatch cho exactly-once MongoDB writes.</td>
+      </tr>
+      <tr>
+        <td><strong>Message queue</strong></td>
+        <td>Apache Kafka 3.4</td>
+        <td>Persistent log có thể replay, at-least-once delivery, chuẩn industry. <code>acks=all</code> đảm bảo không mất tick giá tài chính.</td>
+      </tr>
+      <tr>
+        <td><strong>Serving store</strong></td>
+        <td>MongoDB (single store)</td>
+        <td>Flexible schema cho nhiều loại document. Compound index trên (coin_name, date) đủ hiệu quả. Không cần multiple stores với sync logic phức tạp.</td>
+      </tr>
+      <tr>
+        <td><strong>MongoDB write pattern</strong></td>
+        <td><code>foreachBatch</code> + PyMongo</td>
+        <td>MongoDB Spark Connector không ổn định trong streaming mode. <code>foreachBatch</code> đảm bảo exactly-once qua delete+insert với batch_id.</td>
+      </tr>
+      <tr>
+        <td><strong>Forecasting model</strong></td>
+        <td>LSTM v3 (MIMO, 7 steps, dual-head)</td>
+        <td>Phù hợp time series tài chính với long-term dependencies. MIMO tránh error accumulation. Volatility head cung cấp confidence interval.</td>
+      </tr>
+      <tr>
+        <td><strong>API authentication</strong></td>
+        <td>JWT stateless</td>
+        <td>Không cần shared session store. Dễ scale horizontal. Phù hợp cho SPA + REST API.</td>
+      </tr>
+      <tr>
+        <td><strong>Containerization</strong></td>
+        <td>Docker Compose (9 services)</td>
+        <td>Single-machine deployment. Reproducible environment. <code>make docker-up</code> khởi động toàn bộ hệ thống. Đủ phức tạp để demo Lambda, không over-engineered với K8s.</td>
+      </tr>
+    </tbody>
+  </table>
+  </div>
+
+  <!-- ═══════════════════════════════════════════
+       MONGODB COLLECTIONS
+  ════════════════════════════════════════════ -->
+  <h2>MongoDB Collections — Serving Layer</h2>
+  <p>MongoDB đóng vai trò <strong>single serving store</strong> cho toàn bộ hệ thống. Tất cả writers (Spark Streaming, Spark Batch, Inference Scheduler, Producer) ghi vào MongoDB; tất cả readers (FastAPI, Streamlit) đọc từ MongoDB.</p>
+
+  <div class="table-wrap">
+  <table>
+    <thead>
+      <tr><th>Collection</th><th>Layer nguồn</th><th>Writer</th><th>TTL</th><th>Nội dung</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><code>realtime_prices</code></td>
+        <td><span class="tag amber">Speed</span></td>
+        <td>Spark Streaming</td>
+        <td>7 ngày</td>
+        <td>Per-tick enriched: OHLC + 5 chỉ số kỹ thuật — SMA-5/20 (xu hướng ngắn/trung hạn), RSI-14 (momentum 0–100), VWAP-60 (giá tham chiếu theo volume), Bollinger-20 (kênh biến động ±2σ). 18 columns.</td>
+      </tr>
+      <tr>
+        <td><code>window_stats</code></td>
+        <td><span class="tag amber">Speed</span></td>
+        <td>Spark Streaming</td>
+        <td>—</td>
+        <td>Sliding window 20 phút / slide 5 phút: sma_20 (avg price), high_window, low_window, total_volume. Dùng cho Technical Analysis chart để so sánh window-level trend.</td>
+      </tr>
+      <tr>
+        <td><code>alerts</code></td>
+        <td><span class="tag amber">Speed</span></td>
+        <td>Spark Streaming</td>
+        <td>30 ngày</td>
+        <td>PRICE_SPIKE events khi |change_24h| &gt; 5%</td>
+      </tr>
+      <tr>
+        <td><code>daily_stats</code></td>
+        <td><span class="tag green">Batch</span></td>
+        <td>Spark Batch</td>
+        <td>—</td>
+        <td>Daily OHLCV, avg_price (mean giá trong ngày), price_std (volatility nội ngày) — nguồn dữ liệu chính cho LSTM training. Compound index (coin_name, date) unique.</td>
+      </tr>
+      <tr>
+        <td><code>historical_sma</code></td>
+        <td><span class="tag green">Batch</span></td>
+        <td>Spark Batch</td>
+        <td>—</td>
+        <td>SMA-7 (1 tuần), SMA-14 (2 tuần), SMA-30 (1 tháng), SMA-90 (1 quý) trên toàn bộ 4.165 ngày — cho phép so sánh xu hướng ngắn/trung/dài hạn cùng lúc.</td>
+      </tr>
+      <tr>
+        <td><code>coin_correlation</code></td>
+        <td><span class="tag green">Batch</span></td>
+        <td>Spark Batch</td>
+        <td>—</td>
+        <td>Rolling 30-ngày Pearson correlation BTC-DOGE</td>
+      </tr>
+      <tr>
+        <td><code>predictions</code></td>
+        <td><span class="tag purple">ML</span></td>
+        <td>Inference Scheduler</td>
+        <td>—</td>
+        <td>LSTM 7-day forecast: predicted_price (USD từ inverse-transform cumsum log-return), predicted_volatility (confidence σ từ Volatility Head), model_version, horizon_step (1–7). Upsert key: (coin, prediction_date).</td>
+      </tr>
+    </tbody>
+  </table>
+  </div>
+
+  <!-- ═══════════════════════════════════════════
+       DOCKER SERVICES
+  ════════════════════════════════════════════ -->
+  <h2>9 Docker Services</h2>
+  <div class="table-wrap">
+  <table>
+    <thead>
+      <tr><th>Service</th><th>Layer</th><th>Image</th><th>Port</th><th>Depends On</th></tr>
+    </thead>
+    <tbody>
+      <tr><td><code>zookeeper</code></td><td>Infrastructure</td><td>confluentinc/cp-zookeeper:7.4</td><td>2181</td><td>—</td></tr>
+      <tr><td><code>kafka</code></td><td>Speed — Transport</td><td>confluentinc/cp-kafka:7.4</td><td>9092</td><td>zookeeper (healthy)</td></tr>
+      <tr><td><code>kafka-ui</code></td><td>Monitoring</td><td>provectuslabs/kafka-ui</td><td>8080</td><td>kafka</td></tr>
+      <tr><td><code>mongodb</code></td><td>Serving Store</td><td>mongo:6.0</td><td>27017</td><td>—</td></tr>
+      <tr><td><code>spark-master</code></td><td>Batch + Speed</td><td>bitnami/spark:3.5</td><td>8081, 7077</td><td>—</td></tr>
+      <tr><td><code>spark-worker</code></td><td>Batch + Speed</td><td>bitnami/spark:3.5</td><td>8082</td><td>spark-master</td></tr>
+      <tr><td><code>producer</code></td><td>Speed — Ingestion</td><td>custom Python</td><td>—</td><td>kafka (healthy)</td></tr>
+      <tr><td><code>api</code></td><td>Serving</td><td>FastAPI + uvicorn</td><td>8000</td><td>mongodb</td></tr>
+      <tr><td><code>dashboard</code></td><td>Presentation</td><td>Streamlit</td><td>8501</td><td>mongodb</td></tr>
+      <tr><td><code>frontend</code></td><td>Presentation</td><td>React 19 + Nginx</td><td>3000</td><td>api</td></tr>
+      <tr><td><code>inference</code></td><td>ML Pipeline</td><td>PyTorch + schedule</td><td>—</td><td>mongodb</td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <div class="callout success">
+    <strong>Key insight:</strong> Lambda Architecture tách biệt <em>correctness</em> (batch layer) khỏi <em>latency</em> (speed layer). Serving layer hợp nhất cả hai để client nhận được dữ liệu đầy đủ nhất tại mọi thời điểm — batch view cho lịch sử chính xác, speed view cho realtime approximate.
+  </div>
+
+  <div class="callout info">
+    <strong>Tại sao MongoDB là single store?</strong> Giảm complexity vận hành — không phải maintain nhiều databases với sync logic. Với throughput rất thấp (poll 600s = 2 messages/coin/10 phút), MongoDB over-engineered đủ cho use case này. Nếu scale lên hàng triệu ticks/ngày, InfluxDB hoặc Cassandra sẽ phù hợp hơn.
+  </div>
+</main>
+</div>
+<script>
+function toggleNav(btn){var nav=document.getElementById("sidebar-nav");var overlay=document.getElementById("nav-overlay");var isOpen=nav.classList.toggle("open");overlay.classList.toggle("open",isOpen);btn.setAttribute("aria-expanded",isOpen);btn.setAttribute("aria-label",isOpen?"Đóng menu":"Mở menu điều hướng");}
+function closeNav(){var nav=document.getElementById("sidebar-nav");var overlay=document.getElementById("nav-overlay");var btn=document.querySelector(".nav-toggle");nav.classList.remove("open");overlay.classList.remove("open");if(btn){btn.setAttribute("aria-expanded","false");btn.setAttribute("aria-label","Mở menu điều hướng");}}
+document.addEventListener("keydown",function(e){if(e.key==="Escape")closeNav();});
+</script>
+</body>
+</html>

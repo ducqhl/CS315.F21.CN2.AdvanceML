@@ -1,0 +1,804 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>LSTM Model — CS315</title>
+<link rel="stylesheet" href="style.css">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css" crossorigin="anonymous">
+<script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js" crossorigin="anonymous"></script>
+<script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/contrib/auto-render.min.js" crossorigin="anonymous"
+  onload="renderMathInElement(document.body,{delimiters:[{left:'\\(',right:'\\)',display:false},{left:'\\[',right:'\\]',display:true}],ignoredTags:['script','noscript','style','textarea','pre','code'],throwOnError:false})"></script>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/prism-themes@1.9.0/themes/prism-vsc-dark-plus.min.css" crossorigin="anonymous">
+<script defer src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-core.min.js" crossorigin="anonymous"></script>
+<script defer src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/plugins/autoloader/prism-autoloader.min.js" crossorigin="anonymous"></script>
+</head>
+<body>
+<a href="#main-content" class="skip-link">Bỏ qua điều hướng</a>
+<button class="nav-toggle" aria-label="Mở menu điều hướng" aria-expanded="false" aria-controls="sidebar-nav" onclick="toggleNav(this)">☰</button>
+<div class="nav-overlay" id="nav-overlay" onclick="closeNav()"></div>
+<div class="layout">
+<nav id="sidebar-nav" aria-label="Điều hướng trang">
+  <div class="logo"><h2>CS315.F12.CN2</h2><p>Lê Quang Hoài Đức · 25410034</p></div>
+  <div class="nav-group"><div class="nav-label">Tổng quan</div>
+    <a href="index.html">🏠 Trang chủ</a>
+    <a href="01_architecture.html">🏗️ Lambda Architecture</a>
+  </div>
+  <div class="nav-group"><div class="nav-label">Data Pipeline</div>
+    <a href="02_producer.html">📡 CoinGecko Producer</a>
+    <a href="03_spark_streaming.html">⚡ Spark Streaming</a>
+    <a href="04_spark_batch.html">📦 Spark Batch</a>
+    <a href="05_mongodb.html">🗄️ MongoDB</a>
+  </div>
+  <div class="nav-group"><div class="nav-label">ML Pipeline</div>
+    <a href="06_lstm.html" class="active">🧠 LSTM Model</a>
+  </div>
+  <div class="nav-group"><div class="nav-label">Serving Layer</div>
+    <a href="07_api.html">🔌 FastAPI Backend</a>
+    <a href="08_frontend.html">🖥️ React + Streamlit</a>
+  </div>
+  <div class="nav-group"><div class="nav-label">Quality & Ops</div>
+    <a href="09_testing.html">🧪 E2E Testing</a>
+    <a href="10_deployment.html">🐳 Docker Compose</a>
+    <a href="11_interview_qa.html">🎯 Phản biện Q&A <span class="badge">HOT</span></a>
+  </div>
+</nav>
+<main id="main-content" role="main">
+  <a href="index.html" class="back-link">← Trang chủ</a>
+  <h1>LSTM Model v3 — ML Pipeline
+    <span class="sub">src/ml/ — model.py, preprocess.py, train_lstm.py, walk_forward.py, backtest_compare.py</span>
+  </h1>
+
+  <!-- ═══════════════════════════════════════════
+       PIPELINE OVERVIEW
+  ════════════════════════════════════════════ -->
+  <h2>Pipeline Tổng quan</h2>
+  <div class="flow">
+    <div class="flow-node mongo">CSV / MongoDB<br><small>daily_stats</small></div>
+    <div class="flow-arrow">→</div>
+    <div class="flow-node lstm">Feature Eng.<br><small>9 features</small></div>
+    <div class="flow-arrow">→</div>
+    <div class="flow-node lstm">StandardScaler<br><small>fit on train only</small></div>
+    <div class="flow-arrow">→</div>
+    <div class="flow-node lstm">Sliding Windows<br><small>60×9 → 7</small></div>
+    <div class="flow-arrow">→</div>
+    <div class="flow-node lstm">LSTM Encoder<br><small>2L, 128h</small></div>
+    <div class="flow-arrow">→</div>
+    <div class="flow-node lstm">Price Head<br>+ Vol Head</div>
+    <div class="flow-arrow">→</div>
+    <div class="flow-node mongo">predictions</div>
+  </div>
+
+  <!-- ═══════════════════════════════════════════
+       DỮ LIỆU VÀ PHÂN TÍCH
+  ════════════════════════════════════════════ -->
+  <h2>Dữ liệu và Phân tích Thống kê</h2>
+
+  <h3>Thống kê mô tả dữ liệu thô</h3>
+  <p>Bộ dữ liệu gồm <strong>4.165 quan sát/coin</strong>, trải dài từ 01/01/2015 đến 29/05/2026 (khoảng 11,4 năm). Chất lượng tốt: dưới 0,03% null (chỉ 1 hàng thiếu market_cap mỗi coin, không ảnh hưởng pipeline).</p>
+
+  <div class="table-wrap">
+  <table>
+    <thead>
+      <tr><th>Coin</th><th>Thuộc tính</th><th>Min</th><th>Max</th><th>Mean</th><th>Std</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td rowspan="3"><strong>Bitcoin</strong></td>
+        <td>Giá đóng cửa (USD)</td>
+        <td>$172.15</td>
+        <td>$124.752.53</td>
+        <td>$29.277.59</td>
+        <td>$32.519.39</td>
+      </tr>
+      <tr>
+        <td>Khối lượng GD (USD)</td>
+        <td>0</td>
+        <td>$181.7 tỷ</td>
+        <td>$22.6 tỷ</td>
+        <td>$22.7 tỷ</td>
+      </tr>
+      <tr>
+        <td>Market cap (USD)</td>
+        <td>0</td>
+        <td>$1.44 nghìn tỷ</td>
+        <td>$243.6 tỷ</td>
+        <td>$319.3 tỷ</td>
+      </tr>
+      <tr>
+        <td rowspan="3"><strong>Dogecoin</strong></td>
+        <td>Giá đóng cửa (USD)</td>
+        <td>$0.0001</td>
+        <td>$0.6818</td>
+        <td>$0.0706</td>
+        <td>$0.0963</td>
+      </tr>
+      <tr>
+        <td>Khối lượng GD (USD)</td>
+        <td>0</td>
+        <td>$51.0 tỷ</td>
+        <td>$976 triệu</td>
+        <td>$2.71 tỷ</td>
+      </tr>
+      <tr>
+        <td>Market cap (USD)</td>
+        <td>0</td>
+        <td>$88.8 tỷ</td>
+        <td>$4.85 tỷ</td>
+        <td>$9.78 tỷ</td>
+      </tr>
+    </tbody>
+  </table>
+  </div>
+
+  <h3>Phân phối log-return và lý do chọn HuberLoss</h3>
+  <div class="table-wrap">
+  <table>
+    <thead>
+      <tr><th>Coin</th><th>Mean</th><th>Std</th><th>Min</th><th>Max</th><th>Kurtosis</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><strong>Bitcoin</strong></td>
+        <td>+0.001310</td>
+        <td>0.0353</td>
+        <td>−0.4337</td>
+        <td>+0.2871</td>
+        <td><strong>11.11</strong></td>
+      </tr>
+      <tr>
+        <td><strong>Dogecoin</strong></td>
+        <td>+0.001514</td>
+        <td>0.0653</td>
+        <td>−0.5071</td>
+        <td>+1.4791</td>
+        <td><strong>77.02</strong></td>
+      </tr>
+    </tbody>
+  </table>
+  </div>
+
+  <div class="callout info">
+    <strong>Tại sao kurtosis cao → chọn HuberLoss thay vì MSE?</strong> Kurtosis BTC = 11.11 và DOGE = 77.02, so với phân phối chuẩn (kurtosis = 3). Các sự kiện cực đoan (crash/pump) xảy ra thường xuyên hơn lý thuyết thống kê dự đoán (fat tails). MSE penalize outlier quadratic — bị distract bởi các spike cực đoan. HuberLoss = quadratic khi |error| ≤ δ, linear khi |error| > δ → robust hơn với fat tails.
+  </div>
+
+  <h3>Kiểm định tính dừng (ADF Test)</h3>
+  <div class="table-wrap">
+  <table>
+    <thead>
+      <tr><th>Coin</th><th>Chuỗi</th><th>ADF Statistic</th><th>p-value</th><th>Kết luận</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>Bitcoin</td>
+        <td>Giá đóng cửa (raw)</td>
+        <td>−1.178</td>
+        <td>0.683</td>
+        <td>Không dừng — không dùng làm feature</td>
+      </tr>
+      <tr>
+        <td>Bitcoin</td>
+        <td>Log-return 1 ngày</td>
+        <td>−66.27</td>
+        <td>≈ 0</td>
+        <td><strong>Dừng mạnh</strong> — feature chính</td>
+      </tr>
+      <tr>
+        <td>Dogecoin</td>
+        <td>Giá đóng cửa (raw)</td>
+        <td>−3.413</td>
+        <td>0.0105</td>
+        <td>Dừng (*) — bị ảnh hưởng bởi các pump đột biến</td>
+      </tr>
+      <tr>
+        <td>Dogecoin</td>
+        <td>Log-return 1 ngày</td>
+        <td>−14.73</td>
+        <td>≈ 0</td>
+        <td><strong>Dừng mạnh</strong> — feature chính</td>
+      </tr>
+    </tbody>
+  </table>
+  </div>
+
+  <!-- ═══════════════════════════════════════════
+       9 FEATURES
+  ════════════════════════════════════════════ -->
+  <h2>9 Input Features — Thiết kế và Lý do</h2>
+
+  <div class="callout info">
+    <strong>Invariant quan trọng:</strong> Feature index 0 PHẢI là <code>log_return_1d</code>. Inference code dùng <code>scaler.scale_[0]</code> và <code>scaler.mean_[0]</code> để inverse-transform kết quả dự đoán về giá USD. Thay đổi thứ tự features sẽ làm inference sai hoàn toàn.
+  </div>
+
+  <div class="table-wrap">
+  <table>
+    <thead>
+      <tr><th>#</th><th>Feature</th><th>Công thức</th><th>Nhóm</th><th>Mean (BTC)</th><th>Std (BTC)</th><th>Lý do chọn</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>0</td>
+        <td><code>log_return_1d</code></td>
+        <td>ln(close[t] / close[t-1])</td>
+        <td><span class="tag blue">Momentum</span></td>
+        <td>+0.0014</td>
+        <td>0.0347</td>
+        <td><strong>Tính dừng</strong> (ADF p≈0). Có thể cộng dồn: R(t,t+k) = Σr. Feature cốt lõi.</td>
+      </tr>
+      <tr>
+        <td>1</td>
+        <td><code>momentum_30d</code></td>
+        <td>close[t]/SMA30[t] − 1</td>
+        <td><span class="tag blue">Momentum</span></td>
+        <td>+0.0236</td>
+        <td>0.1163</td>
+        <td>Khoảng cách tương đối với SMA30. Nắm bắt xu hướng trung hạn độc lập với log_return_1d.</td>
+      </tr>
+      <tr>
+        <td>2</td>
+        <td><code>realized_vol_14d</code></td>
+        <td>std(log_return[t-13:t])</td>
+        <td><span class="tag amber">Volatility</span></td>
+        <td>+0.0305</td>
+        <td>0.0165</td>
+        <td>Input chính cho Volatility Head. Thêm ở v3 — model cần biết trạng thái biến động gần đây.</td>
+      </tr>
+      <tr>
+        <td>3</td>
+        <td><code>RSI_14</code></td>
+        <td>100 − 100/(1 + EMA14(U)/EMA14(D))</td>
+        <td><span class="tag purple">Oscillator</span></td>
+        <td>53.38</td>
+        <td>13.81</td>
+        <td>Nằm trong [0,100], không cần normalize thêm. Tín hiệu overbought/oversold.</td>
+      </tr>
+      <tr>
+        <td>4</td>
+        <td><code>log_volume</code></td>
+        <td>ln(total_volume + 1)</td>
+        <td><span class="tag green">Volume</span></td>
+        <td>22.79</td>
+        <td>2.07</td>
+        <td>Log giảm skewness. Volume xác nhận breakout — tín hiệu bổ sung cho price.</td>
+      </tr>
+      <tr>
+        <td>5</td>
+        <td><code>macd_norm</code></td>
+        <td>(EMA12 − EMA26) / close</td>
+        <td><span class="tag purple">Oscillator</span></td>
+        <td>+0.0047</td>
+        <td>0.0420</td>
+        <td>MACD normalized theo giá — cùng đơn vị qua mọi mức giá từ $172 đến $124.753.</td>
+      </tr>
+      <tr>
+        <td>6</td>
+        <td><code>bb_pct_b</code></td>
+        <td>(close − lower) / (upper − lower)</td>
+        <td><span class="tag purple">Oscillator</span></td>
+        <td>0.555</td>
+        <td>0.337</td>
+        <td>%B=0: giá tại lower band. %B=1: upper band. Bounded [0,1], đo vị trí trong Bollinger Band.</td>
+      </tr>
+      <tr>
+        <td>7</td>
+        <td><code>atr_norm</code></td>
+        <td>|log_return_1d|</td>
+        <td><span class="tag amber">Volatility</span></td>
+        <td>+0.0227</td>
+        <td>0.0263</td>
+        <td>Proxy ATR tức thì (True Range cần OHLC đầy đủ, CoinGecko chỉ có close). Bổ sung cho realized_vol_14d.</td>
+      </tr>
+      <tr>
+        <td>8</td>
+        <td><code>fear_greed</code></td>
+        <td>constant = 0.5</td>
+        <td><span class="tag red">Sentiment</span></td>
+        <td>0.5</td>
+        <td>0</td>
+        <td><strong>PLACEHOLDER.</strong> Cần tích hợp Alternative.me API. Hiện tại không đóng góp thông tin — điểm yếu được thừa nhận.</td>
+      </tr>
+    </tbody>
+  </table>
+  </div>
+
+  <h3>Warmup và số hàng hợp lệ</h3>
+  <p>SMA30 yêu cầu ít nhất 30 quan sát liên tiếp. Sau khi loại bỏ 29 hàng warmup:</p>
+  <pre>4.165 − 29 = 4.136 hàng hợp lệ</pre>
+
+  <h3>Tương quan giữa các features</h3>
+  <p>Hầu hết features có tương quan thấp — tính chất mong muốn (orthogonal signals). Ngoại lệ: <code>atr_norm</code> và <code>realized_vol_14d</code> có r ≈ 0.7. Hai features này đo volatility ở thang thời gian khác nhau (tức thì vs 14 ngày) — sự redundancy vừa phải này được chấp nhận vì Volatility Head cần cả hai.</p>
+
+  <!-- ═══════════════════════════════════════════
+       PHÂN CHIA DỮ LIỆU
+  ════════════════════════════════════════════ -->
+  <h2>Phân chia dữ liệu — Chronological Split</h2>
+
+  <div class="callout warning">
+    <strong>Tuyệt đối không shuffle:</strong> Dữ liệu chuỗi thời gian không được shuffle trước khi chia train/val/test. Shuffle gây data leakage — model "thấy" tương lai khi training → kết quả đánh giá lạc quan giả tạo.
+  </div>
+
+  <p>Hệ thống sử dụng phân chia tuần tự với tỷ lệ <strong>80/10/10</strong> trên rolling window <strong>730 ngày gần nhất</strong>:</p>
+  <div class="table-wrap">
+  <table>
+    <thead>
+      <tr><th>Tập</th><th>Tỷ lệ</th><th>Số ngày (~)</th><th>Mục đích</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><strong>Train</strong></td>
+        <td>80%</td>
+        <td>~584 ngày</td>
+        <td>Huấn luyện model, fit StandardScaler</td>
+      </tr>
+      <tr>
+        <td><strong>Validation</strong></td>
+        <td>10%</td>
+        <td>~73 ngày</td>
+        <td>Early stopping, hyperparameter tuning</td>
+      </tr>
+      <tr>
+        <td><strong>Test</strong></td>
+        <td>10%</td>
+        <td>~73 ngày</td>
+        <td>Báo cáo kết quả cuối cùng (không dùng trong training)</td>
+      </tr>
+    </tbody>
+  </table>
+  </div>
+
+  <p>Mỗi chuỗi input <strong>X</strong> có shape <code>(60, 9)</code> — 60 ngày lịch sử × 9 features. Mỗi target <strong>y</strong> là vector 7 log-return tương lai (MIMO 7-step forecast).</p>
+
+  <h3>Adaptive-threshold direction labelling</h3>
+  <p>Nhãn hướng UP/DOWN được tạo dựa trên median của training set:</p>
+  <div class="formula-block">
+    \[y_{\text{dir}}[k] = \begin{cases} 1\;(\text{UP}) & y[k] > \text{median}(y_{\text{train}}[:,k]) \\ 0\;(\text{DOWN}) & \text{ngược lại} \end{cases}\]
+  </div>
+  <p>Kết quả: phân phối nhãn gần như cân bằng (Step 1: UP=50.5%, Step 3: UP=51.1%, Step 7: UP=50.7%). Tuy nhiên, UP/DOWN là <em>tương đối so với median</em> — không phải tăng/giảm tuyệt đối theo giá gốc.</p>
+
+  <!-- ═══════════════════════════════════════════
+       KIẾN TRÚC MODEL
+  ════════════════════════════════════════════ -->
+  <h2>Kiến trúc LSTM v3 — Dual-Head</h2>
+
+  <div class="table-wrap">
+  <table>
+    <thead>
+      <tr><th>Thành phần</th><th>Chi tiết</th><th>Số tham số</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><strong>LSTM Layer 1</strong></td>
+        <td>input_size=9, hidden=128, dropout=0.2 after</td>
+        <td>70.656</td>
+      </tr>
+      <tr>
+        <td><strong>LSTM Layer 2</strong></td>
+        <td>input_size=128, hidden=128, dropout=0.2 after</td>
+        <td>131.584</td>
+      </tr>
+      <tr>
+        <td><strong>Price Head</strong></td>
+        <td>Linear(128→64) → ReLU → Dropout(0.1) → Linear(64→7)</td>
+        <td>8.711</td>
+      </tr>
+      <tr>
+        <td><strong>Volatility Head</strong></td>
+        <td>Linear(128→64) → ReLU → Dropout(0.1) → Linear(64→7) → <strong>Softplus</strong></td>
+        <td>8.711</td>
+      </tr>
+      <tr>
+        <td colspan="2"><strong>TỔNG</strong></td>
+        <td><strong>219.662</strong></td>
+      </tr>
+    </tbody>
+  </table>
+  </div>
+
+  <div class="card-grid">
+    <div class="card accent-blue">
+      <h3>LSTM Encoder</h3>
+      <p><strong>Input:</strong> (batch, 60, 9)</p>
+      <p><strong>Layer 1:</strong> input_size=9 → hidden=128, dropout=0.2</p>
+      <p><strong>Layer 2:</strong> input_size=128 → hidden=128, dropout=0.2</p>
+      <p><strong>Output:</strong> h_T = last hidden state (batch, 128)</p>
+      <p>h_T encode đầy đủ ngữ cảnh 60 ngày lịch sử. LSTM forget gate đã học "quên" thông tin không liên quan.</p>
+    </div>
+    <div class="card accent-blue">
+      <h3>Price Head</h3>
+      <p><strong>Input:</strong> h_T (batch, 128)</p>
+      <p>Linear(128→64) → ReLU → Dropout(0.1) → Linear(64→7)</p>
+      <p><strong>Output:</strong> 7 log-returns (batch, 7) — không có activation (unbounded, log-return có thể âm)</p>
+      <p><strong>Params:</strong> 8.256 + 455 = 8.711</p>
+    </div>
+    <div class="card accent-green">
+      <h3>Volatility Head</h3>
+      <p><strong>Input:</strong> h_T (batch, 128)</p>
+      <p>Linear(128→64) → ReLU → Dropout(0.1) → Linear(64→7) → <strong>Softplus</strong></p>
+      <p><strong>Output:</strong> 7 volatility predictions (batch, 7), luôn &gt; 0</p>
+      <p><strong>Softplus:</strong> ln(1+e^x) — smooth, gradient không bao giờ = 0, đảm bảo vol &gt; 0</p>
+      <p><strong>Params:</strong> 8.256 + 455 = 8.711</p>
+    </div>
+  </div>
+
+  <h3>LSTM Gate Equations</h3>
+  <div class="callout info">
+    <strong>Tại sao lấy h_T thay vì toàn sequence?</strong> LSTM's forget gate đã encode đầy đủ thông tin từ T=60 timesteps vào h_T. Với MIMO forecast, h_T hoạt động như một "summary vector" của 60 ngày lịch sử — phù hợp và đủ cho use case này.
+  </div>
+
+  <div class="table-wrap">
+  <table>
+    <thead>
+      <tr><th>Gate</th><th>Công thức</th><th>Vai trò</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>Forget gate</td>
+        <td>\(f_t = \sigma(W_f \cdot [h_{t-1}, x_t] + b_f)\)</td>
+        <td>Quyết định thông tin nào từ cell state cũ bị quên</td>
+      </tr>
+      <tr>
+        <td>Input gate</td>
+        <td>\(i_t = \sigma(W_i \cdot [h_{t-1}, x_t] + b_i)\)</td>
+        <td>Quyết định thông tin mới nào được thêm vào cell state</td>
+      </tr>
+      <tr>
+        <td>Candidate cell</td>
+        <td>\(\tilde{C}_t = \tanh(W_C \cdot [h_{t-1}, x_t] + b_C)\)</td>
+        <td>Giá trị candidate mới cho cell state</td>
+      </tr>
+      <tr>
+        <td>Cell state</td>
+        <td>\(C_t = f_t \odot C_{t-1} + i_t \odot \tilde{C}_t\)</td>
+        <td>State dài hạn — giải quyết vanishing gradient của RNN thường</td>
+      </tr>
+      <tr>
+        <td>Output gate</td>
+        <td>\(o_t = \sigma(W_o \cdot [h_{t-1}, x_t] + b_o)\)</td>
+        <td>Quyết định phần nào của cell state được output</td>
+      </tr>
+      <tr>
+        <td>Hidden state</td>
+        <td>\(h_t = o_t \odot \tanh(C_t)\)</td>
+        <td>Output tại timestep t — đưa vào layer tiếp theo</td>
+      </tr>
+    </tbody>
+  </table>
+  </div>
+
+  <!-- ═══════════════════════════════════════════
+       HÀM MẤT MÁT
+  ════════════════════════════════════════════ -->
+  <h2>Hàm Mất mát — Direction-Weighted Huber Loss</h2>
+
+  <h3>Combined Loss</h3>
+  <div class="formula-block">
+    \[L = \alpha \cdot L_{\text{price}} + \gamma \cdot L_{\text{vol}} = 1.0 \cdot L_{\text{price}} + 0.3 \cdot L_{\text{vol}}\]
+    <p style="font-size:13px;color:var(--muted);margin-top:4px">\(\gamma = 0.3\) được chọn qua thực nghiệm — \(\gamma > 0.5\) làm price head underfit.</p>
+  </div>
+
+  <h3>Direction-Weighted Huber Loss (Price Head)</h3>
+  <div class="formula-block">
+    \[w_{b,k} = 1 + 2 \cdot \mathbf{1}\bigl[\text{sign}(\hat{y}_{b,k}) \neq \text{sign}(y_{b,k})\bigr]\]
+    <p style="font-size:13px;color:var(--muted);margin:6px 0">\(w = 1\) nếu đúng chiều (penalty bình thường) · \(w = 3\) nếu sai chiều (phạt gấp 3×)</p>
+    \[\ell_\delta(r) = \begin{cases} \tfrac{1}{2}r^2 & |r| \le 1 \quad \text{(quadratic, như MSE)} \\ |r| - \tfrac{1}{2} & |r| > 1 \quad \text{(linear, robust với outlier)} \end{cases}\]
+    \[L_{\text{price}} = \frac{1}{|\mathcal{B}|} \sum_{b,k} w_{b,k} \cdot \ell_\delta\!\left(\hat{y}_{b,k} - y_{b,k}\right)\]
+  </div>
+
+  <div class="table-wrap">
+  <table>
+    <thead>
+      <tr><th>Tại sao Huber thay vì MSE?</th><th>Tại sao direction penalty?</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>Crypto có fat tails (DOGE kurtosis ≈ 77). MSE penalize outlier quadratic — bị distract bởi crash/pump đột biến. Huber = quadratic khi sai số nhỏ, linear khi sai số lớn → robust hơn.</td>
+        <td>Nhà đầu tư quan tâm đúng chiều (tăng/giảm) hơn là đúng magnitude tuyệt đối. Penalty ×3 tạo incentive rõ ràng để model ưu tiên predict đúng up/down direction.</td>
+      </tr>
+    </tbody>
+  </table>
+  </div>
+
+  <h3>MSE Loss (Volatility Head)</h3>
+  <div class="formula-block">
+    \[L_{\text{vol}} = \text{MSE}\!\left(\hat{\sigma}_k,\; \sigma^{\text{realized}}_k\right) = \frac{1}{7}\sum_{k=1}^{7}\left(\hat{\sigma}_k - \sigma^{\text{realized}}_k\right)^2\]
+    <p style="font-size:13px;color:var(--muted);margin-top:4px">Target \(\sigma^{\text{realized}}_k\) = std của log-returns trong cửa sổ xung quanh forecast step \(k\).</p>
+  </div>
+
+  <!-- ═══════════════════════════════════════════
+       HYPERPARAMS
+  ════════════════════════════════════════════ -->
+  <h2>Siêu tham số Huấn luyện</h2>
+  <div class="table-wrap">
+  <table>
+    <thead>
+      <tr><th>Siêu tham số</th><th>Giá trị</th><th>Lý do</th></tr>
+    </thead>
+    <tbody>
+      <tr><td>Optimizer</td><td>Adam</td><td>Adaptive learning rate, hiệu quả với sparse gradients</td></tr>
+      <tr><td>Learning rate</td><td>10⁻³</td><td>Standard cho Adam với LSTM</td></tr>
+      <tr><td>Weight decay</td><td>10⁻⁵</td><td>L2 regularization nhẹ để giảm overfitting</td></tr>
+      <tr><td>Batch size</td><td>64</td><td>Cân bằng giữa memory và gradient estimation quality</td></tr>
+      <tr><td>Max epochs</td><td>50</td><td>Upper bound — early stopping thường dừng trước</td></tr>
+      <tr><td>Early stopping patience</td><td>7</td><td>Dừng nếu val loss không giảm trong 7 epochs liên tiếp</td></tr>
+      <tr><td>LR scheduler</td><td>ReduceLROnPlateau (factor=0.5, patience=5)</td><td>Giảm LR khi val loss plateau — giúp fine-tune</td></tr>
+      <tr><td>Gradient clipping</td><td>max_norm = 1.0</td><td>Ngăn exploding gradients — phổ biến với LSTM trên financial data biến động mạnh</td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <!-- ═══════════════════════════════════════════
+       MIMO VS AUTOREGRESSIVE
+  ════════════════════════════════════════════ -->
+  <h2>MIMO vs Autoregressive Forecasting</h2>
+  <div class="table-wrap">
+  <table>
+    <thead>
+      <tr><th>Approach</th><th>Cách hoạt động</th><th>Ưu điểm</th><th>Nhược điểm</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><strong>MIMO (dùng trong đề tài)</strong></td>
+        <td>Dự đoán tất cả 7 steps trong 1 forward pass từ h_T</td>
+        <td>Không tích lũy lỗi. Nhanh (~8ms/inference). Confidence interval qua Volatility Head.</td>
+        <td>Confidence interval là shared từ h_T — không capture per-step uncertainty riêng biệt.</td>
+      </tr>
+      <tr>
+        <td><strong>Autoregressive</strong></td>
+        <td>Predict t+1, dùng làm input cho t+2, ... đến t+7</td>
+        <td>Linh hoạt về horizon. Per-step uncertainty tự nhiên hơn.</td>
+        <td>Error accumulation: step t+1 sai 2% → step t+7 có thể sai 14%. 7 forward passes thay vì 1.</td>
+      </tr>
+    </tbody>
+  </table>
+  </div>
+
+  <!-- ═══════════════════════════════════════════
+       WALK-FORWARD VALIDATION
+  ════════════════════════════════════════════ -->
+  <h2>Walk-Forward Validation</h2>
+
+  <div class="callout warning">
+    <strong>Tại sao không dùng K-Fold?</strong> K-Fold shuffle ngẫu nhiên → temporal leakage: model train trên data tháng 6/2025 rồi test trên tháng 3/2025 — "nhìn thấy tương lai" khi train. K-Fold cho dir accuracy ~65-70% (leakage bias). Walk-forward cho 49.4% (thực tế hơn).
+  </div>
+
+  <div class="table-wrap">
+  <table>
+    <thead>
+      <tr><th>Tham số</th><th>Giá trị</th><th>Lý do</th></tr>
+    </thead>
+    <tbody>
+      <tr><td>Số folds</td><td>6</td><td>Đủ sample để đánh giá across multiple market regimes</td></tr>
+      <tr><td>Fold size</td><td>60 ngày</td><td>= 1 validation window, đủ để tính metrics có ý nghĩa</td></tr>
+      <tr><td>Training window</td><td>730 ngày</td><td>~2 năm — capture cả bull/bear cycle. Rolling: không expand vô hạn</td></tr>
+      <tr><td>Epochs/fold</td><td>30</td><td>Giảm từ 50 (full training) vì walk-forward overhead nhiều lần train</td></tr>
+      <tr><td>Early stopping patience</td><td>5</td><td>Ngắn hơn full training (7) vì validation window nhỏ hơn</td></tr>
+      <tr><td>Scaler</td><td>Per-fold</td><td>Mỗi fold fit scaler riêng — tránh look-ahead bias từ future data</td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <h3>Kết quả Walk-Forward — Bitcoin (H=7)</h3>
+  <div class="table-wrap">
+  <table>
+    <thead>
+      <tr><th>Fold</th><th>RMSE ($)</th><th>MAE ($)</th><th>Dir Acc (%)</th><th>Train seqs</th><th>Val seqs</th><th>Market Context</th></tr>
+    </thead>
+    <tbody>
+      <tr><td>1</td><td>3.902</td><td>2.840</td><td>46.3</td><td>635</td><td>54</td><td>Sideway market</td></tr>
+      <tr><td>2</td><td>3.029</td><td>2.415</td><td>50.0</td><td>635</td><td>54</td><td>—</td></tr>
+      <tr><td>3</td><td>4.810</td><td>3.773</td><td>50.0</td><td>635</td><td>54</td><td>Sideway (post-halving)</td></tr>
+      <tr><td>4</td><td>3.160</td><td>2.378</td><td><strong>55.6</strong></td><td>635</td><td>54</td><td>Trending market ↑</td></tr>
+      <tr><td>5</td><td>4.144</td><td>2.972</td><td>38.9</td><td>635</td><td>54</td><td>Sideway</td></tr>
+      <tr><td>6</td><td>2.581</td><td>2.094</td><td><strong>55.6</strong></td><td>635</td><td>54</td><td>Trending market ↑</td></tr>
+      <tr style="background:rgba(92,138,255,0.08)">
+        <td><strong>Mean</strong></td>
+        <td><strong>3.604</strong></td>
+        <td><strong>2.579</strong></td>
+        <td><strong>49.4</strong></td>
+        <td>—</td>
+        <td>—</td>
+        <td>—</td>
+      </tr>
+    </tbody>
+  </table>
+  </div>
+
+  <div class="callout info">
+    <strong>Pattern trending vs sideway:</strong> Model hoạt động tốt hơn rõ rệt trên trending market (fold 4,6: 55.6%) so với sideway (fold 3,5: 38.9–50%). Đây là characteristic phổ biến của LSTM time series: tín hiệu xu hướng rõ ràng hơn khi thị trường có hướng. Sideway market = nhiều noise hơn signal.
+  </div>
+
+  <!-- ═══════════════════════════════════════════
+       KẾT QUẢ TEST
+  ════════════════════════════════════════════ -->
+  <h2>Kết quả trên Tập Test</h2>
+  <div class="table-wrap">
+  <table>
+    <thead>
+      <tr><th>Coin</th><th>RMSE</th><th>MAE</th><th>Dir Acc (bước 1)</th><th>Epochs trained</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><strong>Bitcoin (BTC)</strong></td>
+        <td>$1.799.50</td>
+        <td>$1.288.92</td>
+        <td>40.0%</td>
+        <td>10</td>
+      </tr>
+      <tr>
+        <td><strong>Dogecoin (DOGE)</strong></td>
+        <td>$0.00325</td>
+        <td>$0.00267</td>
+        <td>20.0%</td>
+        <td>18</td>
+      </tr>
+    </tbody>
+  </table>
+  </div>
+
+  <div class="callout warning">
+    <strong>Directional accuracy thấp trên test tĩnh — tại sao?</strong> Test set chỉ có ~73 quan sát — đủ nhỏ để kết quả dao động lớn theo thị trường. Model optimize Huber loss trên log-return, không trực tiếp optimize directional accuracy. Kết quả walk-forward (nhiều fold, dữ liệu đa dạng hơn) và backtest (dữ liệu unseen) đáng tin cậy hơn.
+  </div>
+
+  <!-- ═══════════════════════════════════════════
+       BACKTEST
+  ════════════════════════════════════════════ -->
+  <h2>Backtest 6 Tháng — Bitcoin (01/2026 – 05/2026)</h2>
+  <div class="table-wrap">
+  <table>
+    <thead>
+      <tr><th>Horizon</th><th>Số cửa sổ</th><th>RMSE (mean)</th><th>MAE (mean)</th><th>Dir Acc</th><th>Mean Err %</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><strong>7 ngày</strong></td>
+        <td>18</td>
+        <td>$3.009.77</td>
+        <td>$2.593.60</td>
+        <td><strong style="color: var(--accent2);">61.1%</strong></td>
+        <td>0.37%</td>
+      </tr>
+      <tr>
+        <td>15 ngày</td>
+        <td>8</td>
+        <td>$4.289.60</td>
+        <td>$3.510.45</td>
+        <td>50.0%</td>
+        <td>2.72%</td>
+      </tr>
+      <tr>
+        <td>60 ngày</td>
+        <td>2</td>
+        <td>$13.452.73</td>
+        <td>$12.385.02</td>
+        <td>50.0%</td>
+        <td>15.89%</td>
+      </tr>
+    </tbody>
+  </table>
+  </div>
+
+  <div class="callout success">
+    <strong>Key finding:</strong> Horizon 7 ngày đạt <strong>61.1% directional accuracy</strong> trên 18 cửa sổ test data hoàn toàn unseen — vượt ngưỡng random (50%) 11.1 điểm phần trăm. Mean Error = 0.37% cho thấy model không có systematic bias theo một chiều. Horizon 7 ngày là vùng hữu ích duy nhất — horizon 15 và 60 ngày chỉ đạt 50% (random).
+  </div>
+
+  <div class="callout warning">
+    <strong>Sự kiện đặc biệt:</strong> Cửa sổ 30/01–05/02/2026 có RMSE = $11.086 do crash đột ngột từ $84.561 xuống $62.702 (−25.8% trong 7 ngày). Đây là tail event mà bất kỳ mô hình nào cũng khó dự đoán — không phải failure của model, mà là inherent uncertainty của crypto market.
+  </div>
+
+  <!-- ═══════════════════════════════════════════
+       INFERENCE PROCESS
+  ════════════════════════════════════════════ -->
+  <h2>Inference Process — 6 Bước</h2>
+  <div class="steps">
+    <div class="step">
+      <div class="step-body">
+        <h4>Load 60 ngày gần nhất</h4>
+        <p>Đọc từ MongoDB <code>daily_stats</code> hoặc CSV, lấy 60+30 rows gần nhất (30 rows warmup cho SMA30).</p>
+      </div>
+    </div>
+    <div class="step">
+      <div class="step-body">
+        <h4>Compute 9 features</h4>
+        <p>Tính 9 features từ raw close price. Lấy 60 rows cuối (bỏ 29 rows warmup). Shape: (60, 9).</p>
+      </div>
+    </div>
+    <div class="step">
+      <div class="step-body">
+        <h4>Transform với scaler đã train</h4>
+        <p>Load <code>scaler_{coin}.pkl</code> từ disk. Transform features (không fit lại — tránh look-ahead bias). Shape vẫn: (60, 9).</p>
+      </div>
+    </div>
+    <div class="step">
+      <div class="step-body">
+        <h4>Forward pass qua LSTM</h4>
+        <p>Input: (1, 60, 9). Output: price_pred (1,7) + vol_pred (1,7). Thời gian: ~8ms trên CPU.</p>
+      </div>
+    </div>
+    <div class="step">
+      <div class="step-body">
+        <h4>Inverse transform về giá USD</h4>
+        <p>\(p_{t+k} = p_t \times \exp\!\left(\sum_{j=1}^{k} r_j\right)\) &nbsp;— dùng <code>scaler.scale_[0]</code> và <code>scaler.mean_[0]</code> để inverse-transform \(r_j\) từ standardized space về log-return thực.</p>
+      </div>
+    </div>
+    <div class="step">
+      <div class="step-body">
+        <h4>Upsert 7 predictions vào MongoDB</h4>
+        <p>7 documents vào <code>predictions</code> collection với upsert key (coin, prediction_date). Idempotent: chạy lại với cùng data cho cùng kết quả.</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════════════════════════
+       E2E TEST
+  ════════════════════════════════════════════ -->
+  <h2>E2E Test Contract (Layer 3)</h2>
+  <p>File: <code>tests/e2e/test_ml_mongo.py</code>. Xác nhận toàn bộ ML pipeline từ training đến inference:</p>
+
+  <div class="table-wrap">
+  <table>
+    <thead>
+      <tr><th>Class</th><th>Test</th><th>Assertion</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td rowspan="6"><strong>TestLstmTraining</strong></td>
+        <td><code>test_training_returns_metrics</code></td>
+        <td>Training trả về dict chứa RMSE, MAE, directional accuracy</td>
+      </tr>
+      <tr>
+        <td><code>test_model_file_saved</code></td>
+        <td><code>lstm_{coin}_v2.pt</code> được lưu đúng path</td>
+      </tr>
+      <tr>
+        <td><code>test_scaler_file_saved</code></td>
+        <td><code>scaler_{coin}.pkl</code> được lưu — cần cho inference inverse transform</td>
+      </tr>
+      <tr>
+        <td><code>test_rmse_is_non_negative</code></td>
+        <td>RMSE ≥ 0 (mathematical constraint)</td>
+      </tr>
+      <tr>
+        <td><code>test_mae_is_non_negative</code></td>
+        <td>MAE ≥ 0 (mathematical constraint)</td>
+      </tr>
+      <tr>
+        <td><code>test_directional_accuracy_in_range</code></td>
+        <td>Dir accuracy ∈ [0, 1]</td>
+      </tr>
+      <tr>
+        <td rowspan="6"><strong>TestInferenceToMongo</strong></td>
+        <td><code>test_writes_7_predictions</code></td>
+        <td>Inference ghi đúng 7 documents (horizon = 7)</td>
+      </tr>
+      <tr>
+        <td><code>test_prediction_document_schema</code></td>
+        <td>Fields bắt buộc: coin, date, predicted_price, model_version</td>
+      </tr>
+      <tr>
+        <td><code>test_predicted_prices_are_positive</code></td>
+        <td>Mọi giá dự đoán &gt; 0 (USD price không thể âm)</td>
+      </tr>
+      <tr>
+        <td><code>test_prediction_dates_are_in_future</code></td>
+        <td>7 ngày dự đoán đều sau ngày hiện tại</td>
+      </tr>
+      <tr>
+        <td><code>test_prediction_dates_are_unique</code></td>
+        <td>Không có ngày trùng — mỗi ngày chỉ 1 prediction</td>
+      </tr>
+      <tr>
+        <td><code><strong>test_upsert_idempotency</strong></code></td>
+        <td>Chạy inference 2 lần → vẫn chỉ 7 documents (không phải 14)</td>
+      </tr>
+    </tbody>
+  </table>
+  </div>
+</main>
+</div>
+<script>
+function toggleNav(btn){var nav=document.getElementById("sidebar-nav");var overlay=document.getElementById("nav-overlay");var isOpen=nav.classList.toggle("open");overlay.classList.toggle("open",isOpen);btn.setAttribute("aria-expanded",isOpen);btn.setAttribute("aria-label",isOpen?"Đóng menu":"Mở menu điều hướng");}
+function closeNav(){var nav=document.getElementById("sidebar-nav");var overlay=document.getElementById("nav-overlay");var btn=document.querySelector(".nav-toggle");nav.classList.remove("open");overlay.classList.remove("open");if(btn){btn.setAttribute("aria-expanded","false");btn.setAttribute("aria-label","Mở menu điều hướng");}}
+document.addEventListener("keydown",function(e){if(e.key==="Escape")closeNav();});
+</script>
+</body>
+</html>

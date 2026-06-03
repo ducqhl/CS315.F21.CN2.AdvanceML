@@ -1,0 +1,370 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Docker Deployment — CS315</title>
+<link rel="stylesheet" href="style.css">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/prism-themes@1.9.0/themes/prism-vsc-dark-plus.min.css" crossorigin="anonymous">
+<script defer src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-core.min.js" crossorigin="anonymous"></script>
+<script defer src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/plugins/autoloader/prism-autoloader.min.js" crossorigin="anonymous"></script>
+</head>
+<body>
+<a href="#main-content" class="skip-link">Bỏ qua điều hướng</a>
+<button class="nav-toggle" aria-label="Mở menu điều hướng" aria-expanded="false" aria-controls="sidebar-nav" onclick="toggleNav(this)">☰</button>
+<div class="nav-overlay" id="nav-overlay" onclick="closeNav()"></div>
+<div class="layout">
+<nav id="sidebar-nav" aria-label="Điều hướng trang">
+  <div class="logo"><h2>CS315.F12.CN2</h2><p>Lê Quang Hoài Đức · 25410034</p></div>
+  <div class="nav-group"><div class="nav-label">Tổng quan</div>
+    <a href="index.html">🏠 Trang chủ</a>
+    <a href="01_architecture.html">🏗️ Lambda Architecture</a>
+  </div>
+  <div class="nav-group"><div class="nav-label">Data Pipeline</div>
+    <a href="02_producer.html">📡 CoinGecko Producer</a>
+    <a href="03_spark_streaming.html">⚡ Spark Streaming</a>
+    <a href="04_spark_batch.html">📦 Spark Batch</a>
+    <a href="05_mongodb.html">🗄️ MongoDB</a>
+  </div>
+  <div class="nav-group"><div class="nav-label">ML Pipeline</div><a href="06_lstm.html">🧠 LSTM Model</a></div>
+  <div class="nav-group"><div class="nav-label">Serving Layer</div>
+    <a href="07_api.html">🔌 FastAPI Backend</a>
+    <a href="08_frontend.html">🖥️ React + Streamlit</a>
+  </div>
+  <div class="nav-group"><div class="nav-label">Quality & Ops</div>
+    <a href="09_testing.html">🧪 E2E Testing</a>
+    <a href="10_deployment.html" class="active">🐳 Docker Compose</a>
+    <a href="11_interview_qa.html">🎯 Phản biện Q&A <span class="badge">HOT</span></a>
+  </div>
+</nav>
+<main id="main-content" role="main">
+  <a href="index.html" class="back-link">← Trang chủ</a>
+  <h1>Docker Compose Deployment
+    <span class="sub">docker/docker-compose.yml — 9 services, health checks, dependency chain</span>
+  </h1>
+
+  <!-- ═══════════════════════════════════════════
+       SERVICE DEPENDENCY CHAIN
+  ════════════════════════════════════════════ -->
+  <h2>Service Dependency Chain</h2>
+  <pre>zookeeper
+  └── kafka  (depends_on: zookeeper — condition: service_healthy)
+        ├── kafka-ui
+        └── producer  (depends_on: kafka — condition: service_healthy)
+
+mongodb  (independent — no dependencies)
+  ├── api        (depends_on: mongodb — condition: service_started)
+  ├── dashboard  (depends_on: mongodb — condition: service_started)
+  └── inference  (depends_on: mongodb — condition: service_started)
+
+spark-master  (independent)
+  └── spark-worker  (depends_on: spark-master — condition: service_healthy)
+
+api
+  └── frontend  (depends_on: api — condition: service_started)</pre>
+
+  <div class="callout info">
+    <strong>Health check conditions:</strong> <code>condition: service_healthy</code> đảm bảo service phụ thuộc chỉ start sau khi health check pass. Tránh race condition như Producer start trước khi Kafka sẵn sàng nhận connections — điều này gây Producer crash ngay khi startup.
+  </div>
+
+  <!-- ═══════════════════════════════════════════
+       SERVICE TABLE
+  ════════════════════════════════════════════ -->
+  <h2>9 Services — Chi tiết</h2>
+  <div class="table-wrap">
+  <table>
+    <thead>
+      <tr><th>Service</th><th>Image</th><th>Port (host)</th><th>Depends On (condition)</th><th>Health Check</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><code>zookeeper</code></td>
+        <td>confluentinc/cp-zookeeper:7.4</td>
+        <td>2181</td>
+        <td>—</td>
+        <td><code>ruok</code> command</td>
+      </tr>
+      <tr>
+        <td><code>kafka</code></td>
+        <td>confluentinc/cp-kafka:7.4</td>
+        <td>9092 (external)<br>29092 (internal)</td>
+        <td>zookeeper (healthy)</td>
+        <td>broker list check</td>
+      </tr>
+      <tr>
+        <td><code>kafka-ui</code></td>
+        <td>provectuslabs/kafka-ui</td>
+        <td>8080</td>
+        <td>kafka (started)</td>
+        <td>—</td>
+      </tr>
+      <tr>
+        <td><code>mongodb</code></td>
+        <td>mongo:6.0</td>
+        <td>27017</td>
+        <td>—</td>
+        <td><code>mongosh --eval "db.adminCommand('ping')"</code></td>
+      </tr>
+      <tr>
+        <td><code>spark-master</code></td>
+        <td>bitnami/spark:3.5</td>
+        <td>8081 (UI), 7077</td>
+        <td>—</td>
+        <td>HTTP /</td>
+      </tr>
+      <tr>
+        <td><code>spark-worker</code></td>
+        <td>bitnami/spark:3.5</td>
+        <td>8082</td>
+        <td>spark-master (healthy)</td>
+        <td>HTTP /</td>
+      </tr>
+      <tr>
+        <td><code>producer</code></td>
+        <td>custom Python image</td>
+        <td>—</td>
+        <td>kafka (healthy)</td>
+        <td>—</td>
+      </tr>
+      <tr>
+        <td><code>api</code></td>
+        <td>custom FastAPI + uvicorn</td>
+        <td>8000</td>
+        <td>mongodb (started)</td>
+        <td>GET /health → 200</td>
+      </tr>
+      <tr>
+        <td><code>dashboard</code></td>
+        <td>Streamlit 1.32</td>
+        <td>8501</td>
+        <td>mongodb (started)</td>
+        <td>—</td>
+      </tr>
+      <tr>
+        <td><code>frontend</code></td>
+        <td>React 19 + Nginx alpine</td>
+        <td>3000</td>
+        <td>api (started)</td>
+        <td>—</td>
+      </tr>
+      <tr>
+        <td><code>inference</code></td>
+        <td>custom PyTorch + schedule</td>
+        <td>—</td>
+        <td>mongodb (started)</td>
+        <td>—</td>
+      </tr>
+    </tbody>
+  </table>
+  </div>
+
+  <!-- ═══════════════════════════════════════════
+       SERVICE URLS
+  ════════════════════════════════════════════ -->
+  <h2>Service URLs</h2>
+  <div class="table-wrap">
+  <table>
+    <thead>
+      <tr><th>Service</th><th>URL</th><th>Dùng để</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><strong>React Frontend</strong></td>
+        <td><a href="http://localhost:3000" style="color:var(--accent)">http://localhost:3000</a></td>
+        <td>Giao diện chính — 5 trang phân tích</td>
+      </tr>
+      <tr>
+        <td><strong>Streamlit Dashboard</strong></td>
+        <td><a href="http://localhost:8501" style="color:var(--accent)">http://localhost:8501</a></td>
+        <td>Analytics dashboard nhanh</td>
+      </tr>
+      <tr>
+        <td><strong>FastAPI Swagger UI</strong></td>
+        <td><a href="http://localhost:8000/docs" style="color:var(--accent)">http://localhost:8000/docs</a></td>
+        <td>Interactive API docs, test endpoints</td>
+      </tr>
+      <tr>
+        <td><strong>Kafka UI</strong></td>
+        <td><a href="http://localhost:8080" style="color:var(--accent)">http://localhost:8080</a></td>
+        <td>Monitor Kafka topics, messages, consumer groups</td>
+      </tr>
+      <tr>
+        <td><strong>Spark Master UI</strong></td>
+        <td><a href="http://localhost:8081" style="color:var(--accent)">http://localhost:8081</a></td>
+        <td>Spark job monitoring, workers status</td>
+      </tr>
+      <tr>
+        <td><strong>MongoDB</strong></td>
+        <td><code>localhost:27017</code></td>
+        <td>Direct connection (admin/password123) — MongoCompass, mongosh</td>
+      </tr>
+    </tbody>
+  </table>
+  </div>
+
+  <!-- ═══════════════════════════════════════════
+       QUICK START
+  ════════════════════════════════════════════ -->
+  <h2>Quick Start — 6 Bước</h2>
+  <div class="steps">
+    <div class="step">
+      <div class="step-body">
+        <h4>Setup environment variables</h4>
+        <pre><code>cp .env.example .env
+# Sửa COINGECKO_API_KEY trong .env</code></pre>
+      </div>
+    </div>
+    <div class="step">
+      <div class="step-body">
+        <h4>Start tất cả services</h4>
+        <pre><code>make docker-up
+# hoặc: docker compose -f docker/docker-compose.yml up -d
+# Chờ ~60 giây cho Kafka/Zookeeper healthy</code></pre>
+      </div>
+    </div>
+    <div class="step">
+      <div class="step-body">
+        <h4>Tạo Kafka topics</h4>
+        <pre><code>bash scripts/create_topics.sh
+# Creates: crypto_raw, crypto_alerts</code></pre>
+      </div>
+    </div>
+    <div class="step">
+      <div class="step-body">
+        <h4>Populate MongoDB với lịch sử</h4>
+        <pre><code>bash scripts/run_batch.sh
+# Runs Spark Batch → populates daily_stats, historical_sma, coin_correlation</code></pre>
+      </div>
+    </div>
+    <div class="step">
+      <div class="step-body">
+        <h4>Train LSTM và chạy inference</h4>
+        <pre><code>make infer-all
+# hoặc: bash scripts/run_inference.sh
+# Trains BTC + DOGE models → populates predictions collection</code></pre>
+      </div>
+    </div>
+    <div class="step">
+      <div class="step-body">
+        <h4>Verify và access</h4>
+        <pre><code>bash scripts/verify_acceptance.sh
+# Kiểm tra acceptance criteria
+# Mở http://localhost:3000 để xem React Frontend</code></pre>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════════════════════════
+       COMMON COMMANDS
+  ════════════════════════════════════════════ -->
+  <h2>Common Commands</h2>
+  <pre><code class="language-bash">make docker-up      # Start tất cả 9 services
+make docker-down    # Stop và remove containers
+make docker-logs    # Follow logs tất cả services
+
+make batch          # Submit Spark batch job (populate MongoDB)
+make infer-all      # Train + infer cả BTC và DOGE
+make train-btc      # Train BTC LSTM only
+make train-doge     # Train DOGE LSTM only
+
+make test           # Run unit tests (không cần Docker)
+make e2e            # Run E2E tests (cần Docker running)
+make e2e-layer-1    # Producer → Kafka only
+make e2e-layer-2    # Spark Batch → MongoDB only
+make e2e-layer-3    # ML Pipeline → MongoDB only</code></pre>
+
+  <!-- ═══════════════════════════════════════════
+       VOLUMES
+  ════════════════════════════════════════════ -->
+  <h2>Docker Volumes</h2>
+  <div class="table-wrap">
+  <table>
+    <thead>
+      <tr><th>Volume</th><th>Mount Point (container)</th><th>Dùng cho</th><th>Persistence</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><code>mongodb_data</code></td>
+        <td>/data/db</td>
+        <td>MongoDB data — không mất khi container restart</td>
+        <td>Named volume, persistent</td>
+      </tr>
+      <tr>
+        <td><code>./src</code></td>
+        <td>/app/src</td>
+        <td>Source code bind mount — hot reload trong dev</td>
+        <td>Bind mount</td>
+      </tr>
+      <tr>
+        <td><code>./data</code></td>
+        <td>/app/data</td>
+        <td>CSV lịch sử + model artifacts (<code>lstm_*.pt</code>, <code>scaler_*.pkl</code>)</td>
+        <td>Bind mount</td>
+      </tr>
+    </tbody>
+  </table>
+  </div>
+
+  <div class="callout warning">
+    <strong>Kafka checkpoint (/tmp):</strong> Spark checkpoint dir là <code>/tmp/spark-checkpoints</code> bên trong container — mất khi container restart. Sau restart, Spark đọc từ latest Kafka offset, bỏ qua data trong downtime. Production cần mount persistent volume cho checkpoint dir (HDFS, S3, hoặc named volume).
+  </div>
+
+  <!-- ═══════════════════════════════════════════
+       TẠI SAO DOCKER COMPOSE
+  ════════════════════════════════════════════ -->
+  <h2>Tại sao Docker Compose thay vì Kubernetes?</h2>
+  <div class="table-wrap">
+  <table>
+    <thead>
+      <tr><th>Docker Compose (chọn)</th><th>Kubernetes</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>Single-machine deployment — phù hợp với laptop/server local</td>
+        <td>Multi-node cluster management — overkill cho single machine</td>
+      </tr>
+      <tr>
+        <td>Đơn giản: 1 file YAML, <code>make docker-up</code></td>
+        <td>Phức tạp: manifests, services, ingress, PVC, secrets management</td>
+      </tr>
+      <tr>
+        <td>Learning curve thấp — không che khuất Lambda Architecture concepts</td>
+        <td>Learning curve cao — K8s complexity che khuất mục tiêu học tập chính</td>
+      </tr>
+      <tr>
+        <td>Migration path: Docker Compose → Docker Swarm → Kubernetes</td>
+        <td>Phù hợp cho production scale, multi-datacenter</td>
+      </tr>
+    </tbody>
+  </table>
+  </div>
+
+  <!-- ═══════════════════════════════════════════
+       PHẦN CỨNG
+  ════════════════════════════════════════════ -->
+  <h2>Cấu hình phần cứng thực nghiệm</h2>
+  <div class="card accent-blue">
+    <h3>Môi trường thực nghiệm</h3>
+    <div class="table-wrap" style="margin: 0;">
+    <table>
+      <tr><td><strong>CPU</strong></td><td>Intel Core i7 (8 cores)</td></tr>
+      <tr><td><strong>RAM</strong></td><td>16 GB</td></tr>
+      <tr><td><strong>Storage</strong></td><td>SSD</td></tr>
+      <tr><td><strong>GPU</strong></td><td>Không cần — LSTM train trên CPU (~3.000 samples nhỏ)</td></tr>
+      <tr><td><strong>OS</strong></td><td>macOS Darwin / Linux</td></tr>
+    </table>
+    </div>
+  </div>
+
+  <div class="callout info">
+    <strong>LSTM training trên CPU:</strong> Dataset chỉ ~3.000 samples sau sliding window, model ~220K parameters. Thời gian training: ~2-5 phút/coin trên CPU. GPU không cần thiết và không cải thiện đáng kể cho dataset size này.
+  </div>
+</main>
+</div>
+<script>
+function toggleNav(btn){var nav=document.getElementById("sidebar-nav");var overlay=document.getElementById("nav-overlay");var isOpen=nav.classList.toggle("open");overlay.classList.toggle("open",isOpen);btn.setAttribute("aria-expanded",isOpen);btn.setAttribute("aria-label",isOpen?"Đóng menu":"Mở menu điều hướng");}
+function closeNav(){var nav=document.getElementById("sidebar-nav");var overlay=document.getElementById("nav-overlay");var btn=document.querySelector(".nav-toggle");nav.classList.remove("open");overlay.classList.remove("open");if(btn){btn.setAttribute("aria-expanded","false");btn.setAttribute("aria-label","Mở menu điều hướng");}}
+document.addEventListener("keydown",function(e){if(e.key==="Escape")closeNav();});
+</script>
+</body>
+</html>

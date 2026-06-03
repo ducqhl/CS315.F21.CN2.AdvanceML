@@ -82,7 +82,8 @@ export default function PredictionsPage({ coin }: Props) {
   const [retrainLoading,  setRetrainLoading]   = useState(false);
   const [showHistory,     setShowHistory]      = useState(false);
   const [showRetrain,     setShowRetrain]      = useState(false);
-  const [showAllForecast, setShowAllForecast]  = useState(false);
+  const [forecastPage,    setForecastPage]     = useState(1);
+  const FORECAST_PAGE_SIZE = 7;
   const [toast,           setToast]            = useState<{ msg: string; type: 'ok' | 'err' } | null>(null);
   const [retrainJobs,     setRetrainJobs]      = useState<RetrainJob[]>([]);
 
@@ -141,6 +142,7 @@ export default function PredictionsPage({ coin }: Props) {
     try {
       await setActiveModel(coin, h);
       setActiveHorizon(h);
+      setForecastPage(1);
       await queryClient.invalidateQueries({ queryKey: ['predictions', coin] });
       showToast(`Active model set to H${h}`, 'ok');
     } catch {
@@ -186,6 +188,14 @@ export default function PredictionsPage({ coin }: Props) {
     return [...histPts, ...fcstPts];
   }, [history, predictions, activeHistoryDays]);
 
+  const historicalMap = useMemo(() => {
+    const map: Record<string, number> = {};
+    for (const h of history) {
+      map[h.date.slice(0, 10)] = h.avg_close;
+    }
+    return map;
+  }, [history]);
+
   const todayIndex  = history.slice(-activeHistoryDays).length - 1;
   const todayDate   = chartData[todayIndex]?.date ?? null;
 
@@ -200,9 +210,12 @@ export default function PredictionsPage({ coin }: Props) {
     return                                 { label: 'Neutral',  color: 'var(--warn)', Icon: Minus,        count: `${flat}/${n}` };
   }, [predictions]);
 
-  const visibleForecasts = showAllForecast
-    ? (predictions?.predictions ?? [])
-    : (predictions?.predictions ?? []).slice(0, 14);
+  const allForecasts = predictions?.predictions ?? [];
+  const totalPages = Math.max(1, Math.ceil(allForecasts.length / FORECAST_PAGE_SIZE));
+  const visibleForecasts = allForecasts.slice(
+    (forecastPage - 1) * FORECAST_PAGE_SIZE,
+    forecastPage * FORECAST_PAGE_SIZE,
+  );
 
   const periodLabel = `${activeHorizon}-Day`;
 
@@ -526,7 +539,9 @@ export default function PredictionsPage({ coin }: Props) {
             <tr>
               <th>#</th>
               <th>Date</th>
-              <th style={{ textAlign: 'right' }}>Predicted Price</th>
+              <th style={{ textAlign: 'right' }}>Predicted</th>
+              <th style={{ textAlign: 'right' }}>Actual</th>
+              <th style={{ textAlign: 'right' }}>Error</th>
               <th style={{ textAlign: 'center' }}>Direction</th>
               <th style={{ textAlign: 'right' }}>Confidence</th>
             </tr>
@@ -540,7 +555,7 @@ export default function PredictionsPage({ coin }: Props) {
                     width: '22px', height: '22px', borderRadius: '5px',
                     background: 'var(--bg-elevated)', border: '1px solid var(--border)',
                     fontSize: '10px', color: 'var(--text-muted)', fontFamily: 'IBM Plex Mono',
-                  }}>{i + 1}</span>
+                  }}>{(forecastPage - 1) * FORECAST_PAGE_SIZE + i + 1}</span>
                 </td>
                 <td>
                   <span className="font-mono" style={{ fontSize: '12px' }}>
@@ -551,6 +566,29 @@ export default function PredictionsPage({ coin }: Props) {
                   <span className="font-mono" style={{ fontSize: '13px', fontWeight: 500, color: 'var(--accent-light)' }}>
                     {fmt(p.predicted_price, decimals)}
                   </span>
+                </td>
+                <td style={{ textAlign: 'right' }}>
+                  {(() => {
+                    const dateKey = p.prediction_date.slice(0, 10);
+                    const actual = historicalMap[dateKey];
+                    return actual != null
+                      ? <span className="font-mono" style={{ fontSize: '13px', color: 'var(--text-primary)' }}>{fmt(actual, decimals)}</span>
+                      : <span style={{ color: 'var(--text-muted)', fontSize: '12px' }}>—</span>;
+                  })()}
+                </td>
+                <td style={{ textAlign: 'right' }}>
+                  {(() => {
+                    const dateKey = p.prediction_date.slice(0, 10);
+                    const actual = historicalMap[dateKey];
+                    if (actual == null) return <span style={{ color: 'var(--text-muted)', fontSize: '11px' }}>—</span>;
+                    const errPct = (p.predicted_price - actual) / actual * 100;
+                    const color = Math.abs(errPct) < 2 ? 'var(--up)' : Math.abs(errPct) < 5 ? 'var(--warn)' : 'var(--down)';
+                    return (
+                      <span className="font-mono" style={{ fontSize: '11px', fontWeight: 500, color }}>
+                        {errPct >= 0 ? '+' : ''}{errPct.toFixed(2)}%
+                      </span>
+                    );
+                  })()}
                 </td>
                 <td style={{ textAlign: 'center' }}>
                   <DirectionBadge direction={p.direction} prob={p.direction_prob} />
@@ -569,16 +607,45 @@ export default function PredictionsPage({ coin }: Props) {
             ))}
           </tbody>
         </table>
-        {(predictions?.predictions?.length ?? 0) > 14 && (
-          <div style={{ padding: '12px 20px', borderTop: '1px solid var(--border)', textAlign: 'center' }}>
+        {totalPages > 1 && (
+          <div style={{
+            padding: '12px 20px', borderTop: '1px solid var(--border)',
+            display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+          }}>
             <button
-              onClick={() => setShowAllForecast(v => !v)}
+              onClick={() => setForecastPage(p => Math.max(1, p - 1))}
+              disabled={forecastPage === 1}
               className="btn-ghost"
-              style={{ fontSize: '11px', padding: '6px 20px' }}
+              style={{ fontSize: '11px', padding: '5px 14px', opacity: forecastPage === 1 ? 0.4 : 1 }}
             >
-              {showAllForecast
-                ? 'Show fewer'
-                : `Show all ${predictions?.predictions?.length} days`}
+              ← Prev
+            </button>
+            <div style={{ display: 'flex', gap: '4px' }}>
+              {Array.from({ length: totalPages }, (_, i) => i + 1).map(page => (
+                <button
+                  key={page}
+                  onClick={() => setForecastPage(page)}
+                  className={page === forecastPage ? undefined : 'btn-ghost'}
+                  style={{
+                    fontSize: '10px', padding: '4px 8px', borderRadius: '5px',
+                    fontFamily: 'IBM Plex Mono',
+                    background: page === forecastPage ? 'var(--accent-subtle)' : 'transparent',
+                    border: page === forecastPage ? '1px solid rgba(99,102,241,0.3)' : '1px solid transparent',
+                    color: page === forecastPage ? 'var(--accent-light)' : 'var(--text-secondary)',
+                    cursor: 'pointer',
+                  }}
+                >
+                  {page}
+                </button>
+              ))}
+            </div>
+            <button
+              onClick={() => setForecastPage(p => Math.min(totalPages, p + 1))}
+              disabled={forecastPage === totalPages}
+              className="btn-ghost"
+              style={{ fontSize: '11px', padding: '5px 14px', opacity: forecastPage === totalPages ? 0.4 : 1 }}
+            >
+              Next →
             </button>
           </div>
         )}

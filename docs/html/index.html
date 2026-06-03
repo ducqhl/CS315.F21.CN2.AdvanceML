@@ -1,0 +1,569 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>CS315 — Lambda Architecture Docs</title>
+<link rel="stylesheet" href="style.css">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/prism-themes@1.9.0/themes/prism-vsc-dark-plus.min.css" crossorigin="anonymous">
+<script defer src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-core.min.js" crossorigin="anonymous"></script>
+<script defer src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/plugins/autoloader/prism-autoloader.min.js" crossorigin="anonymous"></script>
+</head>
+<body>
+<div class="layout">
+<nav>
+  <div class="logo">
+    <h2>CS315.F12.CN2</h2>
+    <p>Lê Quang Hoài Đức · 25410034</p>
+  </div>
+  <div class="nav-group">
+    <div class="nav-label">Tổng quan</div>
+    <a href="index.html" class="active">🏠 Trang chủ</a>
+    <a href="01_architecture.html">🏗️ Lambda Architecture</a>
+  </div>
+  <div class="nav-group">
+    <div class="nav-label">Data Pipeline</div>
+    <a href="02_producer.html">📡 CoinGecko Producer</a>
+    <a href="03_spark_streaming.html">⚡ Spark Streaming</a>
+    <a href="04_spark_batch.html">📦 Spark Batch</a>
+    <a href="05_mongodb.html">🗄️ MongoDB</a>
+  </div>
+  <div class="nav-group">
+    <div class="nav-label">ML Pipeline</div>
+    <a href="06_lstm.html">🧠 LSTM Model</a>
+  </div>
+  <div class="nav-group">
+    <div class="nav-label">Serving Layer</div>
+    <a href="07_api.html">🔌 FastAPI Backend</a>
+    <a href="08_frontend.html">🖥️ React + Streamlit</a>
+  </div>
+  <div class="nav-group">
+    <div class="nav-label">Quality & Ops</div>
+    <a href="09_testing.html">🧪 E2E Testing</a>
+    <a href="10_deployment.html">🐳 Docker Compose</a>
+    <a href="11_interview_qa.html">🎯 Phản biện Q&A <span class="badge">HOT</span></a>
+  </div>
+</nav>
+<main>
+
+  <!-- ═══════════════════════════════════════════
+       HERO
+  ════════════════════════════════════════════ -->
+  <div class="hero" style="padding: 36px 32px 28px;">
+    <h1 style="font-size: 26px; line-height: 1.3;">
+      Lambda Architecture for Real-Time Crypto Analytics
+      <span class="sub">Tài liệu kỹ thuật chi tiết — CS315 Advanced Machine Learning</span>
+    </h1>
+    <div class="meta" style="margin-top: 20px; gap: 20px;">
+      <div class="meta-item"><strong>Sinh viên</strong>Lê Quang Hoài Đức</div>
+      <div class="meta-item"><strong>MSSV</strong>25410034</div>
+      <div class="meta-item"><strong>Môn học</strong>CS315.F12.CN2</div>
+      <div class="meta-item"><strong>Phiên bản</strong>v4.0 · June 2026</div>
+    </div>
+
+    <!-- Key stats bar -->
+    <div style="display: flex; flex-wrap: wrap; gap: 12px; margin-top: 24px; padding-top: 20px; border-top: 1px solid var(--border);">
+      <div style="background: rgba(92,138,255,0.12); border: 1px solid rgba(92,138,255,0.3); border-radius: 8px; padding: 12px 18px; text-align: center; min-width: 100px;">
+        <div style="font-size: 24px; font-weight: 700; color: var(--accent); line-height: 1;">4,165</div>
+        <div style="font-size: 10px; color: var(--muted); margin-top: 4px; text-transform: uppercase; letter-spacing: 0.5px;">Days of History</div>
+      </div>
+      <div style="background: rgba(52,211,153,0.12); border: 1px solid rgba(52,211,153,0.3); border-radius: 8px; padding: 12px 18px; text-align: center; min-width: 100px;">
+        <div style="font-size: 24px; font-weight: 700; color: var(--accent2); line-height: 1;">61.1%</div>
+        <div style="font-size: 10px; color: var(--muted); margin-top: 4px; text-transform: uppercase; letter-spacing: 0.5px;">Directional Accuracy</div>
+      </div>
+      <div style="background: rgba(192,132,252,0.12); border: 1px solid rgba(192,132,252,0.3); border-radius: 8px; padding: 12px 18px; text-align: center; min-width: 100px;">
+        <div style="font-size: 24px; font-weight: 700; color: #c084fc; line-height: 1;">211K</div>
+        <div style="font-size: 10px; color: var(--muted); margin-top: 4px; text-transform: uppercase; letter-spacing: 0.5px;">LSTM Parameters</div>
+      </div>
+      <div style="background: rgba(245,158,11,0.12); border: 1px solid rgba(245,158,11,0.3); border-radius: 8px; padding: 12px 18px; text-align: center; min-width: 100px;">
+        <div style="font-size: 24px; font-weight: 700; color: var(--accent3); line-height: 1;">9</div>
+        <div style="font-size: 10px; color: var(--muted); margin-top: 4px; text-transform: uppercase; letter-spacing: 0.5px;">Input Features</div>
+      </div>
+      <div style="background: rgba(248,113,113,0.12); border: 1px solid rgba(248,113,113,0.3); border-radius: 8px; padding: 12px 18px; text-align: center; min-width: 100px;">
+        <div style="font-size: 24px; font-weight: 700; color: var(--accent4); line-height: 1;">7-Day</div>
+        <div style="font-size: 10px; color: var(--muted); margin-top: 4px; text-transform: uppercase; letter-spacing: 0.5px;">Forecast Horizon</div>
+      </div>
+      <div style="background: rgba(148,163,184,0.08); border: 1px solid rgba(148,163,184,0.2); border-radius: 8px; padding: 12px 18px; text-align: center; min-width: 100px;">
+        <div style="font-size: 24px; font-weight: 700; color: var(--text); line-height: 1;">9</div>
+        <div style="font-size: 10px; color: var(--muted); margin-top: 4px; text-transform: uppercase; letter-spacing: 0.5px;">Docker Services</div>
+      </div>
+      <div style="background: rgba(52,211,153,0.08); border: 1px solid rgba(52,211,153,0.2); border-radius: 8px; padding: 12px 18px; text-align: center; min-width: 100px;">
+        <div style="font-size: 24px; font-weight: 700; color: var(--accent2); line-height: 1;">2</div>
+        <div style="font-size: 10px; color: var(--muted); margin-top: 4px; text-transform: uppercase; letter-spacing: 0.5px;">Coins (BTC + DOGE)</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════════════════════════
+       SYSTEM OVERVIEW
+  ════════════════════════════════════════════ -->
+  <h2>Tổng quan hệ thống</h2>
+  <p>Hệ thống thu thập giá Bitcoin và Dogecoin từ CoinGecko API, xử lý song song theo hai luồng — <strong>Speed Layer</strong> (Kafka + Spark Streaming, latency ~30s) và <strong>Batch Layer</strong> (Spark Batch, xử lý 4,165 ngày lịch sử) — hợp nhất kết quả tại <strong>Serving Layer</strong> (MongoDB), rồi huấn luyện mô hình LSTM dual-head để dự báo giá 7 ngày tới.</p>
+
+  <figure style="width: 60%; margin: 16px auto; border: 1px solid var(--border); border-radius: 8px; overflow: hidden;">
+    <img style="width: 100%; display: block;" src="../report/figures/architecture_dataflow.png" alt="Data flow architecture diagram showing speed and batch paths through the Lambda Architecture">
+    <figcaption style="padding: 8px 12px; font-size: 12px; color: var(--muted); background: var(--surface2); border-top: 1px solid var(--border);">Figure 1: End-to-end data flow. Top path = Speed Layer (CoinGecko → Kafka → Spark Streaming → MongoDB, ~30s latency). Bottom path = Batch Layer (historical CSV → Spark Batch → MongoDB, daily cadence). Both converge at the Serving Layer; FastAPI merges views for frontend queries.</figcaption>
+  </figure>
+
+  <!-- ═══════════════════════════════════════════
+       LAMBDA ARCHITECTURE THREE-LAYER EXPLAINER
+  ════════════════════════════════════════════ -->
+  <h2>Lambda Architecture — Ba Layer</h2>
+  <p>Hệ thống triển khai đúng mô hình Lambda với ba layer riêng biệt. Đây là lý do kiến trúc này được chọn thay vì Kappa.</p>
+
+  <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 16px; margin: 16px 0 24px;">
+
+    <!-- Batch Layer -->
+    <div style="background: var(--surface); border: 1px solid var(--border); border-top: 3px solid var(--accent2); border-radius: 8px; padding: 20px;">
+      <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 12px;">
+        <div style="width: 32px; height: 32px; background: rgba(52,211,153,0.15); border-radius: 6px; display: flex; align-items: center; justify-content: center; font-size: 16px;">📦</div>
+        <div>
+          <div style="font-size: 13px; font-weight: 700; color: var(--accent2);">BATCH LAYER</div>
+          <div style="font-size: 10px; color: var(--muted); text-transform: uppercase;">High latency · 100% accurate</div>
+        </div>
+      </div>
+      <div style="font-size: 12px; color: var(--muted); line-height: 1.6; margin-bottom: 12px;">
+        Xử lý toàn bộ 4,165 ngày dữ liệu lịch sử. Chạy định kỳ (daily hoặc manual). Kết quả chính xác tuyệt đối vì có đủ context.
+      </div>
+      <div style="font-size: 11px; margin-bottom: 8px;">
+        <div style="color: var(--text); font-weight: 600; margin-bottom: 6px;">Collections:</div>
+        <div style="display: flex; flex-direction: column; gap: 4px;">
+          <span style="background: rgba(52,211,153,0.1); color: var(--accent2); padding: 2px 8px; border-radius: 4px; font-family: monospace; font-size: 11px;">daily_stats</span>
+          <span style="background: rgba(52,211,153,0.1); color: var(--accent2); padding: 2px 8px; border-radius: 4px; font-family: monospace; font-size: 11px;">historical_sma</span>
+          <span style="background: rgba(52,211,153,0.1); color: var(--accent2); padding: 2px 8px; border-radius: 4px; font-family: monospace; font-size: 11px;">coin_correlation</span>
+        </div>
+      </div>
+      <div style="font-size: 11px; color: var(--muted); padding-top: 10px; border-top: 1px solid var(--border);">
+        Computes: SMA-7/30/90, rolling BTC/DOGE correlation, daily OHLCV aggregation
+      </div>
+    </div>
+
+    <!-- Speed Layer -->
+    <div style="background: var(--surface); border: 1px solid var(--border); border-top: 3px solid var(--accent3); border-radius: 8px; padding: 20px;">
+      <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 12px;">
+        <div style="width: 32px; height: 32px; background: rgba(245,158,11,0.15); border-radius: 6px; display: flex; align-items: center; justify-content: center; font-size: 16px;">⚡</div>
+        <div>
+          <div style="font-size: 13px; font-weight: 700; color: var(--accent3);">SPEED LAYER</div>
+          <div style="font-size: 10px; color: var(--muted); text-transform: uppercase;">Low latency · Approximate</div>
+        </div>
+      </div>
+      <div style="font-size: 12px; color: var(--muted); line-height: 1.6; margin-bottom: 12px;">
+        Stream từ Kafka, micro-batch mỗi 30s. Watermark 10 phút để xử lý late data. Ghi qua <code>foreachBatch</code>.
+      </div>
+      <div style="font-size: 11px; margin-bottom: 8px;">
+        <div style="color: var(--text); font-weight: 600; margin-bottom: 6px;">Collections:</div>
+        <div style="display: flex; flex-direction: column; gap: 4px;">
+          <span style="background: rgba(245,158,11,0.1); color: var(--accent3); padding: 2px 8px; border-radius: 4px; font-family: monospace; font-size: 11px;">realtime_prices</span>
+          <span style="background: rgba(245,158,11,0.1); color: var(--accent3); padding: 2px 8px; border-radius: 4px; font-family: monospace; font-size: 11px;">window_stats</span>
+          <span style="background: rgba(245,158,11,0.1); color: var(--accent3); padding: 2px 8px; border-radius: 4px; font-family: monospace; font-size: 11px;">alerts</span>
+        </div>
+      </div>
+      <div style="font-size: 11px; color: var(--muted); padding-top: 10px; border-top: 1px solid var(--border);">
+        Computes: RSI, Bollinger Bands, VWAP, ATR, SMA per incoming record. TTL policy cleans old speed-layer docs.
+      </div>
+    </div>
+
+    <!-- Serving Layer -->
+    <div style="background: var(--surface); border: 1px solid var(--border); border-top: 3px solid var(--accent); border-radius: 8px; padding: 20px;">
+      <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 12px;">
+        <div style="width: 32px; height: 32px; background: rgba(92,138,255,0.15); border-radius: 6px; display: flex; align-items: center; justify-content: center; font-size: 16px;">🗄️</div>
+        <div>
+          <div style="font-size: 13px; font-weight: 700; color: var(--accent);">SERVING LAYER</div>
+          <div style="font-size: 10px; color: var(--muted); text-transform: uppercase;">Merged view · Query-ready</div>
+        </div>
+      </div>
+      <div style="font-size: 12px; color: var(--muted); line-height: 1.6; margin-bottom: 12px;">
+        MongoDB hợp nhất cả hai nguồn. Batch ghi đè (overwrite). Speed append với TTL. FastAPI merge views cho client.
+      </div>
+      <div style="font-size: 11px; margin-bottom: 8px;">
+        <div style="color: var(--text); font-weight: 600; margin-bottom: 6px;">All 7 Collections:</div>
+        <div style="display: flex; flex-direction: column; gap: 4px;">
+          <span style="background: rgba(92,138,255,0.1); color: var(--accent); padding: 2px 8px; border-radius: 4px; font-family: monospace; font-size: 11px;">predictions</span>
+          <span style="background: rgba(92,138,255,0.1); color: var(--accent); padding: 2px 8px; border-radius: 4px; font-family: monospace; font-size: 11px;">+ 6 above collections</span>
+        </div>
+      </div>
+      <div style="font-size: 11px; color: var(--muted); padding-top: 10px; border-top: 1px solid var(--border);">
+        FastAPI: JWT stateless auth. Merges batch + speed views. Inference Scheduler writes 7-day forecasts every 5 min.
+      </div>
+    </div>
+  </div>
+
+  <div class="callout info">
+    <strong>Tại sao Lambda, không phải Kappa?</strong> (1) Tính toán lại SMA-90 và rolling correlation trên 4,165 ngày mỗi lần có dữ liệu mới là chi phí cấm đoán. (2) LSTM cần StandardScaler nhất quán trên cửa sổ 730 ngày — không thể đạt được với streaming incremental. (3) Hai loại query cơ bản khác nhau: historical correlation (cần toàn bộ dataset) vs realtime RSI/VWAP (cần low latency).
+  </div>
+
+  <!-- ═══════════════════════════════════════════
+       DATA FLOW ARCHITECTURE
+  ════════════════════════════════════════════ -->
+  <h2>Luồng dữ liệu chi tiết</h2>
+
+  <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin: 16px 0;">
+    <figure style="margin: 0; border: 1px solid var(--border); border-radius: 8px; overflow: hidden;">
+      <img style="width: 100%; display: block;" src="../report/figures/architecture_c4_container.png" alt="C4 container diagram showing internal components and their relationships">
+      <figcaption style="padding: 8px 12px; font-size: 12px; color: var(--muted); background: var(--surface2); border-top: 1px solid var(--border);">Figure 2: C4 Container diagram. Shows internal component boundaries: Producer, Kafka broker, two Spark contexts (streaming + batch), MongoDB, FastAPI, React, Streamlit, and Inference Scheduler as distinct deployable units.</figcaption>
+    </figure>
+    <figure style="margin: 0; border: 1px solid var(--border); border-radius: 8px; overflow: hidden;">
+      <img style="width: 100%; display: block;" src="../report/figures/architecture_deployment.png" alt="Docker deployment diagram showing 9 containers and their network topology">
+      <figcaption style="padding: 8px 12px; font-size: 12px; color: var(--muted); background: var(--surface2); border-top: 1px solid var(--border);">Figure 3: Docker Compose deployment topology. 9 containers across a shared bridge network. Ports: React :3000, FastAPI :8000, Streamlit :8501, Kafka-UI :8080, Spark Master :8081.</figcaption>
+    </figure>
+  </div>
+
+  <!-- ═══════════════════════════════════════════
+       SPARK STREAMING PIPELINE
+  ════════════════════════════════════════════ -->
+  <h2>Speed Layer — Spark Streaming Pipeline</h2>
+  <p>Speed Layer sử dụng Spark Structured Streaming với hai parallel queries. <strong>Query A</strong> tính windowed aggregations (5-min tumbling windows). <strong>Query B</strong> tính per-record technical indicators (RSI, Bollinger, VWAP, ATR). Cả hai ghi vào MongoDB qua pattern <code>foreachBatch</code> để tránh direct streaming sinks.</p>
+
+  <figure style="margin: 16px 0; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; display: flex; flex-direction: column; gap: 1rem; align-items: center;">
+    <img style="width: 50%; display: block;" src="../report/figures/diagram_spark_streaming.png" alt="Spark Streaming pipeline diagram showing two parallel query paths and foreachBatch writes">
+    <figcaption style="padding: 8px 12px; font-size: 12px; color: var(--muted); background: var(--surface2); border-top: 1px solid var(--border);">Figure 4: Spark Structured Streaming pipeline. Watermark = 10 minutes (matches producer's 600s poll interval). <code>foreachBatch</code> pattern enables transactional upserts to MongoDB — direct streaming sinks are intentionally avoided for write consistency.</figcaption>
+  </figure>
+
+  <!-- ═══════════════════════════════════════════
+       LSTM MODEL SECTION
+  ════════════════════════════════════════════ -->
+  <h2>LSTM Forecasting Model</h2>
+  <p>Mô hình dual-head LSTM dự báo đồng thời <strong>giá tuyệt đối 7 ngày tới</strong> (regression head, HuberLoss) và <strong>hướng xu hướng</strong> (classification head, CrossEntropyLoss). Đầu vào là chuỗi 60 timestep (~2 tháng context) với 9 features kỹ thuật.</p>
+
+  <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin: 16px 0;">
+    <figure style="margin: 0; border: 1px solid var(--border); border-radius: 8px; overflow: hidden;">
+      <img style="width: 100%; display: block;" src="../report/figures/lstm_architecture.png" alt="LSTM model architecture showing 2-layer encoder and dual prediction heads">
+      <figcaption style="padding: 8px 12px; font-size: 12px; color: var(--muted); background: var(--surface2); border-top: 1px solid var(--border);">Figure 5: LSTM architecture. 2-layer encoder (128 hidden units, dropout 0.2 between layers). Dual output heads share the same encoder: regression head outputs 7 price scalars; classification head outputs 3-class trend direction (up/flat/down). Total ~211K parameters.</figcaption>
+    </figure>
+    <figure style="margin: 0; border: 1px solid var(--border); border-radius: 8px; overflow: hidden;">
+      <img style="width: 100%; display: block;" src="../report/figures/walk_forward_dir_acc.png" alt="Walk-forward directional accuracy chart showing BTC performance at 61.1%">
+      <figcaption style="padding: 8px 12px; font-size: 12px; color: var(--muted); background: var(--surface2); border-top: 1px solid var(--border);">Figure 6: Walk-forward directional accuracy per fold. BTC mean = <strong style="color: var(--accent2);">61.1%</strong> across 6 folds × 60 days (rolling 730-day window). Beats random baseline (50%) by +11.1 percentage points.</figcaption>
+    </figure>
+  </div>
+
+  <!-- Model specs card -->
+  <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 24px;">
+    <div class="card" style="border-left: 3px solid #c084fc;">
+      <h3 style="margin-top: 0; color: #c084fc;">Model Architecture</h3>
+      <div style="display: flex; flex-direction: column; gap: 8px; font-size: 13px;">
+        <div style="display: flex; justify-content: space-between; padding: 6px 0; border-bottom: 1px solid var(--border);">
+          <span style="color: var(--muted);">Encoder layers</span>
+          <span style="color: var(--text); font-weight: 600;">2× LSTM</span>
+        </div>
+        <div style="display: flex; justify-content: space-between; padding: 6px 0; border-bottom: 1px solid var(--border);">
+          <span style="color: var(--muted);">Hidden units</span>
+          <span style="color: var(--text); font-weight: 600;">128</span>
+        </div>
+        <div style="display: flex; justify-content: space-between; padding: 6px 0; border-bottom: 1px solid var(--border);">
+          <span style="color: var(--muted);">Sequence length</span>
+          <span style="color: var(--text); font-weight: 600;">60 timesteps (~2 months)</span>
+        </div>
+        <div style="display: flex; justify-content: space-between; padding: 6px 0; border-bottom: 1px solid var(--border);">
+          <span style="color: var(--muted);">Input features</span>
+          <span style="color: var(--text); font-weight: 600;">9</span>
+        </div>
+        <div style="display: flex; justify-content: space-between; padding: 6px 0; border-bottom: 1px solid var(--border);">
+          <span style="color: var(--muted);">Encoder params</span>
+          <span style="color: var(--text); font-weight: 600;">202,240</span>
+        </div>
+        <div style="display: flex; justify-content: space-between; padding: 6px 0;">
+          <span style="color: var(--muted);">Head params</span>
+          <span style="color: var(--text); font-weight: 600;">9,166</span>
+        </div>
+      </div>
+    </div>
+    <div class="card" style="border-left: 3px solid var(--accent2);">
+      <h3 style="margin-top: 0; color: var(--accent2);">Validation Results</h3>
+      <div style="display: flex; flex-direction: column; gap: 8px; font-size: 13px;">
+        <div style="display: flex; justify-content: space-between; padding: 6px 0; border-bottom: 1px solid var(--border);">
+          <span style="color: var(--muted);">Strategy</span>
+          <span style="color: var(--text); font-weight: 600;">Walk-forward</span>
+        </div>
+        <div style="display: flex; justify-content: space-between; padding: 6px 0; border-bottom: 1px solid var(--border);">
+          <span style="color: var(--muted);">Folds</span>
+          <span style="color: var(--text); font-weight: 600;">6 × 60 days</span>
+        </div>
+        <div style="display: flex; justify-content: space-between; padding: 6px 0; border-bottom: 1px solid var(--border);">
+          <span style="color: var(--muted);">Rolling window</span>
+          <span style="color: var(--text); font-weight: 600;">730 days</span>
+        </div>
+        <div style="display: flex; justify-content: space-between; padding: 6px 0; border-bottom: 1px solid var(--border);">
+          <span style="color: var(--muted);">BTC dir. accuracy (H7)</span>
+          <span style="color: var(--accent2); font-weight: 700;">61.1%</span>
+        </div>
+        <div style="display: flex; justify-content: space-between; padding: 6px 0; border-bottom: 1px solid var(--border);">
+          <span style="color: var(--muted);">Random baseline</span>
+          <span style="color: var(--muted); font-weight: 600;">50.0%</span>
+        </div>
+        <div style="display: flex; justify-content: space-between; padding: 6px 0;">
+          <span style="color: var(--muted);">Improvement</span>
+          <span style="color: var(--accent2); font-weight: 700;">+11.1 pp</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Walk-forward diagram -->
+  <figure style="margin: 0 0 24px; border: 1px solid var(--border); border-radius: 8px; overflow: hidden;">
+    <img style="width: 100%; display: block;" src="../report/figures/diagram_walk_forward.png" alt="Walk-forward cross-validation diagram showing rolling window splits across 6 folds">
+    <figcaption style="padding: 8px 12px; font-size: 12px; color: var(--muted); background: var(--surface2); border-top: 1px solid var(--border);">Figure 7: Walk-forward validation scheme. Each fold trains on a 730-day rolling window and tests on the subsequent 60 days. No data leakage: test data is never in the training window. This mimics real deployment where the model is retrained periodically.</figcaption>
+  </figure>
+
+  <!-- ═══════════════════════════════════════════
+       FEATURE ANALYSIS
+  ════════════════════════════════════════════ -->
+  <h2>Feature Engineering</h2>
+  <p>9 input features được chuẩn hóa bằng <code>StandardScaler</code> trên cửa sổ 730 ngày. Features kết hợp price dynamics, volume, momentum, và volatility signals.</p>
+
+  <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin: 16px 0 24px;">
+    <figure style="margin: 0; border: 1px solid var(--border); border-radius: 8px; overflow: hidden;">
+      <img style="width: 100%; display: block;" src="../report/figures/feature_panel_btc.png" alt="BTC feature panel showing all 9 input features over time">
+      <figcaption style="padding: 8px 12px; font-size: 12px; color: var(--muted); background: var(--surface2); border-top: 1px solid var(--border);">Figure 8: BTC feature panel — all 9 input features plotted over the training period. Features include: close price, volume, SMA-7, SMA-30, RSI-14, Bollinger Band width, VWAP, ATR, momentum returns.</figcaption>
+    </figure>
+    <figure style="margin: 0; border: 1px solid var(--border); border-radius: 8px; overflow: hidden;">
+      <img style="width: 100%; display: block;" src="../report/figures/feature_importance_radar.png" alt="Feature importance radar chart showing relative contribution of each feature">
+      <figcaption style="padding: 8px 12px; font-size: 12px; color: var(--muted); background: var(--surface2); border-top: 1px solid var(--border);">Figure 9: Feature importance radar. Price, volume, and momentum features dominate. Volatility features (Bollinger, ATR) contribute meaningfully to the classification head (trend direction).</figcaption>
+    </figure>
+  </div>
+
+  <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin: 0 0 24px;">
+    <figure style="margin: 0; border: 1px solid var(--border); border-radius: 8px; overflow: hidden;">
+      <img style="width: 100%; display: block;" src="../report/figures/feature_correlation_heatmap.png" alt="Feature correlation heatmap">
+      <figcaption style="padding: 8px 12px; font-size: 12px; color: var(--muted); background: var(--surface2); border-top: 1px solid var(--border);">Figure 10: Feature correlation heatmap. SMA features are highly correlated with close price (expected). RSI and momentum show lower cross-correlation, providing orthogonal signal.</figcaption>
+    </figure>
+    <figure style="margin: 0; border: 1px solid var(--border); border-radius: 8px; overflow: hidden;">
+      <img style="width: 100%; display: block;" src="../report/figures/per_step_mae.png" alt="MAE per forecast step showing degradation over 7-day horizon">
+      <figcaption style="padding: 8px 12px; font-size: 12px; color: var(--muted); background: var(--surface2); border-top: 1px solid var(--border);">Figure 11: MAE per forecast step (day 1–7). Error grows monotonically with horizon — expected behavior for any multi-step price forecast. Day-1 MAE is tightest; day-7 represents upper bound of model utility.</figcaption>
+    </figure>
+  </div>
+
+  <!-- ═══════════════════════════════════════════
+       FORECAST VISUALIZATIONS
+  ════════════════════════════════════════════ -->
+  <h2>Forecast Output</h2>
+
+  <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin: 16px 0 24px;">
+    <figure style="margin: 0; border: 1px solid var(--border); border-radius: 8px; overflow: hidden;">
+      <img style="width: 100%; display: block;" src="../report/figures/7day_forecast_visualization.png" alt="7-day price forecast visualization with confidence band">
+      <figcaption style="padding: 8px 12px; font-size: 12px; color: var(--muted); background: var(--surface2); border-top: 1px solid var(--border);">Figure 12: 7-day price forecast with confidence band. Regression head output (HuberLoss) shown with ±1σ uncertainty bounds. Inference Scheduler refreshes this every 5 minutes from the latest MongoDB state.</figcaption>
+    </figure>
+    <figure style="margin: 0; border: 1px solid var(--border); border-radius: 8px; overflow: hidden;">
+      <img style="width: 100%; display: block;" src="../report/figures/model_comparison_btc_vs_doge.png" alt="Model performance comparison between BTC and DOGE">
+      <figcaption style="padding: 8px 12px; font-size: 12px; color: var(--muted); background: var(--surface2); border-top: 1px solid var(--border);">Figure 13: BTC vs DOGE model comparison. BTC achieves higher directional accuracy due to deeper liquidity and less noise. DOGE exhibits higher volatility and less predictable short-term price action.</figcaption>
+    </figure>
+  </div>
+
+  <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin: 0 0 24px;">
+    <figure style="margin: 0; border: 1px solid var(--border); border-radius: 8px; overflow: hidden;">
+      <img style="width: 100%; display: block;" src="../report/figures/btc_doge_correlation.png" alt="BTC/DOGE rolling correlation over time">
+      <figcaption style="padding: 8px 12px; font-size: 12px; color: var(--muted); background: var(--surface2); border-top: 1px solid var(--border);">Figure 14: BTC/DOGE rolling correlation (batch layer output). Computed by Spark Batch over full 4,165-day history. Correlation varies substantially over time — motivates keeping both coins as independent model instances.</figcaption>
+    </figure>
+    <figure style="margin: 0; border: 1px solid var(--border); border-radius: 8px; overflow: hidden;">
+      <img style="width: 100%; display: block;" src="../report/figures/residuals_analysis.png" alt="Residuals analysis for LSTM regression head">
+      <figcaption style="padding: 8px 12px; font-size: 12px; color: var(--muted); background: var(--surface2); border-top: 1px solid var(--border);">Figure 15: Residuals analysis for the regression head. Residuals are approximately zero-mean but show heteroscedasticity — larger errors during high-volatility periods. HuberLoss mitigates the impact of outlier predictions.</figcaption>
+    </figure>
+  </div>
+
+  <!-- ═══════════════════════════════════════════
+       REACT FRONTEND GALLERY
+  ════════════════════════════════════════════ -->
+  <h2>React Frontend — Live Screenshots</h2>
+  <p>Frontend gồm 5 trang phân tích, xây dựng bằng React 19 + TypeScript + Vite + Tailwind. Tất cả data lấy từ FastAPI backend qua Axios client (<code>src/api/client.ts</code>).</p>
+
+  <figure style="margin: 16px 0; border: 1px solid var(--border); border-radius: 8px; overflow: hidden;">
+    <img style="width: 100%; display: block;" src="../../demo/overview.png" alt="React dashboard overview page showing price charts and summary metrics">
+    <figcaption style="padding: 8px 12px; font-size: 12px; color: var(--muted); background: var(--surface2); border-top: 1px solid var(--border);">Screenshot 1: Dashboard overview — summary cards, BTC/DOGE price charts, recent trades feed. Entry point for all analysis flows.</figcaption>
+  </figure>
+
+  <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin: 0 0 16px;">
+    <figure style="margin: 0; border: 1px solid var(--border); border-radius: 8px; overflow: hidden;">
+      <img style="width: 100%; display: block;" src="../../demo/realtime.png" alt="Realtime prices page with live streaming data">
+      <figcaption style="padding: 8px 12px; font-size: 12px; color: var(--muted); background: var(--surface2); border-top: 1px solid var(--border);">Screenshot 2: Realtime page — live prices from Speed Layer (MongoDB <code>realtime_prices</code>). Polled every ~30s, reflects Spark Streaming output.</figcaption>
+    </figure>
+    <figure style="margin: 0; border: 1px solid var(--border); border-radius: 8px; overflow: hidden;">
+      <img style="width: 100%; display: block;" src="../../demo/technical.png" alt="Technical indicators page showing RSI, Bollinger Bands, VWAP">
+      <figcaption style="padding: 8px 12px; font-size: 12px; color: var(--muted); background: var(--surface2); border-top: 1px solid var(--border);">Screenshot 3: Technical indicators — RSI, Bollinger Bands, VWAP, ATR charts from <code>window_stats</code>. Computed by Spark Streaming Query B.</figcaption>
+    </figure>
+  </div>
+
+  <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin: 0 0 16px;">
+    <figure style="margin: 0; border: 1px solid var(--border); border-radius: 8px; overflow: hidden;">
+      <img style="width: 100%; display: block;" src="../../demo/predict-overview.png" alt="Predictions overview page showing 7-day LSTM forecast">
+      <figcaption style="padding: 8px 12px; font-size: 12px; color: var(--muted); background: var(--surface2); border-top: 1px solid var(--border);">Screenshot 4: Predictions overview — LSTM 7-day forecast with confidence band, trend direction badge, and last retrain timestamp.</figcaption>
+    </figure>
+    <figure style="margin: 0; border: 1px solid var(--border); border-radius: 8px; overflow: hidden;">
+      <img style="width: 100%; display: block;" src="../../demo/predict-retrain.png" alt="Predict retrain UI for triggering model retraining">
+      <figcaption style="padding: 8px 12px; font-size: 12px; color: var(--muted); background: var(--surface2); border-top: 1px solid var(--border);">Screenshot 5: Retrain UI — triggers on-demand LSTM retraining via FastAPI <code>POST /model/retrain</code> endpoint. Model registry modal shows version history.</figcaption>
+    </figure>
+  </div>
+
+  <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin: 0 0 24px;">
+    <figure style="margin: 0; border: 1px solid var(--border); border-radius: 8px; overflow: hidden;">
+      <img style="width: 100%; display: block;" src="../../demo/correlation.png" alt="Correlation page showing BTC/DOGE rolling correlation analysis">
+      <figcaption style="padding: 8px 12px; font-size: 12px; color: var(--muted); background: var(--surface2); border-top: 1px solid var(--border);">Screenshot 6: Correlation page — BTC/DOGE rolling correlation chart from batch layer (<code>coin_correlation</code> collection). Uses full 4,165-day historical dataset.</figcaption>
+    </figure>
+    <figure style="margin: 0; border: 1px solid var(--border); border-radius: 8px; overflow: hidden;">
+      <img style="width: 100%; display: block;" src="../../demo/modal%20registry.png" alt="Model registry modal showing version history">
+      <figcaption style="padding: 8px 12px; font-size: 12px; color: var(--muted); background: var(--surface2); border-top: 1px solid var(--border);">Screenshot 7: Model registry modal — version history, accuracy per fold, parameter count, and artifact paths for each trained checkpoint.</figcaption>
+    </figure>
+  </div>
+
+  <!-- ═══════════════════════════════════════════
+       COMPONENT CARDS
+  ════════════════════════════════════════════ -->
+  <h2>Các thành phần hệ thống</h2>
+  <div class="card-grid">
+    <a href="01_architecture.html" style="text-decoration:none">
+    <div class="card accent-blue">
+      <h3>🏗️ Lambda Architecture</h3>
+      <p>Thiết kế tổng quan, lý do chọn Lambda vs Kappa, luồng dữ liệu ba layer. Phân tích trade-off latency vs accuracy.</p>
+      <span class="tag blue">Architecture</span>
+    </div></a>
+
+    <a href="02_producer.html" style="text-decoration:none">
+    <div class="card accent-amber">
+      <h3>📡 CoinGecko Producer</h3>
+      <p>Poll mỗi 600s, <code>acks=all, retries=3, linger_ms=100</code>. OHLC mỗi 3 cycle. Rate limit logic, exponential backoff. Demo tier = 10k calls/month.</p>
+      <span class="tag amber">Kafka</span> <span class="tag amber">Ingestion</span>
+    </div></a>
+
+    <a href="03_spark_streaming.html" style="text-decoration:none">
+    <div class="card accent-blue">
+      <h3>⚡ Spark Streaming</h3>
+      <p>Watermark 10min, micro-batch 30s. Query A: windowed agg. Query B: per-record RSI/Bollinger/VWAP/ATR. <code>foreachBatch</code> writes MongoDB.</p>
+      <span class="tag blue">Spark</span> <span class="tag blue">Realtime</span>
+    </div></a>
+
+    <a href="04_spark_batch.html" style="text-decoration:none">
+    <div class="card accent-green">
+      <h3>📦 Spark Batch</h3>
+      <p>4,165 ngày lịch sử. Outputs: <code>daily_stats</code>, <code>historical_sma</code> (SMA-7/30/90), <code>coin_correlation</code>. Submitted via <code>run_batch.sh</code>.</p>
+      <span class="tag green">Spark</span> <span class="tag green">Batch</span>
+    </div></a>
+
+    <a href="05_mongodb.html" style="text-decoration:none">
+    <div class="card accent-green">
+      <h3>🗄️ MongoDB</h3>
+      <p>7 collections. TTL policy trên speed layer docs. Compound indexes cho time-range queries. Single serving store cho cả batch + speed.</p>
+      <span class="tag green">Database</span>
+    </div></a>
+
+    <a href="06_lstm.html" style="text-decoration:none">
+    <div class="card" style="border-left:3px solid #c084fc">
+      <h3>🧠 LSTM Model</h3>
+      <p>9 features · 2-layer encoder · 128 hidden units · dual-head (price regression + trend classification). Walk-forward validation, 61.1% directional accuracy (BTC).</p>
+      <figure style="margin: 10px 0 4px; border: 1px solid var(--border); border-radius: 6px; overflow: hidden;">
+        <img style="width: 100%; display: block;" src="../report/figures/feature_panel_btc.png" alt="BTC feature panel thumbnail">
+      </figure>
+      <span class="tag purple">Deep Learning</span>
+    </div></a>
+
+    <a href="07_api.html" style="text-decoration:none">
+    <div class="card accent-red">
+      <h3>🔌 FastAPI Backend</h3>
+      <p>JWT stateless auth. REST endpoints: prices, predictions, model registry, accuracy tracking. Merges batch + speed views per query. Port 8000.</p>
+      <span class="tag red">API</span>
+    </div></a>
+
+    <a href="08_frontend.html" style="text-decoration:none">
+    <div class="card">
+      <h3>🖥️ React + Streamlit</h3>
+      <p>React 19 + TypeScript + Vite + Tailwind. 5 trang: Dashboard, Realtime, Technical, Predictions, Correlation. Streamlit dashboard port 8501.</p>
+      <span class="tag">Frontend</span>
+    </div></a>
+
+    <a href="09_testing.html" style="text-decoration:none">
+    <div class="card accent-amber">
+      <h3>🧪 E2E Testing</h3>
+      <p>3-layer E2E tests với testcontainers thật. Layer 1: Producer→Kafka. Layer 2: Spark Batch→MongoDB. Layer 3: ML Pipeline→MongoDB. 24 test cases.</p>
+      <span class="tag amber">Testing</span>
+    </div></a>
+
+    <a href="11_interview_qa.html" style="text-decoration:none">
+    <div class="card accent-red">
+      <h3>🎯 Phản biện Q&amp;A</h3>
+      <p>20+ câu hỏi phản biện với câu trả lời chi tiết cho buổi bảo vệ. Bao gồm architectural decisions, ML limitations, và production trade-offs.</p>
+      <span class="tag red">Important</span>
+    </div></a>
+  </div>
+
+  <!-- ═══════════════════════════════════════════
+       METRICS TABLE
+  ════════════════════════════════════════════ -->
+  <h2>Số liệu quan trọng</h2>
+  <div class="table-wrap">
+  <table>
+    <tr>
+      <th>Metric</th>
+      <th>Giá trị</th>
+      <th>Ngữ cảnh / Ý nghĩa</th>
+    </tr>
+    <tr>
+      <td><strong>BTC Directional Accuracy (H7)</strong></td>
+      <td><strong style="color: var(--accent2);">61.1%</strong></td>
+      <td>Vượt random baseline (50%) +11.1 pp. Đo trên fold 7 của walk-forward validation.</td>
+    </tr>
+    <tr>
+      <td><strong>Walk-forward validation</strong></td>
+      <td>6 folds × 60 ngày</td>
+      <td>Rolling window 730 ngày. Không có data leakage giữa train/test splits.</td>
+    </tr>
+    <tr>
+      <td><strong>LSTM total parameters</strong></td>
+      <td>~211,000</td>
+      <td>202,240 encoder (2× LSTM-128) + 9,166 dual heads (regression + classification).</td>
+    </tr>
+    <tr>
+      <td><strong>Input sequence length</strong></td>
+      <td>60 timesteps</td>
+      <td>~2 tháng daily context. Đủ để capture seasonal pattern ngắn và momentum.</td>
+    </tr>
+    <tr>
+      <td><strong>Forecast horizon</strong></td>
+      <td>7 ngày</td>
+      <td>Multi-step direct forecast. MAE tăng đơn điệu theo ngày — day-7 là giới hạn thực dụng.</td>
+    </tr>
+    <tr>
+      <td><strong>Historical data</strong></td>
+      <td>4,165 ngày</td>
+      <td>Batch Layer xử lý toàn bộ CSV lịch sử BTC + DOGE qua Spark Batch job.</td>
+    </tr>
+    <tr>
+      <td><strong>Kafka poll interval</strong></td>
+      <td>600 giây</td>
+      <td>Giữ trong giới hạn 10k calls/month của CoinGecko demo tier. Configurable qua <code>POLL_INTERVAL_SECONDS</code>.</td>
+    </tr>
+    <tr>
+      <td><strong>Spark watermark</strong></td>
+      <td>10 phút</td>
+      <td>Khớp với producer poll interval. Đủ để handle late-arriving Kafka messages.</td>
+    </tr>
+    <tr>
+      <td><strong>Spark micro-batch interval</strong></td>
+      <td>30 giây</td>
+      <td>Trigger interval cho Spark Structured Streaming. Cân bằng latency vs throughput.</td>
+    </tr>
+    <tr>
+      <td><strong>Inference Scheduler</strong></td>
+      <td>Mỗi 5 phút</td>
+      <td>Đọc từ MongoDB/CSV, chạy inference, ghi 7-day predictions vào <code>predictions</code> collection.</td>
+    </tr>
+    <tr>
+      <td><strong>Docker services</strong></td>
+      <td>9 containers</td>
+      <td>Zookeeper, Kafka, Kafka-UI, MongoDB, Spark Master, Spark Worker, Producer, API, Dashboard, Frontend, Inference Scheduler.</td>
+    </tr>
+    <tr>
+      <td><strong>Kafka producer config</strong></td>
+      <td><code>acks=all, retries=3</code></td>
+      <td><code>linger_ms=100</code>. Đảm bảo durability và at-least-once delivery.</td>
+    </tr>
+  </table>
+  </div>
+
+  <!-- ═══════════════════════════════════════════
+       READING GUIDE
+  ════════════════════════════════════════════ -->
+  <div class="callout warning" style="margin-top: 32px;">
+    <strong>Tip học — Reading Guide:</strong> Đọc theo thứ tự: <a href="01_architecture.html" style="color: inherit; text-decoration: underline;">Architecture</a> → <a href="02_producer.html" style="color: inherit; text-decoration: underline;">Producer</a> → <a href="03_spark_streaming.html" style="color: inherit; text-decoration: underline;">Streaming</a> → <a href="04_spark_batch.html" style="color: inherit; text-decoration: underline;">Batch</a> → <a href="05_mongodb.html" style="color: inherit; text-decoration: underline;">MongoDB</a> → <a href="06_lstm.html" style="color: inherit; text-decoration: underline;">LSTM</a> → <a href="07_api.html" style="color: inherit; text-decoration: underline;">API</a> → <a href="09_testing.html" style="color: inherit; text-decoration: underline;">Testing</a> → <a href="11_interview_qa.html" style="color: inherit; text-decoration: underline;">Q&amp;A</a>. Mỗi trang có phần "Câu hỏi thường gặp" ở cuối để chuẩn bị phản biện.
+  </div>
+
+</main>
+</div>
+</body>
+</html>
