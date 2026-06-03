@@ -32,7 +32,10 @@ import os
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any
 
-from dotenv import load_dotenv
+try:
+    from dotenv import load_dotenv
+except ImportError:
+    def load_dotenv(*args, **kwargs): pass
 from pymongo import MongoClient, UpdateOne
 from pymongo.collection import Collection
 

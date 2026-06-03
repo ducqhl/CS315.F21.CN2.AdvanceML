@@ -77,7 +77,7 @@ PACKAGES_STR=$(IFS=','; echo "${SPARK_PACKAGES[*]}")
 # ── spark-submit ──────────────────────────────────────────────────────────────
 docker exec \
     -e "DATA_PATH=${DATA_PATH}" \
-    -e "MONGO_URI=${MONGO_URI:-mongodb://admin:password123@mongodb:27017/crypto_db?authSource=admin}" \
+    -e "MONGO_URI=mongodb://admin:password123@mongodb:27017/crypto_db?authSource=admin" \
     "${SPARK_CONTAINER}" \
     /opt/spark/bin/spark-submit \
         --master "${SPARK_MASTER}" \
