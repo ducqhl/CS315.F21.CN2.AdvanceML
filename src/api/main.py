@@ -320,16 +320,23 @@ def get_stats() -> dict:
     }
     latest_prices: dict = {}
     for _, symbol in [("bitcoin", "BTC"), ("dogecoin", "DOGE")]:
-        doc = db.daily_stats.find_one(
-            {"symbol": symbol},
-            sort=[("date", -1)],
-            projection={"_id": 0, "avg_close": 1, "date": 1},
-        )
+        doc = db.live_prices.find_one({"symbol": symbol}, sort=[("timestamp", -1)])
         if doc:
             latest_prices[symbol] = {
-                "price": doc.get("avg_close"),
-                "date": doc["date"].isoformat() if isinstance(doc.get("date"), datetime) else str(doc.get("date")),
+                "price": doc.get("price_usd") or doc.get("close"),
+                "date": doc["timestamp"].isoformat() if isinstance(doc.get("timestamp"), datetime) else str(doc.get("timestamp")),
             }
+        else:
+            doc = db.daily_stats.find_one(
+                {"symbol": symbol},
+                sort=[("date", -1)],
+                projection={"_id": 0, "avg_close": 1, "date": 1},
+            )
+            if doc:
+                latest_prices[symbol] = {
+                    "price": doc.get("avg_close"),
+                    "date": doc["date"].isoformat() if isinstance(doc.get("date"), datetime) else str(doc.get("date")),
+                }
     stats["latest_prices"] = latest_prices
     stats["timestamp"] = datetime.now(timezone.utc).isoformat()
     return stats
@@ -343,6 +350,12 @@ def get_realtime(coin: str, _user: dict = Depends(get_current_user)) -> dict:
     if doc:
         result = _serialize(doc)
         result["source"] = "realtime"
+        return result
+    doc = db.live_prices.find_one({"symbol": symbol}, sort=[("timestamp", -1)])
+    if doc:
+        result = _serialize(doc)
+        result["source"] = "live_prices"
+        result["price"] = doc.get("price_usd") or doc.get("close")
         return result
     doc = db.daily_stats.find_one({"symbol": symbol}, sort=[("date", -1)])
     if doc:
