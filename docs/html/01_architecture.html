@@ -46,6 +46,114 @@
   </h1>
 
   <!-- ═══════════════════════════════════════════
+       THREE-LAYER VISUAL OVERVIEW
+  ════════════════════════════════════════════ -->
+  <h2>Lambda Architecture — Ba Layer</h2>
+  <p>Hệ thống triển khai đúng mô hình Lambda với ba layer riêng biệt. Đây là lý do kiến trúc này được chọn thay vì Kappa.</p>
+
+  <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 16px; margin: 16px 0 24px;">
+
+    <!-- Batch Layer -->
+    <div style="background: var(--surface); border: 1px solid var(--border); border-top: 3px solid var(--accent2); border-radius: 8px; padding: 20px;">
+      <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 12px;">
+        <div style="width: 32px; height: 32px; background: rgba(52,211,153,0.15); border-radius: 6px; display: flex; align-items: center; justify-content: center; font-size: 16px;">📦</div>
+        <div>
+          <div style="font-size: 13px; font-weight: 700; color: var(--accent2);">BATCH LAYER</div>
+          <div style="font-size: 10px; color: var(--muted); text-transform: uppercase;">High latency · 100% accurate</div>
+        </div>
+      </div>
+      <div style="font-size: 12px; color: var(--muted); line-height: 1.6; margin-bottom: 12px;">
+        Xử lý toàn bộ 4,165 ngày dữ liệu lịch sử. Chạy định kỳ (daily hoặc manual). Kết quả chính xác tuyệt đối vì có đủ context.
+      </div>
+      <div style="font-size: 11px; margin-bottom: 8px;">
+        <div style="color: var(--text); font-weight: 600; margin-bottom: 6px;">Collections:</div>
+        <div style="display: flex; flex-direction: column; gap: 4px;">
+          <span style="background: rgba(52,211,153,0.1); color: var(--accent2); padding: 2px 8px; border-radius: 4px; font-family: monospace; font-size: 11px;">daily_stats</span>
+          <span style="background: rgba(52,211,153,0.1); color: var(--accent2); padding: 2px 8px; border-radius: 4px; font-family: monospace; font-size: 11px;">historical_sma</span>
+          <span style="background: rgba(52,211,153,0.1); color: var(--accent2); padding: 2px 8px; border-radius: 4px; font-family: monospace; font-size: 11px;">coin_correlation</span>
+        </div>
+      </div>
+      <div style="font-size: 11px; color: var(--muted); padding-top: 10px; border-top: 1px solid var(--border);">
+        Computes: SMA-7/30/90, rolling BTC/DOGE correlation, daily OHLCV aggregation
+      </div>
+    </div>
+
+    <!-- Speed Layer -->
+    <div style="background: var(--surface); border: 1px solid var(--border); border-top: 3px solid var(--accent3); border-radius: 8px; padding: 20px;">
+      <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 12px;">
+        <div style="width: 32px; height: 32px; background: rgba(245,158,11,0.15); border-radius: 6px; display: flex; align-items: center; justify-content: center; font-size: 16px;">⚡</div>
+        <div>
+          <div style="font-size: 13px; font-weight: 700; color: var(--accent3);">SPEED LAYER</div>
+          <div style="font-size: 10px; color: var(--muted); text-transform: uppercase;">Low latency · Approximate</div>
+        </div>
+      </div>
+      <div style="font-size: 12px; color: var(--muted); line-height: 1.6; margin-bottom: 12px;">
+        Stream từ Kafka, micro-batch mỗi 30s. Watermark 10 phút để xử lý late data. Ghi qua <code>foreachBatch</code>.
+      </div>
+      <div style="font-size: 11px; margin-bottom: 8px;">
+        <div style="color: var(--text); font-weight: 600; margin-bottom: 6px;">Collections:</div>
+        <div style="display: flex; flex-direction: column; gap: 4px;">
+          <span style="background: rgba(245,158,11,0.1); color: var(--accent3); padding: 2px 8px; border-radius: 4px; font-family: monospace; font-size: 11px;">realtime_prices</span>
+          <span style="background: rgba(245,158,11,0.1); color: var(--accent3); padding: 2px 8px; border-radius: 4px; font-family: monospace; font-size: 11px;">window_stats</span>
+          <span style="background: rgba(245,158,11,0.1); color: var(--accent3); padding: 2px 8px; border-radius: 4px; font-family: monospace; font-size: 11px;">alerts</span>
+        </div>
+      </div>
+      <div style="font-size: 11px; color: var(--muted); padding-top: 10px; border-top: 1px solid var(--border);">
+        Computes: RSI, Bollinger Bands, VWAP, ATR, SMA per incoming record. TTL policy cleans old speed-layer docs.
+      </div>
+    </div>
+
+    <!-- Serving Layer -->
+    <div style="background: var(--surface); border: 1px solid var(--border); border-top: 3px solid var(--accent); border-radius: 8px; padding: 20px;">
+      <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 12px;">
+        <div style="width: 32px; height: 32px; background: rgba(92,138,255,0.15); border-radius: 6px; display: flex; align-items: center; justify-content: center; font-size: 16px;">🗄️</div>
+        <div>
+          <div style="font-size: 13px; font-weight: 700; color: var(--accent);">SERVING LAYER</div>
+          <div style="font-size: 10px; color: var(--muted); text-transform: uppercase;">Merged view · Query-ready</div>
+        </div>
+      </div>
+      <div style="font-size: 12px; color: var(--muted); line-height: 1.6; margin-bottom: 12px;">
+        MongoDB hợp nhất cả hai nguồn. Batch ghi đè (overwrite). Speed append với TTL. FastAPI merge views cho client.
+      </div>
+      <div style="font-size: 11px; margin-bottom: 8px;">
+        <div style="color: var(--text); font-weight: 600; margin-bottom: 6px;">All 7 Collections:</div>
+        <div style="display: flex; flex-direction: column; gap: 4px;">
+          <span style="background: rgba(92,138,255,0.1); color: var(--accent); padding: 2px 8px; border-radius: 4px; font-family: monospace; font-size: 11px;">predictions</span>
+          <span style="background: rgba(92,138,255,0.1); color: var(--accent); padding: 2px 8px; border-radius: 4px; font-family: monospace; font-size: 11px;">+ 6 above collections</span>
+        </div>
+      </div>
+      <div style="font-size: 11px; color: var(--muted); padding-top: 10px; border-top: 1px solid var(--border);">
+        FastAPI: JWT stateless auth. Merges batch + speed views. Inference Scheduler writes 7-day forecasts every 5 min.
+      </div>
+    </div>
+  </div>
+
+  <div class="callout info">
+    <strong>Tại sao Lambda, không phải Kappa?</strong> (1) Tính toán lại SMA-90 và rolling correlation trên 4,165 ngày mỗi lần có dữ liệu mới là chi phí cấm đoán. (2) LSTM cần StandardScaler nhất quán trên cửa sổ 730 ngày — không thể đạt được với streaming incremental. (3) Hai loại query cơ bản khác nhau: historical correlation (cần toàn bộ dataset) vs realtime RSI/VWAP (cần low latency).
+  </div>
+
+  <!-- ═══════════════════════════════════════════
+       ARCHITECTURE DIAGRAMS
+  ════════════════════════════════════════════ -->
+  <h2>Luồng dữ liệu chi tiết</h2>
+
+  <figure style="width: 60%; margin: 16px auto; border: 1px solid var(--border); border-radius: 8px; overflow: hidden;">
+    <img style="width: 100%; display: block;" src="../report/figures/architecture_dataflow.png" alt="Data flow architecture diagram showing speed and batch paths through the Lambda Architecture">
+    <figcaption style="padding: 8px 12px; font-size: 12px; color: var(--muted); background: var(--surface2); border-top: 1px solid var(--border);">Figure 1: End-to-end data flow. Top path = Speed Layer (CoinGecko → Kafka → Spark Streaming → MongoDB, ~30s latency). Bottom path = Batch Layer (historical CSV → Spark Batch → MongoDB, daily cadence). Both converge at the Serving Layer; FastAPI merges views for frontend queries.</figcaption>
+  </figure>
+
+  <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin: 16px 0;">
+    <figure style="margin: 0; border: 1px solid var(--border); border-radius: 8px; overflow: hidden;">
+      <img style="width: 100%; display: block;" src="../report/figures/architecture_c4_container.png" alt="C4 container diagram showing internal components and their relationships">
+      <figcaption style="padding: 8px 12px; font-size: 12px; color: var(--muted); background: var(--surface2); border-top: 1px solid var(--border);">Figure 2: C4 Container diagram. Shows internal component boundaries: Producer, Kafka broker, two Spark contexts (streaming + batch), MongoDB, FastAPI, React, Streamlit, and Inference Scheduler as distinct deployable units.</figcaption>
+    </figure>
+    <figure style="margin: 0; border: 1px solid var(--border); border-radius: 8px; overflow: hidden;">
+      <img style="width: 100%; display: block;" src="../report/figures/architecture_deployment.png" alt="Docker deployment diagram showing 9 containers and their network topology">
+      <figcaption style="padding: 8px 12px; font-size: 12px; color: var(--muted); background: var(--surface2); border-top: 1px solid var(--border);">Figure 3: Docker Compose deployment topology. 9 containers across a shared bridge network. Ports: React :3000, FastAPI :8000, Streamlit :8501, Kafka-UI :8080, Spark Master :8081.</figcaption>
+    </figure>
+  </div>
+
+  <!-- ═══════════════════════════════════════════
        GIỚI THIỆU
   ════════════════════════════════════════════ -->
   <h2>Lambda Architecture là gì?</h2>

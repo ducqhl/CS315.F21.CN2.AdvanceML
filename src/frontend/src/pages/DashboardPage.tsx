@@ -286,8 +286,9 @@ export default function DashboardPage({ coin }: Props) {
                 tick={{ fontSize: 10, fill: 'var(--text-muted)', fontFamily: 'IBM Plex Mono' }}
                 tickLine={false}
                 axisLine={false}
-                tickFormatter={v => coin === 'bitcoin' ? `$${(v / 1000).toFixed(0)}k` : `$${v.toFixed(4)}`}
-                width={coin === 'bitcoin' ? 48 : 64}
+                domain={['auto', 'auto']}
+                tickFormatter={v => coin === 'bitcoin' ? `$${(v / 1000).toFixed(1)}k` : `$${v.toFixed(4)}`}
+                width={coin === 'bitcoin' ? 52 : 64}
               />
               <Tooltip content={<CustomTooltip decimals={decimals} />} />
               <Area

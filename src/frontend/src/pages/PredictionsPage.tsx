@@ -84,6 +84,8 @@ export default function PredictionsPage({ coin }: Props) {
   const [showRetrain,     setShowRetrain]      = useState(false);
   const [forecastPage,    setForecastPage]     = useState(1);
   const FORECAST_PAGE_SIZE = 7;
+  const [histPage,        setHistPage]         = useState(1);
+  const HIST_PAGE_SIZE = 15;
   const [toast,           setToast]            = useState<{ msg: string; type: 'ok' | 'err' } | null>(null);
   const [retrainJobs,     setRetrainJobs]      = useState<RetrainJob[]>([]);
 
@@ -215,6 +217,12 @@ export default function PredictionsPage({ coin }: Props) {
   const visibleForecasts = allForecasts.slice(
     (forecastPage - 1) * FORECAST_PAGE_SIZE,
     forecastPage * FORECAST_PAGE_SIZE,
+  );
+
+  const totalHistPages = Math.max(1, Math.ceil(predHistory.length / HIST_PAGE_SIZE));
+  const visibleHistory = predHistory.slice(
+    (histPage - 1) * HIST_PAGE_SIZE,
+    histPage * HIST_PAGE_SIZE,
   );
 
   const periodLabel = `${activeHorizon}-Day`;
@@ -403,8 +411,9 @@ export default function PredictionsPage({ coin }: Props) {
                 tickFormatter={v => v.slice(5)} />
               <YAxis tickLine={false} axisLine={false}
                 tick={{ fontSize: 10, fill: 'var(--text-muted)', fontFamily: 'IBM Plex Mono' }}
-                tickFormatter={v => coin === 'bitcoin' ? `$${(v / 1000).toFixed(0)}k` : `$${v.toFixed(4)}`}
-                width={coin === 'bitcoin' ? 48 : 64} />
+                domain={['auto', 'auto']}
+                tickFormatter={v => coin === 'bitcoin' ? `$${(v / 1000).toFixed(1)}k` : `$${v.toFixed(4)}`}
+                width={coin === 'bitcoin' ? 52 : 64} />
               <Tooltip content={<ForecastTooltip decimals={decimals} />} />
               {todayDate && (
                 <ReferenceLine x={todayDate} stroke="rgba(255,255,255,0.12)" strokeDasharray="4 3"
@@ -764,45 +773,91 @@ export default function PredictionsPage({ coin }: Props) {
             {showHistory ? <ChevronUp size={14} color="var(--text-secondary)" /> : <ChevronDown size={14} color="var(--text-secondary)" />}
           </button>
           {showHistory && (
-            <table className="data-table">
-              <thead>
-                <tr>
-                  <th>Prediction Date</th>
-                  <th style={{ textAlign: 'right' }}>Predicted</th>
-                  <th style={{ textAlign: 'right' }}>Actual</th>
-                  <th style={{ textAlign: 'right' }}>Error</th>
-                  <th style={{ textAlign: 'center' }}>Direction</th>
-                </tr>
-              </thead>
-              <tbody>
-                {predHistory.map((p, i) => (
-                  <tr key={i}>
-                    <td><span className="font-mono" style={{ fontSize: '12px' }}>{p.prediction_date.split('T')[0]}</span></td>
-                    <td style={{ textAlign: 'right' }}>
-                      <span className="font-mono" style={{ color: 'var(--warn)', fontWeight: 500 }}>{fmt(p.predicted_price, decimals)}</span>
-                    </td>
-                    <td style={{ textAlign: 'right' }}>
-                      <span className="font-mono" style={{ color: p.actual_price ? 'var(--text-primary)' : 'var(--text-muted)' }}>
-                        {p.actual_price ? fmt(p.actual_price, decimals) : '—'}
-                      </span>
-                    </td>
-                    <td style={{ textAlign: 'right' }}>
-                      {p.error_pct != null ? (
-                        <span className="font-mono" style={{
-                          fontSize: '11px', fontWeight: 500,
-                          color: Math.abs(p.error_pct) < 2 ? 'var(--up)' : Math.abs(p.error_pct) < 5 ? 'var(--warn)' : 'var(--down)',
-                        }}>
-                          {p.error_pct >= 0 ? '+' : ''}{p.error_pct.toFixed(2)}%
-                        </span>
-                      ) : <span style={{ color: 'var(--text-muted)', fontSize: '11px' }}>—</span>}
-                    </td>
-                    <td style={{ textAlign: 'center' }}>
-                      <DirectionBadge direction={p.direction} prob={p.direction_prob} />
-                    </td>
+            <>
+              <table className="data-table">
+                <thead>
+                  <tr>
+                    <th>Prediction Date</th>
+                    <th style={{ textAlign: 'right' }}>Predicted</th>
+                    <th style={{ textAlign: 'right' }}>Actual</th>
+                    <th style={{ textAlign: 'right' }}>Error</th>
+                    <th style={{ textAlign: 'center' }}>Direction</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
+                </thead>
+                <tbody>
+                  {visibleHistory.map((p, i) => (
+                    <tr key={i}>
+                      <td><span className="font-mono" style={{ fontSize: '12px' }}>{p.prediction_date.split('T')[0]}</span></td>
+                      <td style={{ textAlign: 'right' }}>
+                        <span className="font-mono" style={{ color: 'var(--warn)', fontWeight: 500 }}>{fmt(p.predicted_price, decimals)}</span>
+                      </td>
+                      <td style={{ textAlign: 'right' }}>
+                        <span className="font-mono" style={{ color: p.actual_price ? 'var(--text-primary)' : 'var(--text-muted)' }}>
+                          {p.actual_price ? fmt(p.actual_price, decimals) : '—'}
+                        </span>
+                      </td>
+                      <td style={{ textAlign: 'right' }}>
+                        {p.error_pct != null ? (
+                          <span className="font-mono" style={{
+                            fontSize: '11px', fontWeight: 500,
+                            color: Math.abs(p.error_pct) < 2 ? 'var(--up)' : Math.abs(p.error_pct) < 5 ? 'var(--warn)' : 'var(--down)',
+                          }}>
+                            {p.error_pct >= 0 ? '+' : ''}{p.error_pct.toFixed(2)}%
+                          </span>
+                        ) : <span style={{ color: 'var(--text-muted)', fontSize: '11px' }}>—</span>}
+                      </td>
+                      <td style={{ textAlign: 'center' }}>
+                        <DirectionBadge direction={p.direction} prob={p.direction_prob} />
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              {totalHistPages > 1 && (
+                <div style={{
+                  padding: '12px 20px', borderTop: '1px solid var(--border)',
+                  display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                }}>
+                  <button
+                    onClick={() => setHistPage(p => Math.max(1, p - 1))}
+                    disabled={histPage === 1}
+                    className="btn-ghost"
+                    style={{ fontSize: '11px', padding: '5px 14px', opacity: histPage === 1 ? 0.4 : 1 }}
+                  >
+                    ← Prev
+                  </button>
+                  <div style={{ display: 'flex', gap: '4px', alignItems: 'center' }}>
+                    {Array.from({ length: totalHistPages }, (_, i) => i + 1).map(page => (
+                      <button
+                        key={page}
+                        onClick={() => setHistPage(page)}
+                        className={page === histPage ? undefined : 'btn-ghost'}
+                        style={{
+                          fontSize: '10px', padding: '4px 8px', borderRadius: '5px',
+                          fontFamily: 'IBM Plex Mono', cursor: 'pointer',
+                          background: page === histPage ? 'var(--accent-subtle)' : 'transparent',
+                          border: page === histPage ? '1px solid rgba(99,102,241,0.3)' : '1px solid transparent',
+                          color: page === histPage ? 'var(--accent-light)' : 'var(--text-secondary)',
+                        }}
+                      >
+                        {page}
+                      </button>
+                    ))}
+                    <span style={{ fontSize: '10px', color: 'var(--text-muted)', fontFamily: 'Plus Jakarta Sans', marginLeft: '4px' }}>
+                      of {totalHistPages}
+                    </span>
+                  </div>
+                  <button
+                    onClick={() => setHistPage(p => Math.min(totalHistPages, p + 1))}
+                    disabled={histPage === totalHistPages}
+                    className="btn-ghost"
+                    style={{ fontSize: '11px', padding: '5px 14px', opacity: histPage === totalHistPages ? 0.4 : 1 }}
+                  >
+                    Next →
+                  </button>
+                </div>
+              )}
+            </>
           )}
         </div>
       )}

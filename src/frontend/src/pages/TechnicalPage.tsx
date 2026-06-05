@@ -219,6 +219,7 @@ export default function TechnicalPage({ coin }: Props) {
               tickFormatter={v => v.slice(5)} interval={xInterval} />
             <YAxis tickLine={false} axisLine={false} width={yWidth}
               tick={{ fontSize: 10, fill: 'var(--text-muted)', fontFamily: 'IBM Plex Mono' }}
+              domain={['auto', 'auto']}
               tickFormatter={v => fmtPrice(v, coin)} />
             <Tooltip content={<ChartTooltip coin={coin} />} />
             <Area type="monotone" dataKey="close" name="Close"

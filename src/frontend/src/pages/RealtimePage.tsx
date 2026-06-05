@@ -46,6 +46,8 @@ const ChartTooltip = ({ active, payload, label, decimals }: {
 export default function RealtimePage({ coin }: Props) {
   const [days, setDays]         = useState(90);
   const [overlays, setOverlays] = useState<Set<Overlay>>(new Set(['sma20']));
+  const [tablePage, setTablePage] = useState(1);
+  const TABLE_PAGE_SIZE = 25;
 
   const symbol   = coin === 'bitcoin' ? 'BTC' : 'DOGE';
   const decimals = coin === 'bitcoin' ? 2 : 6;
@@ -86,7 +88,12 @@ export default function RealtimePage({ coin }: Props) {
     [history]
   );
 
-  const tableRows = useMemo(() => [...history].reverse().slice(0, 25), [history]);
+  const allTableRows  = useMemo(() => [...history].reverse(), [history]);
+  const totalTablePages = Math.max(1, Math.ceil(allTableRows.length / TABLE_PAGE_SIZE));
+  const tableRows = useMemo(
+    () => allTableRows.slice((tablePage - 1) * TABLE_PAGE_SIZE, tablePage * TABLE_PAGE_SIZE),
+    [allTableRows, tablePage],
+  );
 
   const toggleOverlay = (key: Overlay) =>
     setOverlays(prev => {
@@ -94,6 +101,8 @@ export default function RealtimePage({ coin }: Props) {
       n.has(key) ? n.delete(key) : n.add(key);
       return n;
     });
+
+  const handleDaysChange = (d: number) => { setDays(d); setTablePage(1); };
 
   const loading = rtLoading || histLoading;
 
@@ -213,7 +222,7 @@ export default function RealtimePage({ coin }: Props) {
             {TIMEFRAMES.map(tf => (
               <button
                 key={tf.label}
-                onClick={() => setDays(tf.days)}
+                onClick={() => handleDaysChange(tf.days)}
                 className={`btn-ghost ${days === tf.days ? 'active' : ''}`}
                 style={{ padding: '5px 10px', fontSize: '11px' }}
               >
@@ -244,8 +253,9 @@ export default function RealtimePage({ coin }: Props) {
               <YAxis
                 tickLine={false} axisLine={false}
                 tick={{ fontSize: 10, fill: 'var(--text-muted)', fontFamily: 'IBM Plex Mono' }}
-                tickFormatter={v => coin === 'bitcoin' ? `$${(v / 1000).toFixed(0)}k` : `$${v.toFixed(4)}`}
-                width={coin === 'bitcoin' ? 48 : 64}
+                domain={['auto', 'auto']}
+                tickFormatter={v => coin === 'bitcoin' ? `$${(v / 1000).toFixed(1)}k` : `$${v.toFixed(4)}`}
+                width={coin === 'bitcoin' ? 52 : 64}
               />
               <Tooltip content={<ChartTooltip decimals={decimals} />} />
               <Area type="monotone" dataKey="close" name="Close"
@@ -273,7 +283,7 @@ export default function RealtimePage({ coin }: Props) {
             Daily Records
           </div>
           <div style={{ fontSize: '11px', color: 'var(--text-secondary)', fontFamily: 'Plus Jakarta Sans' }}>
-            Last 25 days · newest first
+            {allTableRows.length} records · newest first
           </div>
         </div>
         {loading ? (
@@ -331,6 +341,50 @@ export default function RealtimePage({ coin }: Props) {
               ))}
             </tbody>
           </table>
+        )}
+        {totalTablePages > 1 && (
+          <div style={{
+            padding: '12px 20px', borderTop: '1px solid var(--border)',
+            display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+          }}>
+            <button
+              onClick={() => setTablePage(p => Math.max(1, p - 1))}
+              disabled={tablePage === 1}
+              className="btn-ghost"
+              style={{ fontSize: '11px', padding: '5px 14px', opacity: tablePage === 1 ? 0.4 : 1 }}
+            >
+              ← Prev
+            </button>
+            <div style={{ display: 'flex', gap: '4px', alignItems: 'center' }}>
+              {Array.from({ length: totalTablePages }, (_, i) => i + 1).map(page => (
+                <button
+                  key={page}
+                  onClick={() => setTablePage(page)}
+                  className={page === tablePage ? undefined : 'btn-ghost'}
+                  style={{
+                    fontSize: '10px', padding: '4px 8px', borderRadius: '5px',
+                    fontFamily: 'IBM Plex Mono', cursor: 'pointer',
+                    background: page === tablePage ? 'var(--accent-subtle)' : 'transparent',
+                    border: page === tablePage ? '1px solid rgba(99,102,241,0.3)' : '1px solid transparent',
+                    color: page === tablePage ? 'var(--accent-light)' : 'var(--text-secondary)',
+                  }}
+                >
+                  {page}
+                </button>
+              ))}
+              <span style={{ fontSize: '10px', color: 'var(--text-muted)', fontFamily: 'Plus Jakarta Sans', marginLeft: '4px' }}>
+                of {totalTablePages}
+              </span>
+            </div>
+            <button
+              onClick={() => setTablePage(p => Math.min(totalTablePages, p + 1))}
+              disabled={tablePage === totalTablePages}
+              className="btn-ghost"
+              style={{ fontSize: '11px', padding: '5px 14px', opacity: tablePage === totalTablePages ? 0.4 : 1 }}
+            >
+              Next →
+            </button>
+          </div>
         )}
       </div>
     </div>

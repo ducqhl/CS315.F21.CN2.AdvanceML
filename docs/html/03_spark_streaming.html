@@ -56,6 +56,15 @@
   </div>
 
   <!-- ═══════════════════════════════════════════
+       PIPELINE DIAGRAM
+  ════════════════════════════════════════════ -->
+  <h2>Pipeline Diagram</h2>
+  <figure style="margin: 16px 0; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; display: flex; flex-direction: column; gap: 1rem; align-items: center;">
+    <img style="width: 50%; display: block;" src="../report/figures/diagram_spark_streaming.png" alt="Spark Streaming pipeline diagram showing two parallel query paths and foreachBatch writes">
+    <figcaption style="padding: 8px 12px; font-size: 12px; color: var(--muted); background: var(--surface2); border-top: 1px solid var(--border);">Spark Structured Streaming pipeline. Watermark = 10 minutes (matches producer's 600s poll interval). <code>foreachBatch</code> pattern enables transactional upserts to MongoDB — direct streaming sinks are intentionally avoided for write consistency.</figcaption>
+  </figure>
+
+  <!-- ═══════════════════════════════════════════
        PIPELINE OVERVIEW
   ════════════════════════════════════════════ -->
   <h2>Pipeline Tổng quan</h2>

@@ -83,6 +83,49 @@
   </div>
 
   <!-- ═══════════════════════════════════════════
+       LIVE SCREENSHOTS
+  ════════════════════════════════════════════ -->
+  <h2>Live Screenshots</h2>
+
+  <figure style="margin: 16px 0; border: 1px solid var(--border); border-radius: 8px; overflow: hidden;">
+    <img style="width: 100%; display: block;" src="../../demo/overview.png" alt="React dashboard overview page showing price charts and summary metrics">
+    <figcaption style="padding: 8px 12px; font-size: 12px; color: var(--muted); background: var(--surface2); border-top: 1px solid var(--border);">Screenshot 1: Dashboard overview — summary cards, BTC/DOGE price charts, recent trades feed. Entry point for all analysis flows.</figcaption>
+  </figure>
+
+  <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin: 0 0 16px;">
+    <figure style="margin: 0; border: 1px solid var(--border); border-radius: 8px; overflow: hidden;">
+      <img style="width: 100%; display: block;" src="../../demo/realtime.png" alt="Realtime prices page with live streaming data">
+      <figcaption style="padding: 8px 12px; font-size: 12px; color: var(--muted); background: var(--surface2); border-top: 1px solid var(--border);">Screenshot 2: Realtime page — live prices from Speed Layer (MongoDB <code>realtime_prices</code>). Polled every ~30s, reflects Spark Streaming output.</figcaption>
+    </figure>
+    <figure style="margin: 0; border: 1px solid var(--border); border-radius: 8px; overflow: hidden;">
+      <img style="width: 100%; display: block;" src="../../demo/technical.png" alt="Technical indicators page showing RSI, Bollinger Bands, VWAP">
+      <figcaption style="padding: 8px 12px; font-size: 12px; color: var(--muted); background: var(--surface2); border-top: 1px solid var(--border);">Screenshot 3: Technical indicators — RSI, Bollinger Bands, VWAP, ATR charts from <code>window_stats</code>. Computed by Spark Streaming Query B.</figcaption>
+    </figure>
+  </div>
+
+  <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin: 0 0 16px;">
+    <figure style="margin: 0; border: 1px solid var(--border); border-radius: 8px; overflow: hidden;">
+      <img style="width: 100%; display: block;" src="../../demo/predict-overview.png" alt="Predictions overview page showing 7-day LSTM forecast">
+      <figcaption style="padding: 8px 12px; font-size: 12px; color: var(--muted); background: var(--surface2); border-top: 1px solid var(--border);">Screenshot 4: Predictions overview — LSTM 7-day forecast with confidence band, trend direction badge, and last retrain timestamp.</figcaption>
+    </figure>
+    <figure style="margin: 0; border: 1px solid var(--border); border-radius: 8px; overflow: hidden;">
+      <img style="width: 100%; display: block;" src="../../demo/predict-retrain.png" alt="Predict retrain UI for triggering model retraining">
+      <figcaption style="padding: 8px 12px; font-size: 12px; color: var(--muted); background: var(--surface2); border-top: 1px solid var(--border);">Screenshot 5: Retrain UI — triggers on-demand LSTM retraining via FastAPI <code>POST /model/retrain</code> endpoint. Model registry modal shows version history.</figcaption>
+    </figure>
+  </div>
+
+  <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin: 0 0 24px;">
+    <figure style="margin: 0; border: 1px solid var(--border); border-radius: 8px; overflow: hidden;">
+      <img style="width: 100%; display: block;" src="../../demo/correlation.png" alt="Correlation page showing BTC/DOGE rolling correlation analysis">
+      <figcaption style="padding: 8px 12px; font-size: 12px; color: var(--muted); background: var(--surface2); border-top: 1px solid var(--border);">Screenshot 6: Correlation page — BTC/DOGE rolling correlation chart from batch layer (<code>coin_correlation</code> collection). Uses full 4,165-day historical dataset.</figcaption>
+    </figure>
+    <figure style="margin: 0; border: 1px solid var(--border); border-radius: 8px; overflow: hidden;">
+      <img style="width: 100%; display: block;" src="../../demo/modal%20registry.png" alt="Model registry modal showing version history">
+      <figcaption style="padding: 8px 12px; font-size: 12px; color: var(--muted); background: var(--surface2); border-top: 1px solid var(--border);">Screenshot 7: Model registry modal — version history, accuracy per fold, parameter count, and artifact paths for each trained checkpoint.</figcaption>
+    </figure>
+  </div>
+
+  <!-- ═══════════════════════════════════════════
        TECH STACK
   ════════════════════════════════════════════ -->
   <h2>Tech Stack — React Frontend</h2>

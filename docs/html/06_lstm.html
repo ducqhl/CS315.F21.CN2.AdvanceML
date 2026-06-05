@@ -70,6 +70,80 @@
   </div>
 
   <!-- ═══════════════════════════════════════════
+       ARCHITECTURE & VALIDATION FIGURES
+  ════════════════════════════════════════════ -->
+  <h2>Architecture & Validation Overview</h2>
+  <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin: 16px 0;">
+    <figure style="margin: 0; border: 1px solid var(--border); border-radius: 8px; overflow: hidden;">
+      <img style="width: 100%; display: block;" src="../report/figures/lstm_architecture.png" alt="LSTM model architecture showing 2-layer encoder and dual prediction heads">
+      <figcaption style="padding: 8px 12px; font-size: 12px; color: var(--muted); background: var(--surface2); border-top: 1px solid var(--border);">LSTM architecture. 2-layer encoder (128 hidden units, dropout 0.2 between layers). Dual output heads share the same encoder: regression head outputs 7 price scalars; classification head outputs 3-class trend direction (up/flat/down). Total ~211K parameters.</figcaption>
+    </figure>
+    <figure style="margin: 0; border: 1px solid var(--border); border-radius: 8px; overflow: hidden;">
+      <img style="width: 100%; display: block;" src="../report/figures/walk_forward_dir_acc.png" alt="Walk-forward directional accuracy chart showing BTC performance at 61.1%">
+      <figcaption style="padding: 8px 12px; font-size: 12px; color: var(--muted); background: var(--surface2); border-top: 1px solid var(--border);">Walk-forward directional accuracy per fold. BTC mean = <strong style="color: var(--accent2);">61.1%</strong> across 6 folds x 60 days (rolling 730-day window). Beats random baseline (50%) by +11.1 percentage points.</figcaption>
+    </figure>
+  </div>
+
+  <!-- Walk-forward diagram -->
+  <figure style="margin: 0 0 24px; border: 1px solid var(--border); border-radius: 8px; overflow: hidden;">
+    <img style="width: 100%; display: block;" src="../report/figures/diagram_walk_forward.png" alt="Walk-forward cross-validation diagram showing rolling window splits across 6 folds">
+    <figcaption style="padding: 8px 12px; font-size: 12px; color: var(--muted); background: var(--surface2); border-top: 1px solid var(--border);">Walk-forward validation scheme. Each fold trains on a 730-day rolling window and tests on the subsequent 60 days. No data leakage: test data is never in the training window. This mimics real deployment where the model is retrained periodically.</figcaption>
+  </figure>
+
+  <!-- ═══════════════════════════════════════════
+       FEATURE ANALYSIS FIGURES
+  ════════════════════════════════════════════ -->
+  <h2>Feature Analysis Visualizations</h2>
+  <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin: 16px 0 24px;">
+    <figure style="margin: 0; border: 1px solid var(--border); border-radius: 8px; overflow: hidden;">
+      <img style="width: 100%; display: block;" src="../report/figures/feature_panel_btc.png" alt="BTC feature panel showing all 9 input features over time">
+      <figcaption style="padding: 8px 12px; font-size: 12px; color: var(--muted); background: var(--surface2); border-top: 1px solid var(--border);">BTC feature panel — all 9 input features plotted over the training period. Features include: close price, volume, SMA-7, SMA-30, RSI-14, Bollinger Band width, VWAP, ATR, momentum returns.</figcaption>
+    </figure>
+    <figure style="margin: 0; border: 1px solid var(--border); border-radius: 8px; overflow: hidden;">
+      <img style="width: 100%; display: block;" src="../report/figures/feature_importance_radar.png" alt="Feature importance radar chart showing relative contribution of each feature">
+      <figcaption style="padding: 8px 12px; font-size: 12px; color: var(--muted); background: var(--surface2); border-top: 1px solid var(--border);">Feature importance radar. Price, volume, and momentum features dominate. Volatility features (Bollinger, ATR) contribute meaningfully to the classification head (trend direction).</figcaption>
+    </figure>
+  </div>
+
+  <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin: 0 0 24px;">
+    <figure style="margin: 0; border: 1px solid var(--border); border-radius: 8px; overflow: hidden;">
+      <img style="width: 100%; display: block;" src="../report/figures/feature_correlation_heatmap.png" alt="Feature correlation heatmap">
+      <figcaption style="padding: 8px 12px; font-size: 12px; color: var(--muted); background: var(--surface2); border-top: 1px solid var(--border);">Feature correlation heatmap. SMA features are highly correlated with close price (expected). RSI and momentum show lower cross-correlation, providing orthogonal signal.</figcaption>
+    </figure>
+    <figure style="margin: 0; border: 1px solid var(--border); border-radius: 8px; overflow: hidden;">
+      <img style="width: 100%; display: block;" src="../report/figures/per_step_mae.png" alt="MAE per forecast step showing degradation over 7-day horizon">
+      <figcaption style="padding: 8px 12px; font-size: 12px; color: var(--muted); background: var(--surface2); border-top: 1px solid var(--border);">MAE per forecast step (day 1-7). Error grows monotonically with horizon — expected behavior for any multi-step price forecast. Day-1 MAE is tightest; day-7 represents upper bound of model utility.</figcaption>
+    </figure>
+  </div>
+
+  <!-- ═══════════════════════════════════════════
+       FORECAST OUTPUT FIGURES
+  ════════════════════════════════════════════ -->
+  <h2>Forecast Output Visualizations</h2>
+
+  <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin: 16px 0 24px;">
+    <figure style="margin: 0; border: 1px solid var(--border); border-radius: 8px; overflow: hidden;">
+      <img style="width: 100%; display: block;" src="../report/figures/7day_forecast_visualization.png" alt="7-day price forecast visualization with confidence band">
+      <figcaption style="padding: 8px 12px; font-size: 12px; color: var(--muted); background: var(--surface2); border-top: 1px solid var(--border);">7-day price forecast with confidence band. Regression head output (HuberLoss) shown with +/-1 sigma uncertainty bounds. Inference Scheduler refreshes this every 5 minutes from the latest MongoDB state.</figcaption>
+    </figure>
+    <figure style="margin: 0; border: 1px solid var(--border); border-radius: 8px; overflow: hidden;">
+      <img style="width: 100%; display: block;" src="../report/figures/model_comparison_btc_vs_doge.png" alt="Model performance comparison between BTC and DOGE">
+      <figcaption style="padding: 8px 12px; font-size: 12px; color: var(--muted); background: var(--surface2); border-top: 1px solid var(--border);">BTC vs DOGE model comparison. BTC achieves higher directional accuracy due to deeper liquidity and less noise. DOGE exhibits higher volatility and less predictable short-term price action.</figcaption>
+    </figure>
+  </div>
+
+  <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin: 0 0 24px;">
+    <figure style="margin: 0; border: 1px solid var(--border); border-radius: 8px; overflow: hidden;">
+      <img style="width: 100%; display: block;" src="../report/figures/btc_doge_correlation.png" alt="BTC/DOGE rolling correlation over time">
+      <figcaption style="padding: 8px 12px; font-size: 12px; color: var(--muted); background: var(--surface2); border-top: 1px solid var(--border);">BTC/DOGE rolling correlation (batch layer output). Computed by Spark Batch over full 4,165-day history. Correlation varies substantially over time — motivates keeping both coins as independent model instances.</figcaption>
+    </figure>
+    <figure style="margin: 0; border: 1px solid var(--border); border-radius: 8px; overflow: hidden;">
+      <img style="width: 100%; display: block;" src="../report/figures/residuals_analysis.png" alt="Residuals analysis for LSTM regression head">
+      <figcaption style="padding: 8px 12px; font-size: 12px; color: var(--muted); background: var(--surface2); border-top: 1px solid var(--border);">Residuals analysis for the regression head. Residuals are approximately zero-mean but show heteroscedasticity — larger errors during high-volatility periods. HuberLoss mitigates the impact of outlier predictions.</figcaption>
+    </figure>
+  </div>
+
+  <!-- ═══════════════════════════════════════════
        DỮ LIỆU VÀ PHÂN TÍCH
   ════════════════════════════════════════════ -->
   <h2>Dữ liệu và Phân tích Thống kê</h2>
