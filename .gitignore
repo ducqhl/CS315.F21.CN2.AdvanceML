@@ -6,9 +6,10 @@
 # ── Large / sensitive datasets ────────────────────────────────────────────────
 data/g-research/
 
-# ── Trained model weights ─────────────────────────────────────────────────────
+# ── Trained model weights & scalers ──────────────────────────────────────────
 *.pt
 *.pth
+*.pkl
 src/ml/model/
 
 # ── Python cache ──────────────────────────────────────────────────────────────
@@ -60,3 +61,18 @@ htmlcov/
 # ── mypy / type checking ──────────────────────────────────────────────────────
 .mypy_cache/
 node_modules
+
+# ── LaTeX build artifacts (docs/report) ──────────────────────────────────────
+docs/report/*.aux
+docs/report/*.bbl
+docs/report/*.blg
+docs/report/*.fdb_latexmk
+docs/report/*.fls
+docs/report/*.lof
+docs/report/*.log
+docs/report/*.lot
+docs/report/*.out
+docs/report/*.pdf
+docs/report/*.synctex.gz
+docs/report/*.toc
+docs/report/missfont.log

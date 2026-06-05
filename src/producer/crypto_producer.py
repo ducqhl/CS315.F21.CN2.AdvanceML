@@ -105,6 +105,7 @@ def write_to_live_prices(records: list) -> None:
         docs = []
         for r in records:
             docs.append({
+                "symbol":     r["coin"],
                 "coin":       r["coin"],
                 "coin_id":    r["coin_id"],
                 "price_usd":  r["price_usd"],
