@@ -1,0 +1,1734 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Hệ Thống Phân Tích và Dự Đoán Giá Tiền Mã Hóa — CS315 Nhóm CN2</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,400;0,600;0,700;1,400;1,600&family=Nunito:wght@300;400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+/* === VIEWPORT BASE (mandatory, verbatim) === */
+html,body{width:100%;height:100%;margin:0;overflow:hidden;background:var(--stage-bg,#000)}
+.deck-viewport{position:fixed;inset:0;overflow:hidden;background:var(--stage-bg,#000)}
+.deck-stage{position:absolute;left:0;top:0;width:1920px;height:1080px;overflow:hidden;transform-origin:0 0;background:var(--slide-bg,#fff)}
+.slide{position:absolute;inset:0;width:1920px;height:1080px;overflow:hidden;display:flex;flex-direction:column;visibility:hidden;opacity:0;pointer-events:none;background:var(--slide-bg,#fff)}
+.slide.active,.slide.visible{visibility:visible;opacity:1;pointer-events:auto;z-index:1}
+img,video,canvas,svg{max-width:100%;max-height:100%}
+.deck-controls{position:fixed;left:50%;bottom:22px;transform:translateX(-50%);z-index:1000}
+@media print{html,body{width:1920px;height:auto;overflow:visible;background:#fff}.deck-viewport{position:static;overflow:visible;background:#fff}.deck-stage{position:static;width:auto;height:auto;transform:none!important;background:none}.slide{position:relative;display:flex!important;visibility:visible!important;opacity:1!important;pointer-events:auto!important;width:1920px;height:1080px;break-after:page;page-break-after:always}.slide:last-child{break-after:auto;page-break-after:auto}.deck-controls{display:none!important}}
+@media(prefers-reduced-motion:reduce){*,*::before,*::after{animation-duration:.01ms!important;transition-duration:.2s!important}}
+
+/* === SIGNAL DESIGN SYSTEM — FIXED 1920×1080 === */
+:root {
+  --stage-bg: #1C2644;
+  /* Palette */
+  --navy:        #1C2644;
+  --navy-alt:    #232F55;
+  --cream:       #F0ECE3;
+  --cream-alt:   #E6E0D4;
+  --text-warm:   #E2DCD0;
+  --text-muted:  #8A96A8;
+  --text-hint:   #4E5A6E;
+  --ink:         #1A2030;
+  --ink-muted:   #5A6270;
+  --ink-hint:    #9AA0A8;
+  --gold:        #C8A870;
+  --border-d:    #2E3D5C;
+  --border-l:    #CAC4B4;
+  /* Type scale (px @ 1920×1080) */
+  --fs-display:  80px;
+  --fs-h1:       96px;
+  --fs-h2:       56px;
+  --fs-h3:       36px;
+  --fs-lead:     28px;
+  --fs-body:     23px;
+  --fs-cap:      18px;
+  --fs-label:    14px;
+  /* Spacing */
+  --px: 144px;
+  --py: 56px;
+  --gap-lg: 40px;
+  --gap-md: 24px;
+  --gap-sm: 12px;
+  /* Easing */
+  --ease: cubic-bezier(0.16,1,0.3,1);
+  --ease-sharp: cubic-bezier(0.77,0,0.175,1);
+}
+
+/* === SURFACES === */
+.slide.dark  { --slide-bg: var(--navy); background: var(--navy); }
+.slide.light { --slide-bg: var(--cream); background: var(--cream); }
+
+/* Grid texture on dark slides */
+.slide.dark::before {
+  content:''; position:absolute; inset:0; pointer-events:none; z-index:0;
+  background-image:
+    linear-gradient(rgba(255,255,255,.03) 1px,transparent 1px),
+    linear-gradient(90deg,rgba(255,255,255,.03) 1px,transparent 1px);
+  background-size:80px 80px;
+}
+
+/* === CHROME & FOOT === */
+.chrome, .foot {
+  flex-shrink:0;
+  display:flex; justify-content:space-between; align-items:center;
+  padding:0 var(--px);
+  position:relative; z-index:2;
+}
+.chrome { padding-top: var(--py); padding-bottom: var(--gap-sm); border-bottom: 1px solid var(--border-d); }
+.foot   { padding-bottom: var(--py); padding-top: var(--gap-sm);  border-top:    1px solid var(--border-d); }
+.slide.light .chrome { border-bottom-color: var(--border-l); }
+.slide.light .foot   { border-top-color:    var(--border-l); }
+
+/* === BODY === */
+.body {
+  flex:1; display:flex; flex-direction:column; justify-content:center;
+  padding:var(--gap-lg) var(--px);
+  position:relative; z-index:2;
+}
+.body.top    { justify-content:flex-start; padding-top:var(--gap-md); }
+.body.spread { justify-content:space-between; }
+
+/* === TYPOGRAPHY === */
+.label {
+  font-family:'JetBrains Mono',monospace; font-size:var(--fs-label);
+  font-weight:500; letter-spacing:.14em; text-transform:uppercase;
+  color:var(--text-hint);
+}
+.slide.light .label { color:var(--text-hint); }
+.label.gold { color:var(--gold); }
+
+.kicker {
+  font-family:'JetBrains Mono',monospace; font-size:var(--fs-label);
+  font-weight:500; letter-spacing:.16em; text-transform:uppercase; color:var(--gold);
+}
+
+.rule-short { width:36px; height:1px; background:var(--gold); margin:var(--gap-sm) 0; }
+
+.h1 {
+  font-family:'Playfair Display',Georgia,serif; font-size:var(--fs-h1);
+  font-weight:600; line-height:1.08; letter-spacing:-.01em;
+  color:var(--text-warm);
+}
+.slide.light .h1 { color:var(--navy); }
+
+.h2 {
+  font-family:'Playfair Display',Georgia,serif; font-size:var(--fs-h2);
+  font-weight:600; line-height:1.12; letter-spacing:-.01em;
+  color:var(--text-warm);
+}
+.slide.light .h2 { color:var(--navy); }
+
+.h3 {
+  font-family:'Playfair Display',Georgia,serif; font-size:var(--fs-h3);
+  font-weight:500; line-height:1.25; color:var(--text-warm);
+}
+.slide.light .h3 { color:var(--navy); }
+
+.lead {
+  font-family:'Nunito',sans-serif; font-size:var(--fs-lead);
+  font-weight:400; line-height:1.6; color:var(--text-muted);
+}
+.slide.light .lead { color:var(--text-muted); }
+
+.body-text {
+  font-family:'Nunito',sans-serif; font-size:var(--fs-body);
+  font-weight:400; line-height:1.65; color:var(--text-muted);
+}
+.slide.light .body-text { color:var(--text-muted); }
+
+.stat-val {
+  font-family:'Playfair Display',Georgia,serif; font-size:var(--fs-h1);
+  font-weight:600; color:var(--gold); letter-spacing:-.02em; line-height:1;
+}
+
+/* Em in serif headlines → gold (no italic — CJK/Vietnamese strategy) */
+.h1 em, .h2 em, .h3 em { font-style:italic; color:var(--gold); }
+/* Cover title em → gold, not italic */
+.cover-title em { font-style: normal; color: var(--gold); }
+
+/* === BULLET LIST === */
+.bullets { list-style:none; margin:0; padding:0; display:flex; flex-direction:column; gap:var(--gap-md); }
+.bullets li {
+  position:relative; padding-left:36px; display:block;
+  font-family:'Nunito',sans-serif; font-size:var(--fs-lead); line-height:1.6;
+  color:var(--text-muted);
+}
+.bullets li::before {
+  content:'—'; font-family:'JetBrains Mono',monospace;
+  color:var(--gold); font-size:var(--fs-label); letter-spacing:0;
+  position:absolute; left:0; top:5px;
+}
+
+/* === TAGS === */
+.tag {
+  display:inline-block; border:1px solid var(--gold); color:var(--gold);
+  padding:4px 14px; font-family:'JetBrains Mono',monospace;
+  font-size:var(--fs-label); letter-spacing:.12em; text-transform:uppercase;
+}
+
+/* === RULE FULL === */
+.rule-full { width:100%; height:1px; background:var(--border-d); margin:var(--gap-md) 0; }
+.slide.light .rule-full { background:var(--border-l); }
+
+/* === TWO-COLUMN === */
+.two-col { display:grid; grid-template-columns:1fr 1fr; gap:60px; }
+.two-col .col-divider {
+  width:1px; background:var(--border-d); align-self:stretch;
+}
+.slide.light .col-divider { background:var(--border-l); }
+
+/* === TABLE GRID === */
+.sig-table { width:100%; border-collapse:collapse; }
+.sig-table th {
+  font-family:'JetBrains Mono',monospace; font-size:var(--fs-label);
+  letter-spacing:.14em; text-transform:uppercase; color:var(--gold);
+  text-align:left; padding:10px 16px; border-bottom:1px solid var(--border-d);
+}
+.slide.light .sig-table th { border-bottom-color:var(--border-l); }
+.sig-table td {
+  font-family:'Nunito',sans-serif; font-size:var(--fs-body);
+  color:var(--text-muted); padding:12px 16px; border-bottom:1px solid var(--border-d);
+  line-height:1.5;
+}
+.slide.light .sig-table td { border-bottom-color:var(--border-l); color:var(--text-muted); }
+.sig-table td.gold { color:var(--gold); font-family:'Playfair Display',Georgia,serif; font-weight:600; }
+.sig-table td.warm { color:var(--text-warm); }
+.slide.light .sig-table td.warm { color:var(--navy); }
+.sig-table.sm td { font-size: 18px; padding: 10px 14px; }
+
+/* === PROGRESS BAR (Slide 19) === */
+.progress-wrap { width: 520px; }
+.progress-track {
+  position: relative; height: 8px; background: rgba(255,255,255,0.08);
+  border: 1px solid #2E3D5C; margin: 12px 0;
+}
+.progress-fill { height: 100%; background: #C8A870; }
+.progress-baseline {
+  position: absolute; left: 50%; top: -20px;
+  font-family: 'JetBrains Mono',monospace; font-size: 11px;
+  color: #4E5A6E; letter-spacing: 0.12em; transform: translateX(-50%);
+}
+.progress-baseline::after {
+  content: ''; position: absolute; left: 50%; top: 20px;
+  width: 1px; height: 16px; background: #2E3D5C;
+}
+
+/* === PARAM DISTRIBUTION BAR (Slide 15) === */
+.param-bar-wrap { margin-top: var(--gap-md); }
+.param-bar-labels {
+  display: flex; justify-content: space-between;
+  font-family: 'JetBrains Mono',monospace; font-size: 12px;
+  color: var(--text-hint); letter-spacing: .12em; margin-bottom: 8px;
+}
+.param-bar-track {
+  display: flex; height: 24px; width: 100%;
+  border: 1px solid var(--border-d); overflow: hidden;
+}
+.param-bar-encoder {
+  width: 92.1%; background: rgba(200,168,112,0.55);
+  display: flex; align-items: center; justify-content: center;
+  font-family: 'JetBrains Mono',monospace; font-size: 11px;
+  color: var(--ink); letter-spacing: .1em;
+}
+.param-bar-heads {
+  width: 7.9%; background: rgba(200,168,112,0.25);
+  display: flex; align-items: center; justify-content: center;
+  font-family: 'JetBrains Mono',monospace; font-size: 10px;
+  color: var(--text-hint); letter-spacing: .08em;
+}
+
+/* === STAT CARD ROW === */
+.stat-row { display:flex; gap:60px; }
+.stat-card {
+  flex:1; border-top:1px solid var(--border-d); padding-top:var(--gap-md);
+}
+.slide.light .stat-card { border-top-color:var(--border-l); }
+.stat-card .stat-num {
+  font-family:'Playfair Display',Georgia,serif; font-size:60px; font-weight:600;
+  color:var(--gold); letter-spacing:-.02em; line-height:1;
+}
+.stat-card .stat-desc {
+  font-family:'Nunito',sans-serif; font-size:var(--fs-body);
+  color:var(--text-muted); margin-top:8px; line-height:1.5;
+}
+.slide.light .stat-card .stat-desc { color:var(--text-muted); }
+.stat-card .stat-note {
+  font-family:'JetBrains Mono',monospace; font-size:var(--fs-label);
+  color:var(--text-hint); letter-spacing:.1em; text-transform:uppercase; margin-top:6px;
+}
+.slide.light .stat-card .stat-note { color:var(--text-hint); }
+
+/* === LAMBDA DIAGRAM === */
+.lambda-wrap { display:flex; flex-direction:column; gap:16px; width:100%; }
+.lambda-layer {
+  display:grid; grid-template-columns:200px 1fr;
+  border:1px solid var(--border-d);
+  padding:20px 28px; gap:20px; align-items:center;
+}
+.slide.light .lambda-layer { border-color:var(--border-l); }
+.lambda-layer .l-label {
+  font-family:'JetBrains Mono',monospace; font-size:13px;
+  color:var(--gold); letter-spacing:.18em; text-transform:uppercase;
+  line-height:1.4;
+}
+.lambda-layer .l-desc {
+  font-family:'Nunito',sans-serif; font-size:22px; color:var(--text-muted);
+  line-height:1.55;
+}
+.slide.light .lambda-layer .l-desc { color:var(--text-muted); }
+.lambda-layer.speed-layer { border-color:var(--gold); }
+.lambda-layer.speed-layer .l-label { color:var(--gold); }
+
+/* === LSTM EVOLUTION === */
+.evo-chain { display:flex; align-items:stretch; gap:0; width:100%; }
+.evo-step {
+  flex:1; border:1px solid var(--border-d); padding:28px 32px;
+  display:flex; flex-direction:column; gap:var(--gap-sm);
+}
+.slide.light .evo-step { border-color:var(--border-l); }
+.evo-step.current { border-color:var(--gold); background:rgba(200,168,112,.06); }
+.evo-step .evo-ver {
+  font-family:'JetBrains Mono',monospace; font-size:var(--fs-label);
+  color:var(--gold); letter-spacing:.18em; text-transform:uppercase;
+}
+.evo-step .evo-name {
+  font-family:'Playfair Display',Georgia,serif; font-size:34px; font-weight:600;
+  color:var(--text-warm); line-height:1.2;
+}
+.slide.light .evo-step .evo-name { color:var(--navy); }
+.evo-step .evo-detail {
+  font-family:'Nunito',sans-serif; font-size:21px; color:var(--text-muted); line-height:1.55;
+}
+.slide.light .evo-step .evo-detail { color:var(--text-muted); }
+.evo-step .evo-issue {
+  font-family:'JetBrains Mono',monospace; font-size:14px; color:#7A5B3A;
+  letter-spacing:.08em; margin-top:auto;
+}
+.evo-step.current .evo-issue { color:var(--gold); }
+.evo-arrow {
+  display:flex; align-items:center; padding:0 16px;
+  font-family:'JetBrains Mono',monospace; font-size:18px; color:var(--text-hint);
+  flex-shrink:0;
+}
+
+/* === ARCH DIAGRAM (LSTM v3) === */
+.arch-box {
+  border:1px solid var(--border-d); padding:28px 32px;
+  display:flex; flex-direction:column; gap:14px;
+}
+.slide.light .arch-box { border-color:var(--border-l); }
+.arch-box.gold-border { border-color:var(--gold); }
+.arch-box .arch-label {
+  font-family:'JetBrains Mono',monospace; font-size:13px;
+  color:var(--gold); letter-spacing:.16em; text-transform:uppercase;
+}
+.arch-box .arch-desc {
+  font-family:'Nunito',sans-serif; font-size:22px; color:var(--text-muted); line-height:1.6;
+}
+.slide.light .arch-box .arch-desc { color:var(--text-muted); }
+
+/* === COVER / STATEMENT === */
+.s-cover { justify-content:center; align-items:flex-start; }
+.cover-inner {
+  padding:0 var(--px);
+  display:flex; flex-direction:column; gap:var(--gap-md);
+  position:relative; z-index:2; max-width:1440px;
+}
+.cover-title {
+  font-family:'Playfair Display',Georgia,serif; font-size:76px; font-weight:600;
+  line-height:1.06; letter-spacing:-.01em; color:var(--text-warm);
+  margin:0;
+}
+.cover-sub {
+  font-family:'Playfair Display',Georgia,serif; font-size:36px; font-weight:400;
+  font-style:italic; color:var(--gold); margin:0;
+}
+.cover-tags { display:flex; gap:16px; flex-wrap:wrap; }
+
+/* === QUOTE / STATEMENT SLIDE === */
+.s-statement { align-items:center; justify-content:center; }
+.statement-inner {
+  padding:0 var(--px); text-align:center; max-width:1400px;
+  position:relative; z-index:2;
+}
+.statement-inner .h1 { font-size:64px; line-height:1.12; }
+
+/* === CHECKLIST === */
+.checklist { list-style:none; margin:0; padding:0; display:flex; flex-direction:column; gap:18px; }
+.checklist li {
+  position:relative; padding-left:40px; display:block;
+  font-family:'Nunito',sans-serif; font-size:25px; color:var(--text-muted); line-height:1.55;
+}
+.checklist li::before {
+  content:'✓'; font-family:'JetBrains Mono',monospace;
+  color:var(--gold); font-size:14px; letter-spacing:0;
+  position:absolute; left:0; top:4px;
+}
+.checklist li.warn::before { content:'⚠'; color:#9A7040; }
+
+/* === BIG RESULT === */
+.big-result {
+  display:flex; flex-direction:column; align-items:flex-start;
+  gap:var(--gap-sm);
+}
+.big-result .big-num {
+  font-family:'Playfair Display',Georgia,serif; font-size:160px; font-weight:600;
+  color:var(--gold); line-height:1; letter-spacing:-.02em;
+}
+.big-result .big-label {
+  font-family:'JetBrains Mono',monospace; font-size:14px;
+  color:var(--gold); letter-spacing:.2em; text-transform:uppercase;
+}
+.big-result .big-note {
+  font-family:'Nunito',sans-serif; font-size:var(--fs-lead);
+  color:var(--text-muted); max-width:700px; line-height:1.55;
+}
+.slide.light .big-result .big-note { color:var(--text-muted); }
+
+/* === ANIMATIONS === */
+.reveal {
+  opacity:0; transform:translateY(18px);
+  transition:opacity .55s var(--ease), transform .55s var(--ease);
+}
+.reveal-left {
+  opacity:0; transform:translateX(-24px);
+  transition:opacity .55s var(--ease), transform .55s var(--ease);
+}
+.reveal-scale {
+  opacity:0; transform:scale(.96);
+  transition:opacity .6s var(--ease), transform .6s var(--ease);
+}
+.slide.visible .reveal      { opacity:1; transform:translateY(0); }
+.slide.visible .reveal-left { opacity:1; transform:translateX(0); }
+.slide.visible .reveal-scale{ opacity:1; transform:scale(1); }
+
+/* Stagger delays */
+.d1{transition-delay:.05s} .d2{transition-delay:.15s} .d3{transition-delay:.25s}
+.d4{transition-delay:.35s} .d5{transition-delay:.45s} .d6{transition-delay:.55s}
+.d7{transition-delay:.65s} .d8{transition-delay:.75s} .d9{transition-delay:.85s}
+
+/* Nav counter pill */
+#nav-counter {
+  position:fixed; bottom:28px; right:36px;
+  font-family:'JetBrains Mono',monospace; font-size:12px;
+  color:rgba(200,168,112,.7); letter-spacing:.18em;
+  z-index:2000; text-transform:uppercase;
+}
+
+/* Edit mode */
+.edit-hotzone { position:fixed; top:0; left:0; width:80px; height:80px; z-index:10000; cursor:pointer; }
+#editToggle {
+  position:fixed; top:16px; left:16px; z-index:10001;
+  background:rgba(28,38,68,.9); border:1px solid var(--gold); color:var(--gold);
+  font-family:'JetBrains Mono',monospace; font-size:11px; letter-spacing:.12em;
+  padding:8px 14px; cursor:pointer; opacity:0; pointer-events:none;
+  transition:opacity .3s ease; text-transform:uppercase;
+}
+#editToggle.show, #editToggle.active { opacity:1; pointer-events:auto; }
+
+</style>
+</head>
+<body>
+<div class="deck-viewport">
+<main class="deck-stage" id="stage">
+
+<!-- ============================================================
+     SLIDE 1 — TITLE (dark, chromeless)
+     ============================================================ -->
+<section class="slide dark s-cover active" id="s1">
+  <div class="cover-inner">
+    <div class="kicker reveal d1">CS315 — Advanced Machine Learning · Nhóm CN2</div>
+    <div class="rule-short reveal d2"></div>
+    <h1 class="cover-title reveal d3">
+      Hệ Thống Phân Tích và Dự Đoán<br>
+      Giá Tiền Mã Hóa Theo Thời Gian Thực<br>
+      <em>Dựa Trên Kiến Trúc Lambda</em>
+    </h1>
+    <div class="cover-tags reveal d4">
+      <span class="tag">Bitcoin BTC</span>
+      <span class="tag">Dogecoin DOGE</span>
+      <span class="tag">Kafka · Spark · LSTM</span>
+      <span class="tag">2026</span>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================
+     SLIDE 2 — VẤN ĐỀ & ĐỘNG LỰC (light)
+     ============================================================ -->
+<section class="slide dark" id="s2">
+  <div class="chrome">
+    <span class="label gold">Giới Thiệu</span>
+    <span class="label">02 / 25</span>
+  </div>
+  <div class="body">
+    <div class="kicker reveal d1">Vấn Đề & Động Lực</div>
+    <div class="rule-short reveal d2"></div>
+    <h2 class="h2 reveal d3">Tại sao cần hệ thống <em>thời gian thực</em>?</h2>
+    <div style="height:var(--gap-lg)"></div>
+    <ul class="bullets">
+      <li class="reveal d4">Thị trường crypto biến động cao — phần lớn hệ thống hiện tại chỉ xử lý batch, không đáp ứng được nhu cầu dashboard realtime</li>
+      <li class="reveal d5">Dự đoán giá ngắn hạn có giá trị lớn nhưng rất khó do bản chất <em>phi tuyến</em> và fat-tail cực đoan của chuỗi tài chính</li>
+      <li class="reveal d6">Câu hỏi nghiên cứu: <em>Có thể kết hợp Lambda Architecture + LSTM để phân tích crypto realtime không?</em></li>
+    </ul>
+  </div>
+  <div class="foot">
+    <span class="label">CS315 — Advanced Machine Learning</span>
+    <span class="label">Nhóm CN2 · 2026</span>
+  </div>
+</section>
+
+<!-- ============================================================
+     SLIDE 3 — MỤC TIÊU (dark)
+     ============================================================ -->
+<section class="slide dark" id="s3">
+  <div class="chrome">
+    <span class="label gold">Giới Thiệu</span>
+    <span class="label">03 / 25</span>
+  </div>
+  <div class="body">
+    <div class="kicker reveal d1">Mục Tiêu Đề Tài</div>
+    <div class="rule-short reveal d2"></div>
+    <h2 class="h2 reveal d3">4 mục tiêu <em>cụ thể</em></h2>
+    <div style="height:var(--gap-lg)"></div>
+    <div class="stat-row reveal d4">
+      <div class="stat-card">
+        <div class="stat-num">01</div>
+        <div class="stat-desc">Xây dựng Lambda Pipeline hoàn chỉnh — Batch + Streaming</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-num">02</div>
+        <div class="stat-desc">Tính chỉ số kỹ thuật realtime — SMA, RSI, VWAP, Bollinger, ATR</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-num">03</div>
+        <div class="stat-desc">Huấn luyện LSTM Dual-Head — dự đoán 7 bước log-return + khoảng tin cậy volatility (MIMO)</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-num">04</div>
+        <div class="stat-desc">Xây dựng API + giao diện người dùng — React + Streamlit</div>
+      </div>
+    </div>
+    <div style="height:var(--gap-lg)"></div>
+    <p class="lead reveal d5">Phạm vi: BTC + DOGE · Dữ liệu 11,4 năm · Docker Compose 10 services</p>
+  </div>
+  <div class="foot">
+    <span class="label">CS315 — Advanced Machine Learning</span>
+    <span class="label">Nhóm CN2 · 2026</span>
+  </div>
+</section>
+
+<!-- ============================================================
+     SLIDE 4 — NGHIÊN CỨU LIÊN QUAN (light)
+     ============================================================ -->
+<section class="slide dark" id="s4">
+  <div class="chrome">
+    <span class="label gold">Nghiên Cứu Liên Quan</span>
+    <span class="label">04 / 25</span>
+  </div>
+  <div class="body top">
+    <div class="kicker reveal d1">Nền Tảng Lý Thuyết</div>
+    <div class="rule-short reveal d2"></div>
+    <h2 class="h2 reveal d3">Điểm tựa nghiên cứu</h2>
+    <div style="height:var(--gap-md)"></div>
+    <table class="sig-table reveal d4">
+      <thead><tr>
+        <th>Chủ đề</th>
+        <th>Công trình</th>
+        <th>Đóng góp cho đề tài</th>
+      </tr></thead>
+      <tbody>
+        <tr><td class="warm">LSTM cho chuỗi thời gian tài chính</td><td>Fischer & Krauss (2018)</td><td>LSTM vượt ARIMA/RF trên S&P 500 — cơ sở chọn mô hình</td></tr>
+        <tr><td class="warm">Vanishing gradient → LSTM gates</td><td>Hochreiter & Schmidhuber (1997)</td><td>Cơ chế cổng — nền tảng kiến trúc encoder</td></tr>
+        <tr><td class="warm">Kafka + Spark Streaming</td><td>Zaharia et al. — unified engine</td><td>Speed layer idempotent với foreachBatch pattern</td></tr>
+        <tr><td class="warm">Kiến trúc Lambda</td><td>Nathan Marz</td><td>Batch + Speed + Serving — khung tổng thể của hệ thống</td></tr>
+        <tr><td class="warm">Chỉ số kỹ thuật</td><td>Murphy — Technical Analysis</td><td>SMA, RSI, Bollinger, VWAP làm features cho LSTM</td></tr>
+      </tbody>
+    </table>
+    <div style="height:var(--gap-md)"></div>
+    <p class="lead reveal d5">Điểm mới: LSTM v3 với <em>volatility head</em> + <em>direction-weighted Huber loss</em> + walk-forward 6 fold + backtest 6 tháng</p>
+  </div>
+  <div class="foot">
+    <span class="label">CS315 — Advanced Machine Learning</span>
+    <span class="label">Nhóm CN2 · 2026</span>
+  </div>
+</section>
+
+<!-- ============================================================
+     SLIDE 5 — KIẾN TRÚC LAMBDA (dark)
+     ============================================================ -->
+<section class="slide dark" id="s5">
+  <div class="chrome">
+    <span class="label gold">Kiến Trúc Hệ Thống</span>
+    <span class="label">05 / 25</span>
+  </div>
+  <div class="body">
+    <div class="kicker reveal d1">Lambda Architecture</div>
+    <div class="rule-short reveal d2"></div>
+    <h2 class="h2 reveal d3">Ba lớp, <em>một serving layer</em></h2>
+    <div style="height:var(--gap-lg)"></div>
+    <div class="lambda-wrap reveal d4">
+      <div class="lambda-layer">
+        <div class="l-label">Batch Layer<br>(Accuracy High)</div>
+        <div class="l-desc">CSV lịch sử → Spark Batch → MongoDB &nbsp;·&nbsp; <span style="color:var(--gold);font-family:'JetBrains Mono',monospace;font-size:13px">daily_stats · historical_sma · coin_correlation</span></div>
+      </div>
+      <div class="lambda-layer speed-layer">
+        <div class="l-label">Speed Layer<br>(Latency Low)</div>
+        <div class="l-desc">CoinGecko API → Kafka (crypto_raw) → Spark Streaming → <span style="color:var(--gold);font-family:'JetBrains Mono',monospace;font-size:13px">realtime_prices</span></div>
+      </div>
+      <div class="lambda-layer">
+        <div class="l-label">Serving Layer</div>
+        <div class="l-desc">MongoDB → FastAPI (JWT) → React Frontend · Streamlit &nbsp;·&nbsp; LSTM Inference Scheduler → <span style="color:var(--gold);font-family:'JetBrains Mono',monospace;font-size:13px">predictions</span></div>
+      </div>
+    </div>
+    <div style="height:var(--gap-md)"></div>
+    <p class="lead reveal d5">10 Docker services · Zookeeper · Kafka · <em>Kafka UI</em> · MongoDB · Spark Master · Spark Worker · Producer · Dashboard · API · Frontend · Inference</p>
+  </div>
+  <div class="foot">
+    <span class="label">CS315 — Advanced Machine Learning</span>
+    <span class="label">Nhóm CN2 · 2026</span>
+  </div>
+</section>
+
+<!-- ============================================================
+     SLIDE 6 — DỮ LIỆU (light)
+     ============================================================ -->
+<section class="slide dark" id="s6">
+  <div class="chrome">
+    <span class="label gold">Dữ Liệu</span>
+    <span class="label">06 / 25</span>
+  </div>
+  <div class="body">
+    <div class="kicker reveal d1">Thu Thập Dữ Liệu</div>
+    <div class="rule-short reveal d2"></div>
+    <h2 class="h2 reveal d3">CoinGecko API — <em>hai kênh song song</em></h2>
+    <div style="height:var(--gap-lg)"></div>
+    <div class="two-col reveal d4">
+      <div>
+        <div class="kicker" style="font-size:11px;margin-bottom:12px">Kênh Offline CSV — Huấn Luyện</div>
+        <ul class="bullets" style="gap:14px">
+          <li>Download toàn bộ lịch sử giá hàng ngày (bitcoin.csv, dogecoin.csv)</li>
+          <li><span style="color:var(--gold);font-family:'Playfair Display',Georgia,serif;font-weight:600">4.165</span> quan sát/coin · 01/01/2015 – 29/05/2026</li>
+          <li>Schema: <span style="font-family:'JetBrains Mono',monospace;font-size:14px;color:var(--text-warm)">{date, close, total_volume, market_cap}</span></li>
+        </ul>
+      </div>
+      <div>
+        <div class="kicker" style="font-size:11px;margin-bottom:12px">Kênh Streaming — Realtime Serving</div>
+        <ul class="bullets" style="gap:14px">
+          <li>Kafka producer poll CoinGecko mỗi <span style="color:var(--gold);font-family:'Playfair Display',Georgia,serif;font-weight:600">600s</span></li>
+          <li>acks=all · retries=3 · linger_ms=100 → độ tin cậy cao</li>
+          <li>Lý do tách biệt: CoinGecko demo tier giới hạn <span style="color:var(--gold);font-family:'Playfair Display',Georgia,serif;font-weight:600">10k</span> calls/tháng</li>
+        </ul>
+      </div>
+    </div>
+    <div class="rule-full reveal d5"></div>
+    <div class="stat-row reveal d6" style="gap:40px">
+      <div class="stat-card"><div class="stat-num">$172</div><div class="stat-desc">BTC min price</div></div>
+      <div class="stat-card"><div class="stat-num">$124K</div><div class="stat-desc">BTC max price</div></div>
+      <div class="stat-card"><div class="stat-num">$0.0001</div><div class="stat-desc">DOGE min price</div></div>
+      <div class="stat-card"><div class="stat-num">$0.6818</div><div class="stat-desc">DOGE max price</div></div>
+      <div class="stat-card"><div class="stat-num">&lt;0.03%</div><div class="stat-desc">Tỷ lệ null</div></div>
+    </div>
+  </div>
+  <div class="foot">
+    <span class="label">CS315 — Advanced Machine Learning</span>
+    <span class="label">Nhóm CN2 · 2026</span>
+  </div>
+</section>
+
+<!-- ============================================================
+     SLIDE 7 — EDA: BTC vs DOGE (dark)
+     ============================================================ -->
+<section class="slide dark" id="s7">
+  <div class="chrome">
+    <span class="label gold">EDA</span>
+    <span class="label">07 / 25</span>
+  </div>
+  <div class="body">
+    <div class="kicker reveal d1">Phân Tích Khám Phá Dữ Liệu</div>
+    <div class="rule-short reveal d2"></div>
+    <h2 class="h2 reveal d3">BTC vs DOGE — <em>hai bản chất khác nhau</em></h2>
+    <div style="height:var(--gap-lg)"></div>
+    <div class="two-col reveal d4">
+      <div>
+        <div class="kicker" style="font-size:11px;margin-bottom:16px">Bitcoin — Store of Value</div>
+        <ul class="bullets" style="gap:16px">
+          <li>Tăng trưởng bậc thang theo chu kỳ halving — 2017, 2020–21, 2024</li>
+          <li>Max drawdown: <span style="color:var(--gold);font-family:'Playfair Display',Georgia,serif;font-weight:600">−83,64%</span></li>
+          <li>Kurtosis log-return: <span style="color:var(--gold);font-family:'Playfair Display',Georgia,serif;font-weight:600">11,11</span> — fat tails nhưng có cấu trúc</li>
+        </ul>
+      </div>
+      <div>
+        <div class="kicker" style="font-size:11px;margin-bottom:16px">Dogecoin — Đầu Cơ / Meme</div>
+        <ul class="bullets" style="gap:16px">
+          <li>Phần lớn &lt;$0.01 · pump bất ngờ do sự kiện ngoại sinh (Elon Musk 5/2021 → $0.68)</li>
+          <li>Max drawdown: <span style="color:var(--gold);font-family:'Playfair Display',Georgia,serif;font-weight:600">−92,21%</span></li>
+          <li>Kurtosis log-return: <span style="color:var(--gold);font-family:'Playfair Display',Georgia,serif;font-weight:600">77,02</span> — fat tails cực đoan</li>
+        </ul>
+      </div>
+    </div>
+    <div class="reveal d5">
+      <svg viewBox="0 0 1500 220" xmlns="http://www.w3.org/2000/svg" style="width:100%;height:auto;display:block">
+        <!-- Row labels -->
+        <text x="0" y="34" font-family="'JetBrains Mono',monospace" font-size="13" fill="#4E5A6E" letter-spacing="0.12em" text-anchor="start">MAX DRAWDOWN</text>
+        <text x="0" y="94" font-family="'JetBrains Mono',monospace" font-size="13" fill="#4E5A6E" letter-spacing="0.12em" text-anchor="start">MAX DRAWDOWN</text>
+        <text x="0" y="154" font-family="'JetBrains Mono',monospace" font-size="13" fill="#4E5A6E" letter-spacing="0.12em" text-anchor="start">KURTOSIS</text>
+        <text x="0" y="214" font-family="'JetBrains Mono',monospace" font-size="13" fill="#4E5A6E" letter-spacing="0.12em" text-anchor="start">KURTOSIS</text>
+
+        <!-- Coin labels -->
+        <text x="230" y="34" font-family="'JetBrains Mono',monospace" font-size="13" fill="#8A96A8" letter-spacing="0.1em">BTC</text>
+        <text x="230" y="94" font-family="'JetBrains Mono',monospace" font-size="13" fill="#8A96A8" letter-spacing="0.1em">DOGE</text>
+        <text x="230" y="154" font-family="'JetBrains Mono',monospace" font-size="13" fill="#8A96A8" letter-spacing="0.1em">BTC</text>
+        <text x="230" y="214" font-family="'JetBrains Mono',monospace" font-size="13" fill="#8A96A8" letter-spacing="0.1em">DOGE</text>
+
+        <!-- Bar track background -->
+        <rect x="290" y="18" width="1100" height="22" fill="rgba(255,255,255,0.04)" rx="2"/>
+        <rect x="290" y="78" width="1100" height="22" fill="rgba(255,255,255,0.04)" rx="2"/>
+        <rect x="290" y="138" width="1100" height="22" fill="rgba(255,255,255,0.04)" rx="2"/>
+        <rect x="290" y="198" width="1100" height="22" fill="rgba(255,255,255,0.04)" rx="2"/>
+
+        <!-- BTC Max Drawdown bar: 83.64% of 1100 = 920 -->
+        <rect x="290" y="18" width="920" height="22" fill="rgba(200,168,112,0.60)" rx="2"/>
+        <!-- DOGE Max Drawdown bar: 100% of 1100 = 1100 -->
+        <rect x="290" y="78" width="1100" height="22" fill="rgba(200,168,112,0.35)" rx="2"/>
+        <!-- BTC Kurtosis: 11.11/77.02 * 1100 = 158.5 -->
+        <rect x="290" y="138" width="159" height="22" fill="rgba(200,168,112,0.60)" rx="2"/>
+        <!-- DOGE Kurtosis: 100% of 1100 = 1100 -->
+        <rect x="290" y="198" width="1100" height="22" fill="rgba(200,168,112,0.35)" rx="2"/>
+
+        <!-- Value labels -->
+        <text x="1220" y="34" font-family="'JetBrains Mono',monospace" font-size="14" fill="#C8A870" letter-spacing="0.08em">−83,64%</text>
+        <text x="1220" y="94" font-family="'JetBrains Mono',monospace" font-size="14" fill="#C8A870" letter-spacing="0.08em">−92,21%</text>
+        <text x="459" y="154" font-family="'JetBrains Mono',monospace" font-size="14" fill="#C8A870" letter-spacing="0.08em">11,11</text>
+        <text x="1220" y="214" font-family="'JetBrains Mono',monospace" font-size="14" fill="#C8A870" letter-spacing="0.08em">77,02</text>
+
+        <!-- Caption -->
+        <text x="750" y="245" font-family="'Nunito',sans-serif" font-size="15" fill="#4E5A6E" letter-spacing="0.06em" text-anchor="middle">r = 0.528 BTC-DOGE Pearson · cần hai mô hình riêng biệt</text>
+      </svg>
+    </div>
+  </div>
+  <div class="foot">
+    <span class="label">CS315 — Advanced Machine Learning</span>
+    <span class="label">Nhóm CN2 · 2026</span>
+  </div>
+</section>
+
+<!-- ============================================================
+     SLIDE 8 — STATIONARITY & HUBER (light)
+     ============================================================ -->
+<section class="slide dark" id="s8">
+  <div class="chrome">
+    <span class="label gold">EDA</span>
+    <span class="label">08 / 25</span>
+  </div>
+  <div class="body top">
+    <div class="kicker reveal d1">Kiểm Định Tính Dừng</div>
+    <div class="rule-short reveal d2"></div>
+    <h2 class="h2 reveal d3">Log-return dừng mạnh — <em>lý do dùng HuberLoss</em></h2>
+    <div style="height:var(--gap-md)"></div>
+    <table class="sig-table reveal d4">
+      <thead><tr><th>Chuỗi</th><th>p-value (ADF)</th><th>Kết luận</th></tr></thead>
+      <tbody>
+        <tr><td>BTC — Giá đóng cửa raw</td><td>0,683</td><td>Không dừng ❌</td></tr>
+        <tr><td>BTC — Log-return 1 ngày</td><td class="gold">≈ 0</td><td class="warm">Dừng mạnh ✓</td></tr>
+        <tr><td>DOGE — Giá đóng cửa raw</td><td>0,0105</td><td style="color:var(--text-hint)">(*) Nhiễu do pump</td></tr>
+        <tr><td>DOGE — Log-return 1 ngày</td><td class="gold">≈ 0</td><td class="warm">Dừng mạnh ✓</td></tr>
+      </tbody>
+    </table>
+    <div style="height:var(--gap-md)"></div>
+    <div class="two-col reveal d5">
+      <div>
+        <div class="kicker" style="font-size:11px;margin-bottom:12px">Tại sao HuberLoss thay vì MSE?</div>
+        <ul class="bullets" style="gap:14px">
+          <li>Kurtosis BTC = 11 · DOGE = 77 → outliers cực đoan do crash/pump</li>
+          <li>Huber = L2 cho sai số nhỏ + L1 cho sai số lớn → robust với tail events</li>
+        </ul>
+      </div>
+      <div>
+        <div class="kicker" style="font-size:11px;margin-bottom:12px">Tại sao 2 mô hình riêng?</div>
+        <ul class="bullets" style="gap:14px">
+          <li>Rolling Pearson dao động từ 0,2 đến 0,8 theo thời gian · trung bình 30 ngày: r = <span style="color:var(--gold);font-family:'Playfair Display',Georgia,serif;font-weight:600">0,637</span></li>
+          <li>BTC = store-of-value · DOGE = đầu cơ — bản chất hoàn toàn khác nhau<br><span style="font-family:'JetBrains Mono',monospace;font-size:12px;color:var(--text-hint)">(*) DOGE raw p=0,0105 — thoạt nhìn "dừng" do pump events làm nhiễu ADF</span></li>
+        </ul>
+      </div>
+    </div>
+  </div>
+  <div class="foot">
+    <span class="label">CS315 — Advanced Machine Learning</span>
+    <span class="label">Nhóm CN2 · 2026</span>
+  </div>
+</section>
+
+<!-- ============================================================
+     SLIDE 9 — FEATURE ENGINEERING (dark)
+     ============================================================ -->
+<section class="slide dark" id="s9">
+  <div class="chrome">
+    <span class="label gold">Feature Engineering</span>
+    <span class="label">09 / 25</span>
+  </div>
+  <div class="body top">
+    <div class="kicker reveal d1">Bộ Đặc Trưng 9 Chiều</div>
+    <div class="rule-short reveal d2"></div>
+    <h2 class="h2 reveal d3">Cửa sổ input: <em>60 ngày × 9 features</em> → 7 log-return tương lai</h2>
+    <div style="height:var(--gap-md)"></div>
+    <table class="sig-table reveal d4">
+      <thead><tr><th>#</th><th>Feature</th><th>Vai Trò</th></tr></thead>
+      <tbody>
+        <tr><td class="gold">0</td><td>log_return_1d</td><td>Tín hiệu chính — dừng, không cần stationarity transform</td></tr>
+        <tr><td class="gold">1</td><td>momentum_30d</td><td>Xu hướng trung hạn (close/SMA30 − 1)</td></tr>
+        <tr><td class="gold">2</td><td>realized_vol_14d</td><td>Trạng thái biến động hiện tại — input trực tiếp cho volatility head</td></tr>
+        <tr><td class="gold">3</td><td>RSI_14</td><td>Overbought / oversold momentum signal</td></tr>
+        <tr><td class="gold">4</td><td>log_volume</td><td>Xác nhận breakout qua khối lượng giao dịch</td></tr>
+        <tr><td class="gold">5</td><td>macd_norm</td><td>Động lượng ngắn vs. dài hạn</td></tr>
+        <tr><td class="gold">6</td><td>bb_pct_b</td><td>Vị trí trong Bollinger Band</td></tr>
+        <tr><td class="gold">7</td><td>atr_norm</td><td>Proxy ATR (|log_return|) — biên độ dao động tức thì</td></tr>
+        <tr><td style="color:#7A5B3A">8</td><td style="color:var(--text-hint)">fear_greed</td><td style="color:var(--text-hint)">Sentiment — ⚠ placeholder = 0,5 (chưa tích hợp API thực)</td></tr>
+      </tbody>
+    </table>
+    <p class="lead reveal d5" style="margin-top:var(--gap-md);font-size:18px;color:var(--text-hint)">SMA30 yêu cầu warmup 30 hàng → loại bỏ 29 hàng đầu → <span style="color:var(--gold);font-family:'Playfair Display',Georgia,serif;font-weight:600">4.136</span> quan sát hợp lệ (từ 4.165 raw)</p>
+  </div>
+  <div class="foot">
+    <span class="label">CS315 — Advanced Machine Learning</span>
+    <span class="label">Nhóm CN2 · 2026</span>
+  </div>
+</section>
+
+<!-- ============================================================
+     SLIDE 10 — PHÂN CHIA DỮ LIỆU (light)
+     ============================================================ -->
+<section class="slide dark" id="s10">
+  <div class="chrome">
+    <span class="label gold">Dữ Liệu</span>
+    <span class="label">10 / 25</span>
+  </div>
+  <div class="body">
+    <div class="kicker reveal d1">Phân Chia Chronological</div>
+    <div class="rule-short reveal d2"></div>
+    <h2 class="h2 reveal d3">Không shuffle — <em>rolling window 730 ngày</em></h2>
+    <div style="height:var(--gap-lg)"></div>
+    <div class="reveal d4" style="border:1px solid var(--border-d);padding:32px 40px;background:var(--navy-alt)">
+      <div style="display:flex;gap:0;height:48px;margin-bottom:16px">
+        <div style="flex:8;background:rgba(255,255,255,0.06);display:flex;align-items:center;justify-content:center">
+          <span style="font-family:'JetBrains Mono',monospace;font-size:13px;color:var(--text-warm);letter-spacing:.12em">TRAIN — 80% (~584 ngày)</span>
+        </div>
+        <div style="flex:1;background:#2E3D5C;display:flex;align-items:center;justify-content:center">
+          <span style="font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--gold);letter-spacing:.1em">VAL 10%</span>
+        </div>
+        <div style="flex:1;background:var(--gold);display:flex;align-items:center;justify-content:center">
+          <span style="font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--navy);letter-spacing:.1em">TEST 10%</span>
+        </div>
+      </div>
+      <p style="font-family:'Nunito',sans-serif;font-size:18px;color:var(--text-muted)">~584 ngày train · ~73 ngày validation (early stopping) · ~73 ngày test (báo cáo kết quả)</p>
+    </div>
+    <div style="height:var(--gap-md)"></div>
+    <ul class="bullets reveal d5">
+      <li>Rolling window <em>730 ngày ≈ 2 năm</em> — đủ để bắt 1–2 chu kỳ thị trường, đủ ngắn để tránh stale regime. Crypto thay đổi nhanh hơn nhiều so với cổ phiếu truyền thống</li>
+      <li>Nhãn UP/DOWN: adaptive threshold theo median training set → cân bằng nhất quán qua 7 bước: <span style="color:var(--gold);font-family:'JetBrains Mono',monospace;font-size:14px">Step1=50,5% · Step3=51,1% · Step7=50,7%</span></li>
+    </ul>
+  </div>
+  <div class="foot">
+    <span class="label">CS315 — Advanced Machine Learning</span>
+    <span class="label">Nhóm CN2 · 2026</span>
+  </div>
+</section>
+
+<!-- ============================================================
+     SLIDE 11 — HÀNH TRÌNH LSTM (dark)
+     ============================================================ -->
+<section class="slide dark" id="s11">
+  <div class="chrome">
+    <span class="label gold">Mô Hình LSTM</span>
+    <span class="label">11 / 25</span>
+  </div>
+  <div class="body">
+    <div class="kicker reveal d1">Hành Trình Phát Triển</div>
+    <div class="rule-short reveal d2"></div>
+    <h2 class="h2 reveal d3">Từ <em>v1</em> đến <em>v3</em> — ba lần nâng cấp có chủ đích</h2>
+    <div style="height:var(--gap-lg)"></div>
+    <div class="evo-chain reveal d4">
+      <div class="evo-step">
+        <div class="evo-ver">v1</div>
+        <div class="evo-name">Price Only</div>
+        <div class="evo-detail">2-layer LSTM · 1 Price Head<br>7 log-return · HuberLoss thuần</div>
+        <div class="evo-issue">→ đúng giá trị, sai hướng không bị phạt</div>
+      </div>
+      <div class="evo-arrow">→</div>
+      <div class="evo-step">
+        <div class="evo-ver">v2</div>
+        <div class="evo-name">+ Direction Head</div>
+        <div class="evo-detail">Price Head + Direction Head<br>Loss: α·L_price + β·L_direction (CrossEntropy)</div>
+        <div class="evo-issue">→ không có khoảng tin cậy, heads độc lập</div>
+      </div>
+      <div class="evo-arrow">→</div>
+      <div class="evo-step current">
+        <div class="evo-ver">v3 — Final</div>
+        <div class="evo-name">Direction Head → Weighted Loss<br>+ Volatility Head mới</div>
+        <div class="evo-detail">Price Head + Volatility Head (2 heads)<br>Direction signal: không cần head riêng — tích hợp vào loss w×Huber</div>
+        <div class="evo-issue">→ 61,1% Dir Acc · CI ±1σ · 219k params</div>
+      </div>
+    </div>
+  </div>
+  <div class="foot">
+    <span class="label">CS315 — Advanced Machine Learning</span>
+    <span class="label">Nhóm CN2 · 2026</span>
+  </div>
+</section>
+
+<!-- ============================================================
+     SLIDE 12 — LSTM v1 (light)
+     ============================================================ -->
+<section class="slide dark" id="s12">
+  <div class="chrome">
+    <span class="label gold">Mô Hình LSTM</span>
+    <span class="label">12 / 25</span>
+  </div>
+  <div class="body">
+    <div class="kicker reveal d1">LSTM v1</div>
+    <div class="rule-short reveal d2"></div>
+    <h2 class="h2 reveal d3">Price Only — <em>bước khởi đầu</em></h2>
+    <div style="height:var(--gap-lg)"></div>
+    <div class="two-col reveal d4">
+      <div>
+        <div class="kicker" style="font-size:11px;margin-bottom:12px">Kiến Trúc</div>
+        <ul class="bullets" style="gap:14px">
+          <li>2-layer LSTM (hidden=128) → 1 Price Head → 7 log-return</li>
+          <li>Loss: HuberLoss thuần (δ=1)</li>
+          <li>Pipeline hoạt động end-to-end · RMSE và MAE đo được</li>
+        </ul>
+      </div>
+      <div>
+        <div class="kicker" style="font-size:11px;margin-bottom:12px">Vấn Đề Phát Sinh</div>
+        <ul class="bullets" style="gap:14px">
+          <li>Mô hình "đúng giá trị" nhưng <em>sai hướng</em> — dự đoán tăng 1% nhưng thực tế giảm 1%</li>
+          <li>Loss không ưu tiên hướng → directional accuracy thấp</li>
+          <li>Không có thông tin về <em>mức độ tin cậy</em> của dự đoán</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+  <div class="foot">
+    <span class="label">CS315 — Advanced Machine Learning</span>
+    <span class="label">Nhóm CN2 · 2026</span>
+  </div>
+</section>
+
+<!-- ============================================================
+     SLIDE 13 — LSTM v2 (dark)
+     ============================================================ -->
+<section class="slide dark" id="s13">
+  <div class="chrome">
+    <span class="label gold">Mô Hình LSTM</span>
+    <span class="label">13 / 25</span>
+  </div>
+  <div class="body">
+    <div class="kicker reveal d1">LSTM v2</div>
+    <div class="rule-short reveal d2"></div>
+    <h2 class="h2 reveal d3">Thêm Direction Head — <em>tín hiệu hướng rõ ràng</em></h2>
+    <div style="height:var(--gap-lg)"></div>
+    <div class="two-col reveal d4">
+      <div>
+        <div class="kicker" style="font-size:11px;margin-bottom:12px">Nâng Cấp</div>
+        <ul class="bullets" style="gap:14px">
+          <li>Thêm Direction Head (Classification) → UP/DOWN per step</li>
+          <li>Loss kết hợp: L = α·L_price + β·L_direction</li>
+          <li>Adaptive labelling → phân phối cân bằng (UP ≈ 50,5%)</li>
+        </ul>
+      </div>
+      <div>
+        <div class="kicker" style="font-size:11px;margin-bottom:12px">Vẫn Còn Hạn Chế</div>
+        <ul class="bullets" style="gap:14px">
+          <li>Hai heads hoạt động độc lập — khi regression sai hướng, không có cơ chế phạt nặng</li>
+          <li>Không có thông tin về <em>độ biến động dự kiến</em> — mọi dự đoán "confident như nhau"</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+  <div class="foot">
+    <span class="label">CS315 — Advanced Machine Learning</span>
+    <span class="label">Nhóm CN2 · 2026</span>
+  </div>
+</section>
+
+<!-- ============================================================
+     SLIDE 14 — LSTM v3: DIRECTION-WEIGHTED LOSS (light)
+     ============================================================ -->
+<section class="slide dark" id="s14">
+  <div class="chrome">
+    <span class="label gold">Mô Hình LSTM</span>
+    <span class="label">14 / 25</span>
+  </div>
+  <div class="body top">
+    <div class="kicker reveal d1">LSTM v3 — Giải Pháp Cuối</div>
+    <div class="rule-short reveal d2"></div>
+    <h2 class="h2 reveal d3">Hai đổi mới then chốt: <em>Weighted Loss</em> + <em>Volatility Head</em></h2>
+    <div style="height:var(--gap-md)"></div>
+    <div class="two-col reveal d4">
+      <div>
+        <div class="arch-box gold-border">
+          <div class="arch-label">Direction-Weighted Huber Loss</div>
+          <div class="arch-desc">
+            w = 1 + 2 × 𝟏[sign(ŷ) ≠ sign(y)]<br>
+            L_price = mean(w × Huber(ŷ − y))<br><br>
+            <span style="color:var(--gold);font-family:'Playfair Display',Georgia,serif;font-weight:600">→ Phạt gấp 3 lần khi sai hướng</span><br>
+            Buộc mô hình ưu tiên hướng đúng trước khi tối ưu biên độ
+          </div>
+        </div>
+      </div>
+      <div>
+        <div class="arch-box gold-border">
+          <div class="arch-label">Volatility Head (Softplus output)</div>
+          <div class="arch-desc">
+            ŷ_vol = Softplus(W·ReLU(W·h_T)) — luôn > 0<br><br>
+            <span style="color:var(--gold);font-family:'Playfair Display',Georgia,serif;font-weight:600">→ Khoảng tin cậy ±1σ cho mỗi bước</span><br>
+            Giai đoạn biến động cao → vùng tô màu rộng → nhà đầu tư thấy rủi ro
+          </div>
+        </div>
+      </div>
+    </div>
+    <div style="height:var(--gap-md)"></div>
+    <div class="reveal d5" style="border:1px solid var(--border-d);padding:20px 28px;background:var(--navy-alt)">
+      <span class="kicker" style="font-size:11px">Tổng loss: </span>
+      <span style="font-family:'JetBrains Mono',monospace;font-size:20px;color:var(--text-warm)">L = 1.0 × L_price + 0.3 × L_vol</span>
+      <span style="font-family:'Nunito',sans-serif;font-size:20px;color:var(--text-muted);margin-left:20px">— α=1,0 · γ=0,3 (thực nghiệm)</span>
+      <br><span class="kicker" style="font-size:12px;margin-top:10px;display:inline-block">Ghi chú: </span>
+      <span style="font-family:'JetBrains Mono',monospace;font-size:16px;color:var(--text-hint)">L_price = Direction-Weighted Huber · L_vol = MSE (volatility không có fat-tail như return)</span>
+    </div>
+  </div>
+  <div class="foot">
+    <span class="label">CS315 — Advanced Machine Learning</span>
+    <span class="label">Nhóm CN2 · 2026</span>
+  </div>
+</section>
+
+<!-- ============================================================
+     SLIDE 15 — KIẾN TRÚC v3 CHI TIẾT (dark)
+     ============================================================ -->
+<section class="slide dark" id="s15">
+  <div class="chrome">
+    <span class="label gold">Mô Hình LSTM</span>
+    <span class="label">15 / 25</span>
+  </div>
+  <div class="body top">
+    <div class="kicker reveal d1">Kiến Trúc LSTM v3</div>
+    <div class="rule-short reveal d2"></div>
+    <h2 class="h2 reveal d3"><em>219.662</em> tham số — encoder chiếm &gt;90%</h2>
+    <div style="height:var(--gap-md)"></div>
+    <div class="two-col reveal d4" style="gap:40px;align-items:start">
+      <div>
+        <table class="sig-table">
+          <thead><tr><th>Thành Phần</th><th>Chi Tiết</th><th>Params</th></tr></thead>
+          <tbody>
+            <tr><td>LSTM Layer 1</td><td>input=9, hidden=128, dropout=0,2</td><td class="gold">70.656</td></tr>
+            <tr><td>LSTM Layer 2</td><td>input=128, hidden=128, dropout=0,2</td><td class="gold">131.584</td></tr>
+            <tr><td>Price Head</td><td>Linear(128→64)→ReLU→Linear(64→7)</td><td class="gold">8.711</td></tr>
+            <tr><td>Volatility Head</td><td>Linear(128→64)→ReLU→Softplus→(64→7)</td><td class="gold">8.711</td></tr>
+            <tr><td class="warm">Tổng</td><td></td><td class="gold" style="font-size:22px">219.662</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div>
+        <table class="sig-table">
+          <thead><tr><th>Hyperparameter</th><th>Giá Trị</th></tr></thead>
+          <tbody>
+            <tr><td>Optimizer</td><td class="gold">Adam</td></tr>
+            <tr><td>Learning rate</td><td class="gold">1e-3</td></tr>
+            <tr><td>Batch size</td><td class="gold">64</td></tr>
+            <tr><td>Max epochs</td><td class="gold">50</td></tr>
+            <tr><td>Early stopping patience</td><td class="gold">7</td></tr>
+            <tr><td>Gradient clipping</td><td class="gold">max_norm = 1,0</td></tr>
+            <tr><td>LR scheduler</td><td class="gold">ReduceLROnPlateau ×0,5</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+    <div class="param-bar-wrap reveal d5">
+      <div class="param-bar-labels">
+        <span>ENCODER (LSTM L1 + L2) — 202.240 params — 92,1%</span>
+        <span>HEADS (Price + Vol) — 17.422 params — 7,9%</span>
+      </div>
+      <div class="param-bar-track">
+        <div class="param-bar-encoder">92,1%</div>
+        <div class="param-bar-heads">7,9%</div>
+      </div>
+    </div>
+  </div>
+  <div class="foot">
+    <span class="label">CS315 — Advanced Machine Learning</span>
+    <span class="label">Nhóm CN2 · 2026</span>
+  </div>
+</section>
+
+<!-- ============================================================
+     SLIDE 16 — SPEED LAYER (light)
+     ============================================================ -->
+<section class="slide dark" id="s16">
+  <div class="chrome">
+    <span class="label gold">Kiến Trúc Hệ Thống</span>
+    <span class="label">16 / 25</span>
+  </div>
+  <div class="body">
+    <div class="kicker reveal d1">Speed Layer</div>
+    <div class="rule-short reveal d2"></div>
+    <h2 class="h2 reveal d3">Kafka + Spark Streaming — <em>chỉ số kỹ thuật realtime</em></h2>
+    <div style="height:var(--gap-lg)"></div>
+    <div class="two-col reveal d4">
+      <div>
+        <div class="kicker" style="font-size:11px;margin-bottom:12px">Kafka Producer</div>
+        <ul class="bullets" style="gap:14px">
+          <li>acks=all · retries=3 · linger_ms=100 — đảm bảo độ tin cậy cao</li>
+          <li>Poll CoinGecko mỗi 600s → topic <span style="font-family:'JetBrains Mono',monospace;font-size:14px">crypto_raw</span></li>
+          <li>foreachBatch pattern — ghi MongoDB idempotent</li>
+        </ul>
+      </div>
+      <div>
+        <div class="kicker" style="font-size:11px;margin-bottom:12px">Chỉ Số Kỹ Thuật Tính Realtime</div>
+        <table class="sig-table sm">
+          <thead><tr><th>Chỉ số</th><th>Ý nghĩa</th></tr></thead>
+          <tbody>
+            <tr><td>SMA-n</td><td>Xu hướng n kỳ</td></tr>
+            <tr><td>RSI-14</td><td>Overbought/oversold</td></tr>
+            <tr><td>Bollinger SMA20±2σ</td><td>Phát hiện breakout</td></tr>
+            <tr><td>VWAP</td><td>Giá theo khối lượng</td></tr>
+            <tr><td>ATR-14</td><td>Biên độ dao động</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+  <div class="foot">
+    <span class="label">CS315 — Advanced Machine Learning</span>
+    <span class="label">Nhóm CN2 · 2026</span>
+  </div>
+</section>
+
+<!-- ============================================================
+     SLIDE 17 — BATCH + SERVING (dark)
+     ============================================================ -->
+<section class="slide dark" id="s17">
+  <div class="chrome">
+    <span class="label gold">Kiến Trúc Hệ Thống</span>
+    <span class="label">17 / 25</span>
+  </div>
+  <div class="body">
+    <div class="kicker reveal d1">Batch Layer + Serving Layer</div>
+    <div class="rule-short reveal d2"></div>
+    <h2 class="h2 reveal d3">Dữ liệu lịch sử → MongoDB → <em>5 trang React</em></h2>
+    <div style="height:var(--gap-lg)"></div>
+    <div class="two-col reveal d4">
+      <div>
+        <div class="kicker" style="font-size:11px;margin-bottom:12px">Batch Layer (Spark Batch)</div>
+        <ul class="bullets" style="gap:14px">
+          <li>Input: CSV lịch sử (4.165 dòng/coin)</li>
+          <li><span style="font-family:'JetBrains Mono',monospace;font-size:13px;color:var(--gold)">daily_stats</span> — OHLCV hàng ngày</li>
+          <li><span style="font-family:'JetBrains Mono',monospace;font-size:13px;color:var(--gold)">historical_sma</span> — SMA 7/30/90/200 ngày</li>
+          <li><span style="font-family:'JetBrains Mono',monospace;font-size:13px;color:var(--gold)">coin_correlation</span> — Rolling Pearson BTC-DOGE</li>
+        </ul>
+      </div>
+      <div>
+        <div class="kicker" style="font-size:11px;margin-bottom:12px">Serving Layer</div>
+        <table class="sig-table sm">
+          <thead><tr><th>Service</th><th>Port</th></tr></thead>
+          <tbody>
+            <tr><td>FastAPI + JWT Auth</td><td class="gold">8000</td></tr>
+            <tr><td>React 19 + Nginx</td><td class="gold">3000</td></tr>
+            <tr><td>Streamlit Dashboard</td><td class="gold">8501</td></tr>
+            <tr><td>LSTM Inference (5-min cron)</td><td class="gold">—</td></tr>
+          </tbody>
+        </table>
+        <p class="body-text" style="margin-top:14px">React: Dashboard · Realtime · Technical · Predictions · Correlation</p>
+      </div>
+    </div>
+  </div>
+  <div class="foot">
+    <span class="label">CS315 — Advanced Machine Learning</span>
+    <span class="label">Nhóm CN2 · 2026</span>
+  </div>
+</section>
+
+<!-- ============================================================
+     SLIDE 18 — WALK-FORWARD VALIDATION (light)
+     ============================================================ -->
+<section class="slide dark" id="s18">
+  <div class="chrome">
+    <span class="label gold">Đánh Giá Mô Hình</span>
+    <span class="label">18 / 25</span>
+  </div>
+  <div class="body top">
+    <div class="kicker reveal d1">Walk-Forward Validation</div>
+    <div class="rule-short reveal d2"></div>
+    <h2 class="h2 reveal d3"><em>6 fold</em> × 60 ngày — mô phỏng quy trình thực tế</h2>
+    <div style="height:var(--gap-md)"></div>
+    <div class="two-col reveal d4" style="gap:40px;align-items:start">
+      <div>
+        <div class="kicker" style="font-size:11px;margin-bottom:12px">Dir Acc Per Fold — BTC</div>
+        <svg viewBox="0 0 600 300" xmlns="http://www.w3.org/2000/svg" style="width:100%;height:auto;display:block">
+          <!-- Reference line at 50% = x=300 in 600 width bar area from x=60 to x=560, so 50% = x=60+250=310 -->
+          <!-- Bar area: x=60 to x=560, width=500. 50% = x=310 -->
+          <line x1="310" y1="10" x2="310" y2="270" stroke="#2E3D5C" stroke-width="1" stroke-dasharray="4,3"/>
+          <text x="310" y="8" font-family="'JetBrains Mono',monospace" font-size="10" fill="#4E5A6E" text-anchor="middle" letter-spacing="0.1em">50%</text>
+
+          <!-- Fold bars. Bar height=28, gap=14. Y positions: fold1 y=20, fold2 y=62, etc. -->
+          <!-- Fold 1: 46.3% → width=(46.3/100)*500=231.5, below 50 → muted -->
+          <rect x="60" y="20" width="232" height="28" fill="rgba(200,168,112,0.30)" rx="2"/>
+          <!-- Fold 2: 50.0% → width=250, at baseline → muted -->
+          <rect x="60" y="62" width="250" height="28" fill="rgba(200,168,112,0.35)" rx="2"/>
+          <!-- Fold 3: 50.0% -->
+          <rect x="60" y="104" width="250" height="28" fill="rgba(200,168,112,0.35)" rx="2"/>
+          <!-- Fold 4: 55.6% → width=278, above 50 → gold -->
+          <rect x="60" y="146" width="278" height="28" fill="rgba(200,168,112,0.70)" rx="2"/>
+          <!-- Fold 5: 38.9% → width=194.5, below 50 → dim -->
+          <rect x="60" y="188" width="195" height="28" fill="rgba(200,168,112,0.20)" rx="2"/>
+          <!-- Fold 6: 55.6% → width=278, gold -->
+          <rect x="60" y="230" width="278" height="28" fill="rgba(200,168,112,0.70)" rx="2"/>
+
+          <!-- Fold labels -->
+          <text x="52" y="40" font-family="'JetBrains Mono',monospace" font-size="11" fill="#4E5A6E" text-anchor="end">F1</text>
+          <text x="52" y="82" font-family="'JetBrains Mono',monospace" font-size="11" fill="#4E5A6E" text-anchor="end">F2</text>
+          <text x="52" y="124" font-family="'JetBrains Mono',monospace" font-size="11" fill="#4E5A6E" text-anchor="end">F3</text>
+          <text x="52" y="166" font-family="'JetBrains Mono',monospace" font-size="11" fill="#8A96A8" text-anchor="end">F4</text>
+          <text x="52" y="208" font-family="'JetBrains Mono',monospace" font-size="11" fill="#4E5A6E" text-anchor="end">F5</text>
+          <text x="52" y="250" font-family="'JetBrains Mono',monospace" font-size="11" fill="#8A96A8" text-anchor="end">F6</text>
+
+          <!-- Value labels -->
+          <text x="300" y="40" font-family="'JetBrains Mono',monospace" font-size="11" fill="#8A96A8" x="300">46,3%</text>
+          <text x="318" y="82" font-family="'JetBrains Mono',monospace" font-size="11" fill="#8A96A8">50,0%</text>
+          <text x="318" y="124" font-family="'JetBrains Mono',monospace" font-size="11" fill="#8A96A8">50,0%</text>
+          <text x="346" y="166" font-family="'JetBrains Mono',monospace" font-size="11" fill="#C8A870">55,6%</text>
+          <text x="263" y="208" font-family="'JetBrains Mono',monospace" font-size="11" fill="#4E5A6E">38,9%</text>
+          <text x="346" y="250" font-family="'JetBrains Mono',monospace" font-size="11" fill="#C8A870">55,6%</text>
+        </svg>
+      </div>
+      <div>
+        <div class="kicker" style="font-size:11px;margin-bottom:12px">Tại Sao Walk-Forward?</div>
+        <ul class="bullets" style="gap:16px">
+          <li>Mô phỏng thực tế: chỉ dùng quá khứ dự đoán tương lai — tránh data leakage</li>
+          <li>Biến động RMSE $2.580–$4.810 phản ánh thay đổi <em>market regime</em> — fold tốt khi trending, kém khi sideway</li>
+          <li>Walk-forward <em>đáng tin cậy hơn</em> test set tĩnh vì đa dạng thời kỳ thị trường</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+  <div class="foot">
+    <span class="label">CS315 — Advanced Machine Learning</span>
+    <span class="label">Nhóm CN2 · 2026</span>
+  </div>
+</section>
+
+<!-- ============================================================
+     SLIDE 19 — BACKTEST 6 THÁNG (dark) — KEY RESULT
+     ============================================================ -->
+<section class="slide dark" id="s19">
+  <div class="chrome">
+    <span class="label gold">Kết Quả</span>
+    <span class="label">19 / 25</span>
+  </div>
+  <div class="body">
+    <div class="kicker reveal d1">Backtest 6 Tháng — Bitcoin</div>
+    <div class="rule-short reveal d2"></div>
+    <h2 class="h2 reveal d3">Giai đoạn: <em>23/01/2026 – 29/05/2026</em> · Mô hình không thấy dữ liệu này trước khi đánh giá</h2>
+    <div style="height:var(--gap-lg)"></div>
+    <div class="two-col reveal d4">
+      <div class="big-result">
+        <div class="big-label">Directional Accuracy · 7 Ngày</div>
+        <div class="big-num">61,1%</div>
+        <div class="progress-wrap">
+          <div class="progress-track">
+            <div class="progress-baseline">50% Random</div>
+            <div class="progress-fill" style="width:61.1%"></div>
+          </div>
+        </div>
+        <div class="big-note">Vượt random baseline 50% được <em>11,1 điểm phần trăm</em> · 18 cửa sổ · Mean Error = 0,37% → không có bias hệ thống<br><span style="font-family:'JetBrains Mono',monospace;font-size:13px;color:var(--text-hint)">(18 cửa sổ trên 1 giai đoạn thị trường — cần thêm dữ liệu để khẳng định)</span></div>
+      </div>
+      <div>
+        <table class="sig-table sm">
+          <thead><tr><th>Horizon</th><th># Cửa sổ</th><th>RMSE</th><th>Dir Acc</th></tr></thead>
+          <tbody>
+            <tr><td class="warm">7 ngày</td><td>18</td><td>$3.009,77</td><td class="gold" style="font-size:22px">61,1%</td></tr>
+            <tr><td>15 ngày</td><td>8</td><td>$4.289,60</td><td>50,0%</td></tr>
+            <tr><td>60 ngày</td><td>2</td><td>$13.452,73</td><td>50,0%</td></tr>
+          </tbody>
+        </table>
+        <div style="height:var(--gap-md)"></div>
+        <div style="border-left:3px solid #7A5B3A;padding:12px 20px">
+          <p class="body-text" style="font-size:18px;color:var(--text-hint)">Sự kiện cực đoan: 30/01–05/02/2026 — crash từ $84.561 xuống $62.702 (−25,8% trong 7 ngày) · RMSE = $11.086 · tail event nằm ngoài khả năng dự đoán của mọi mô hình</p>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="foot">
+    <span class="label">CS315 — Advanced Machine Learning</span>
+    <span class="label">Nhóm CN2 · 2026</span>
+  </div>
+</section>
+
+<!-- ============================================================
+     SLIDE 20 — KẾT QUẢ TEST SET (light)
+     ============================================================ -->
+<section class="slide dark" id="s20">
+  <div class="chrome">
+    <span class="label gold">Kết Quả</span>
+    <span class="label">20 / 25</span>
+  </div>
+  <div class="body">
+    <div class="kicker reveal d1">Kết Quả Trên Tập Test Tĩnh</div>
+    <div class="rule-short reveal d2"></div>
+    <h2 class="h2 reveal d3">Test set ~73 ngày — <em>walk-forward đáng tin cậy hơn</em></h2>
+    <div style="height:var(--gap-lg)"></div>
+    <table class="sig-table reveal d4">
+      <thead><tr><th>Coin</th><th>RMSE</th><th>MAE</th><th>Dir Acc (bước 1)</th><th>Epochs</th></tr></thead>
+      <tbody>
+        <tr><td class="warm">Bitcoin (BTC)</td><td>$1.799,50</td><td>$1.288,92</td><td>40,0%</td><td class="gold">10</td></tr>
+        <tr><td class="warm">Dogecoin (DOGE)</td><td>$0,00325</td><td>$0,00267</td><td>20,0%</td><td class="gold">18</td></tr>
+      </tbody>
+    </table>
+    <div style="height:var(--gap-lg)"></div>
+    <ul class="bullets reveal d5">
+      <li>Dir Acc thấp: mô hình tối ưu <em>HuberLoss trên log-return</em>, không trực tiếp maximize directional accuracy. CPU Intel i7 / 16GB RAM — training ~10–18 epochs (không cần GPU do dataset ~3.000 mẫu)</li>
+      <li>Test set = 1 giai đoạn ~73 ngày cụ thể → kết quả nhạy cảm với market regime của giai đoạn đó. Walk-forward (6 fold đa dạng) = đánh giá đáng tin cậy hơn → <em>49,38% BTC</em> là mức baseline thực tế</li>
+      <li>MAE tăng theo horizon: Step 1 &lt; Step 3 &lt; Step 7 — xác nhận mô hình tốt hơn cho ngắn hạn</li>
+    </ul>
+  </div>
+  <div class="foot">
+    <span class="label">CS315 — Advanced Machine Learning</span>
+    <span class="label">Nhóm CN2 · 2026</span>
+  </div>
+</section>
+
+<!-- ============================================================
+     SLIDE 21 — VOLATILITY HEAD (dark)
+     ============================================================ -->
+<section class="slide dark" id="s21">
+  <div class="chrome">
+    <span class="label gold">Kết Quả</span>
+    <span class="label">21 / 25</span>
+  </div>
+  <div class="body">
+    <div class="kicker reveal d1">Volatility Head</div>
+    <div class="rule-short reveal d2"></div>
+    <h2 class="h2 reveal d3">Học được <em>volatility clustering</em> — đặc tính phổ biến trong tài chính</h2>
+    <div style="height:var(--gap-lg)"></div>
+    <div class="stat-row reveal d4">
+      <div class="stat-card">
+        <div class="stat-num">0,794</div>
+        <div class="stat-desc">Vol Head RMSE — Bitcoin</div>
+        <div class="stat-note">Đơn vị chuẩn hóa</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-num">0,622</div>
+        <div class="stat-desc">Vol Head RMSE — Dogecoin</div>
+        <div class="stat-note">DOGE volatility có cấu trúc rõ hơn</div>
+      </div>
+    </div>
+    <div class="reveal d5" style="margin-top:var(--gap-md)">
+      <svg viewBox="0 0 1500 120" xmlns="http://www.w3.org/2000/svg" style="width:100%;height:auto;display:block">
+        <!-- Volatility clustering wave: sequence of vertical bars of varying heights -->
+        <!-- Low vol period -->
+        <rect x="10"  y="90" width="8" height="20"  fill="rgba(200,168,112,0.30)" rx="1"/>
+        <rect x="22"  y="85" width="8" height="25"  fill="rgba(200,168,112,0.30)" rx="1"/>
+        <rect x="34"  y="88" width="8" height="22"  fill="rgba(200,168,112,0.30)" rx="1"/>
+        <rect x="46"  y="82" width="8" height="28"  fill="rgba(200,168,112,0.30)" rx="1"/>
+        <rect x="58"  y="86" width="8" height="24"  fill="rgba(200,168,112,0.30)" rx="1"/>
+        <rect x="70"  y="89" width="8" height="21"  fill="rgba(200,168,112,0.30)" rx="1"/>
+        <rect x="82"  y="84" width="8" height="26"  fill="rgba(200,168,112,0.30)" rx="1"/>
+        <rect x="94"  y="87" width="8" height="23"  fill="rgba(200,168,112,0.30)" rx="1"/>
+        <!-- High vol cluster 1 -->
+        <rect x="114" y="30" width="8" height="80"  fill="rgba(200,168,112,0.80)" rx="1"/>
+        <rect x="126" y="15" width="8" height="95"  fill="rgba(200,168,112,0.80)" rx="1"/>
+        <rect x="138" y="20" width="8" height="90"  fill="rgba(200,168,112,0.80)" rx="1"/>
+        <rect x="150" y="25" width="8" height="85"  fill="rgba(200,168,112,0.80)" rx="1"/>
+        <rect x="162" y="10" width="8" height="100" fill="rgba(200,168,112,0.80)" rx="1"/>
+        <rect x="174" y="18" width="8" height="92"  fill="rgba(200,168,112,0.80)" rx="1"/>
+        <rect x="186" y="35" width="8" height="75"  fill="rgba(200,168,112,0.80)" rx="1"/>
+        <rect x="198" y="45" width="8" height="65"  fill="rgba(200,168,112,0.60)" rx="1"/>
+        <rect x="210" y="55" width="8" height="55"  fill="rgba(200,168,112,0.50)" rx="1"/>
+        <!-- Low vol period 2 -->
+        <rect x="230" y="88" width="8" height="22"  fill="rgba(200,168,112,0.30)" rx="1"/>
+        <rect x="242" y="83" width="8" height="27"  fill="rgba(200,168,112,0.30)" rx="1"/>
+        <rect x="254" y="87" width="8" height="23"  fill="rgba(200,168,112,0.30)" rx="1"/>
+        <rect x="266" y="90" width="8" height="20"  fill="rgba(200,168,112,0.30)" rx="1"/>
+        <rect x="278" y="85" width="8" height="25"  fill="rgba(200,168,112,0.30)" rx="1"/>
+        <rect x="290" y="88" width="8" height="22"  fill="rgba(200,168,112,0.30)" rx="1"/>
+        <rect x="302" y="84" width="8" height="26"  fill="rgba(200,168,112,0.30)" rx="1"/>
+        <rect x="314" y="86" width="8" height="24"  fill="rgba(200,168,112,0.30)" rx="1"/>
+        <rect x="326" y="89" width="8" height="21"  fill="rgba(200,168,112,0.30)" rx="1"/>
+        <rect x="338" y="85" width="8" height="25"  fill="rgba(200,168,112,0.30)" rx="1"/>
+        <rect x="350" y="87" width="8" height="23"  fill="rgba(200,168,112,0.30)" rx="1"/>
+        <rect x="362" y="82" width="8" height="28"  fill="rgba(200,168,112,0.30)" rx="1"/>
+        <!-- High vol cluster 2 -->
+        <rect x="382" y="40" width="8" height="70"  fill="rgba(200,168,112,0.70)" rx="1"/>
+        <rect x="394" y="22" width="8" height="88"  fill="rgba(200,168,112,0.80)" rx="1"/>
+        <rect x="406" y="12" width="8" height="98"  fill="rgba(200,168,112,0.80)" rx="1"/>
+        <rect x="418" y="8"  width="8" height="102" fill="rgba(200,168,112,0.80)" rx="1"/>
+        <rect x="430" y="18" width="8" height="92"  fill="rgba(200,168,112,0.80)" rx="1"/>
+        <rect x="442" y="28" width="8" height="82"  fill="rgba(200,168,112,0.80)" rx="1"/>
+        <rect x="454" y="40" width="8" height="70"  fill="rgba(200,168,112,0.65)" rx="1"/>
+        <rect x="466" y="52" width="8" height="58"  fill="rgba(200,168,112,0.50)" rx="1"/>
+        <!-- Low vol period 3 -->
+        <rect x="486" y="87" width="8" height="23"  fill="rgba(200,168,112,0.30)" rx="1"/>
+        <rect x="498" y="83" width="8" height="27"  fill="rgba(200,168,112,0.30)" rx="1"/>
+        <rect x="510" y="89" width="8" height="21"  fill="rgba(200,168,112,0.30)" rx="1"/>
+        <rect x="522" y="85" width="8" height="25"  fill="rgba(200,168,112,0.30)" rx="1"/>
+        <rect x="534" y="88" width="8" height="22"  fill="rgba(200,168,112,0.30)" rx="1"/>
+        <rect x="546" y="84" width="8" height="26"  fill="rgba(200,168,112,0.30)" rx="1"/>
+        <rect x="558" y="86" width="8" height="24"  fill="rgba(200,168,112,0.30)" rx="1"/>
+        <rect x="570" y="90" width="8" height="20"  fill="rgba(200,168,112,0.30)" rx="1"/>
+        <rect x="582" y="87" width="8" height="23"  fill="rgba(200,168,112,0.30)" rx="1"/>
+        <rect x="594" y="83" width="8" height="27"  fill="rgba(200,168,112,0.30)" rx="1"/>
+        <rect x="606" y="85" width="8" height="25"  fill="rgba(200,168,112,0.30)" rx="1"/>
+        <rect x="618" y="89" width="8" height="21"  fill="rgba(200,168,112,0.30)" rx="1"/>
+        <rect x="630" y="84" width="8" height="26"  fill="rgba(200,168,112,0.30)" rx="1"/>
+        <rect x="642" y="87" width="8" height="23"  fill="rgba(200,168,112,0.30)" rx="1"/>
+        <!-- High vol cluster 3 -->
+        <rect x="662" y="35" width="8" height="75"  fill="rgba(200,168,112,0.70)" rx="1"/>
+        <rect x="674" y="18" width="8" height="92"  fill="rgba(200,168,112,0.80)" rx="1"/>
+        <rect x="686" y="5"  width="8" height="105" fill="rgba(200,168,112,0.80)" rx="1"/>
+        <rect x="698" y="12" width="8" height="98"  fill="rgba(200,168,112,0.80)" rx="1"/>
+        <rect x="710" y="22" width="8" height="88"  fill="rgba(200,168,112,0.80)" rx="1"/>
+        <rect x="722" y="32" width="8" height="78"  fill="rgba(200,168,112,0.75)" rx="1"/>
+        <rect x="734" y="45" width="8" height="65"  fill="rgba(200,168,112,0.60)" rx="1"/>
+        <rect x="746" y="58" width="8" height="52"  fill="rgba(200,168,112,0.45)" rx="1"/>
+        <!-- Low vol period 4 -->
+        <rect x="766" y="88" width="8" height="22"  fill="rgba(200,168,112,0.30)" rx="1"/>
+        <rect x="778" y="84" width="8" height="26"  fill="rgba(200,168,112,0.30)" rx="1"/>
+        <rect x="790" y="87" width="8" height="23"  fill="rgba(200,168,112,0.30)" rx="1"/>
+        <rect x="802" y="83" width="8" height="27"  fill="rgba(200,168,112,0.30)" rx="1"/>
+        <rect x="814" y="89" width="8" height="21"  fill="rgba(200,168,112,0.30)" rx="1"/>
+        <rect x="826" y="85" width="8" height="25"  fill="rgba(200,168,112,0.30)" rx="1"/>
+        <rect x="838" y="88" width="8" height="22"  fill="rgba(200,168,112,0.30)" rx="1"/>
+        <rect x="850" y="84" width="8" height="26"  fill="rgba(200,168,112,0.30)" rx="1"/>
+        <rect x="862" y="86" width="8" height="24"  fill="rgba(200,168,112,0.30)" rx="1"/>
+        <rect x="874" y="90" width="8" height="20"  fill="rgba(200,168,112,0.30)" rx="1"/>
+        <rect x="886" y="87" width="8" height="23"  fill="rgba(200,168,112,0.30)" rx="1"/>
+        <rect x="898" y="83" width="8" height="27"  fill="rgba(200,168,112,0.30)" rx="1"/>
+        <!-- High vol cluster 4 -->
+        <rect x="918" y="42" width="8" height="68"  fill="rgba(200,168,112,0.65)" rx="1"/>
+        <rect x="930" y="25" width="8" height="85"  fill="rgba(200,168,112,0.80)" rx="1"/>
+        <rect x="942" y="15" width="8" height="95"  fill="rgba(200,168,112,0.80)" rx="1"/>
+        <rect x="954" y="10" width="8" height="100" fill="rgba(200,168,112,0.80)" rx="1"/>
+        <rect x="966" y="20" width="8" height="90"  fill="rgba(200,168,112,0.80)" rx="1"/>
+        <rect x="978" y="30" width="8" height="80"  fill="rgba(200,168,112,0.75)" rx="1"/>
+        <rect x="990" y="48" width="8" height="62"  fill="rgba(200,168,112,0.55)" rx="1"/>
+        <!-- Low vol period 5 -->
+        <rect x="1010" y="87" width="8" height="23" fill="rgba(200,168,112,0.30)" rx="1"/>
+        <rect x="1022" y="84" width="8" height="26" fill="rgba(200,168,112,0.30)" rx="1"/>
+        <rect x="1034" y="88" width="8" height="22" fill="rgba(200,168,112,0.30)" rx="1"/>
+        <rect x="1046" y="85" width="8" height="25" fill="rgba(200,168,112,0.30)" rx="1"/>
+        <rect x="1058" y="89" width="8" height="21" fill="rgba(200,168,112,0.30)" rx="1"/>
+        <rect x="1070" y="83" width="8" height="27" fill="rgba(200,168,112,0.30)" rx="1"/>
+        <rect x="1082" y="86" width="8" height="24" fill="rgba(200,168,112,0.30)" rx="1"/>
+        <rect x="1094" y="88" width="8" height="22" fill="rgba(200,168,112,0.30)" rx="1"/>
+        <rect x="1106" y="84" width="8" height="26" fill="rgba(200,168,112,0.30)" rx="1"/>
+        <rect x="1118" y="87" width="8" height="23" fill="rgba(200,168,112,0.30)" rx="1"/>
+        <rect x="1130" y="90" width="8" height="20" fill="rgba(200,168,112,0.30)" rx="1"/>
+        <rect x="1142" y="85" width="8" height="25" fill="rgba(200,168,112,0.30)" rx="1"/>
+        <!-- High vol cluster 5 -->
+        <rect x="1162" y="38" width="8" height="72" fill="rgba(200,168,112,0.65)" rx="1"/>
+        <rect x="1174" y="20" width="8" height="90" fill="rgba(200,168,112,0.80)" rx="1"/>
+        <rect x="1186" y="8"  width="8" height="102" fill="rgba(200,168,112,0.80)" rx="1"/>
+        <rect x="1198" y="14" width="8" height="96" fill="rgba(200,168,112,0.80)" rx="1"/>
+        <rect x="1210" y="25" width="8" height="85" fill="rgba(200,168,112,0.80)" rx="1"/>
+        <rect x="1222" y="35" width="8" height="75" fill="rgba(200,168,112,0.70)" rx="1"/>
+        <rect x="1234" y="50" width="8" height="60" fill="rgba(200,168,112,0.50)" rx="1"/>
+        <!-- Low vol period 6 -->
+        <rect x="1254" y="88" width="8" height="22" fill="rgba(200,168,112,0.30)" rx="1"/>
+        <rect x="1266" y="84" width="8" height="26" fill="rgba(200,168,112,0.30)" rx="1"/>
+        <rect x="1278" y="87" width="8" height="23" fill="rgba(200,168,112,0.30)" rx="1"/>
+        <rect x="1290" y="83" width="8" height="27" fill="rgba(200,168,112,0.30)" rx="1"/>
+        <rect x="1302" y="89" width="8" height="21" fill="rgba(200,168,112,0.30)" rx="1"/>
+        <rect x="1314" y="85" width="8" height="25" fill="rgba(200,168,112,0.30)" rx="1"/>
+        <rect x="1326" y="88" width="8" height="22" fill="rgba(200,168,112,0.30)" rx="1"/>
+        <rect x="1338" y="84" width="8" height="26" fill="rgba(200,168,112,0.30)" rx="1"/>
+        <rect x="1350" y="86" width="8" height="24" fill="rgba(200,168,112,0.30)" rx="1"/>
+        <rect x="1362" y="90" width="8" height="20" fill="rgba(200,168,112,0.30)" rx="1"/>
+        <rect x="1374" y="87" width="8" height="23" fill="rgba(200,168,112,0.30)" rx="1"/>
+        <rect x="1386" y="83" width="8" height="27" fill="rgba(200,168,112,0.30)" rx="1"/>
+        <rect x="1398" y="85" width="8" height="25" fill="rgba(200,168,112,0.30)" rx="1"/>
+        <rect x="1410" y="88" width="8" height="22" fill="rgba(200,168,112,0.30)" rx="1"/>
+        <rect x="1422" y="84" width="8" height="26" fill="rgba(200,168,112,0.30)" rx="1"/>
+        <rect x="1434" y="87" width="8" height="23" fill="rgba(200,168,112,0.30)" rx="1"/>
+        <rect x="1446" y="89" width="8" height="21" fill="rgba(200,168,112,0.30)" rx="1"/>
+        <rect x="1458" y="85" width="8" height="25" fill="rgba(200,168,112,0.30)" rx="1"/>
+        <rect x="1470" y="83" width="8" height="27" fill="rgba(200,168,112,0.30)" rx="1"/>
+        <rect x="1482" y="87" width="8" height="23" fill="rgba(200,168,112,0.30)" rx="1"/>
+
+        <!-- Label -->
+        <text x="750" y="118" font-family="'Nunito',sans-serif" font-size="13" fill="#4E5A6E" letter-spacing="0.08em" text-anchor="middle">Volatility clustering — giai đoạn cao kéo dài</text>
+      </svg>
+    </div>
+    <div style="height:var(--gap-lg)"></div>
+    <ul class="bullets reveal d5">
+      <li>Dashboard hiển thị vùng tin cậy ±1σ quanh dự đoán giá — giai đoạn biến động cao → vùng tô màu rộng hơn</li>
+      <li>Tính năng này không có trong LSTM đơn giản — là <em>điểm phân biệt</em> của v3 so với baseline</li>
+    </ul>
+  </div>
+  <div class="foot">
+    <span class="label">CS315 — Advanced Machine Learning</span>
+    <span class="label">Nhóm CN2 · 2026</span>
+  </div>
+</section>
+
+<!-- ============================================================
+     SLIDE 22 — ĐÃ LÀM (light)
+     ============================================================ -->
+<section class="slide dark" id="s22">
+  <div class="chrome">
+    <span class="label gold">Tổng Kết</span>
+    <span class="label">22 / 25</span>
+  </div>
+  <div class="body">
+    <div class="kicker reveal d1">Đóng Góp Của Đề Tài</div>
+    <div class="rule-short reveal d2"></div>
+    <h2 class="h2 reveal d3">Những gì <em>đã làm được</em></h2>
+    <div style="height:var(--gap-lg)"></div>
+    <ul class="checklist reveal d4">
+      <li>Pipeline Lambda Architecture end-to-end — khởi động 1 lệnh <span style="font-family:'JetBrains Mono',monospace;font-size:14px">make docker-up</span></li>
+      <li>LSTM v3 Dual-Head — price + volatility — <em>219k parameters</em> — MIMO 7-step forecast</li>
+      <li>Direction-Weighted Huber Loss — phạt 3× khi sai hướng — thiết kế loss có chủ đích</li>
+      <li>Walk-Forward Validation 6 fold + Backtest 6 tháng thực tế</li>
+      <li>Directional Accuracy <em>61,1%</em> cho horizon 7 ngày — vượt baseline random 11,1 điểm phần trăm</li>
+      <li>Volatility Head cho khoảng tin cậy dự đoán — tính năng thực tiễn</li>
+      <li>React Frontend hoàn chỉnh — 5 trang · JWT Auth · Model Registry</li>
+    </ul>
+  </div>
+  <div class="foot">
+    <span class="label">CS315 — Advanced Machine Learning</span>
+    <span class="label">Nhóm CN2 · 2026</span>
+  </div>
+</section>
+
+<!-- ============================================================
+     SLIDE 23 — HẠN CHẾ (dark)
+     ============================================================ -->
+<section class="slide dark" id="s23">
+  <div class="chrome">
+    <span class="label gold">Tổng Kết</span>
+    <span class="label">23 / 25</span>
+  </div>
+  <div class="body">
+    <div class="kicker reveal d1">Hạn Chế Và Điểm Cần Cải Thiện</div>
+    <div class="rule-short reveal d2"></div>
+    <h2 class="h2 reveal d3">Đánh giá <em>trung thực</em> những gì chưa làm tốt</h2>
+    <div style="height:var(--gap-lg)"></div>
+    <ul class="checklist reveal d4">
+      <li class="warn"><span style="font-family:'JetBrains Mono',monospace;font-size:13px;letter-spacing:.1em;color:var(--text-muted)">fear_greed = placeholder 0,5</span> — feature luôn bằng neutral, không mang thông tin thực. Chưa tích hợp Alternative.me API</li>
+      <li class="warn">Thiếu OHLC đầy đủ — CoinGecko daily chỉ có close/volume. ATR dùng |log_return| làm proxy thay vì True Range thực</li>
+      <li class="warn">Dir Acc thấp trên test set tĩnh — BTC: 40% · DOGE: 20% — nhạy cảm với thời kỳ thị trường (~73 quan sát)</li>
+      <li class="warn">Không xét yếu tố ngoại sinh — tweet, quy định pháp lý, fork tác động mạnh nhưng không được mã hóa trong features</li>
+      <li class="warn">Horizon ≥15 ngày không hiệu quả — Dir Acc = 50% (random) · LSTM đơn giản không phù hợp dự đoán dài hạn</li>
+    </ul>
+  </div>
+  <div class="foot">
+    <span class="label">CS315 — Advanced Machine Learning</span>
+    <span class="label">Nhóm CN2 · 2026</span>
+  </div>
+</section>
+
+<!-- ============================================================
+     SLIDE 24 — HƯỚNG PHÁT TRIỂN (light)
+     ============================================================ -->
+<section class="slide dark" id="s24">
+  <div class="chrome">
+    <span class="label gold">Hướng Phát Triển</span>
+    <span class="label">24 / 25</span>
+  </div>
+  <div class="body top">
+    <div class="kicker reveal d1">Tương Lai</div>
+    <div class="rule-short reveal d2"></div>
+    <h2 class="h2 reveal d3">Các bước <em>tiếp theo</em> có độ ưu tiên rõ ràng</h2>
+    <div style="height:var(--gap-md)"></div>
+    <table class="sig-table reveal d4">
+      <thead><tr><th>Ưu Tiên</th><th>Cải Tiến</th></tr></thead>
+      <tbody>
+        <tr>
+          <td style="color:#C84040;font-family:'JetBrains Mono',monospace;font-size:12px;letter-spacing:.1em">NGAY</td>
+          <td>Tích hợp Fear &amp; Greed Index thực (Alternative.me API) · Chuyển sang Binance API để có OHLC đầy đủ → ATR thực</td>
+        </tr>
+        <tr>
+          <td style="color:#B88020;font-family:'JetBrains Mono',monospace;font-size:12px;letter-spacing:.1em">TRUNG HẠN</td>
+          <td>Thêm NLP sentiment — FinBERT trên Twitter/Reddit · Thử Temporal Fusion Transformer (TFT) · Backtesting chiến lược — Sharpe ratio, PnL</td>
+        </tr>
+        <tr>
+          <td style="color:#2A7A40;font-family:'JetBrains Mono',monospace;font-size:12px;letter-spacing:.1em">DÀI HẠN</td>
+          <td>Kappa Architecture — thay batch layer bằng stream reprocessing · Cloud deployment (AWS/GCP + Kubernetes) · Mở rộng: ETH · BNB · SOL</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="foot">
+    <span class="label">CS315 — Advanced Machine Learning</span>
+    <span class="label">Nhóm CN2 · 2026</span>
+  </div>
+</section>
+
+<!-- ============================================================
+     SLIDE 25 — KẾT LUẬN (dark, chromeless)
+     ============================================================ -->
+<section class="slide dark s-cover" id="s25">
+  <div class="cover-inner">
+    <div class="kicker reveal d1">Kết Luận</div>
+    <div class="rule-short reveal d2"></div>
+    <h1 class="cover-title reveal d3" style="font-size:62px">
+      Có thể xây dựng hệ thống crypto realtime<br>
+      kết hợp Lambda Architecture + LSTM
+    </h1>
+    <p class="cover-sub reveal d4">→ CÓ — với bằng chứng cụ thể và đánh giá nghiêm túc</p>
+    <div style="height:var(--gap-lg)"></div>
+    <div class="stat-row reveal d5" style="gap:48px;max-width:1200px">
+      <div class="stat-card">
+        <div class="stat-num">61,1%</div>
+        <div class="stat-desc">Directional Accuracy · 7 ngày · 18 cửa sổ backtest</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-num">10</div>
+        <div class="stat-desc">Docker services · 1 lệnh <span style="font-family:'JetBrains Mono',monospace;font-size:14px">make docker-up</span></div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-num">11,4</div>
+        <div class="stat-desc">Năm dữ liệu · 4.165 quan sát/coin</div>
+      </div>
+    </div>
+    <div style="height:var(--gap-md)"></div>
+    <p class="lead reveal d6" style="max-width:900px;color:var(--text-hint)">Diễn giải thận trọng: 18 cửa sổ trên 1 giai đoạn thị trường · Dự đoán crypto dài hạn vẫn là bài toán mở · Tail events nằm ngoài khả năng dự đoán của mọi mô hình hiện tại</p>
+  </div>
+</section>
+
+</main>
+</div>
+
+<!-- Navigation counter -->
+<div id="nav-counter">01 / 25</div>
+
+<!-- Edit mode controls -->
+<div class="edit-hotzone" id="editHotzone"></div>
+<button id="editToggle">✎ Edit</button>
+
+<script>
+/* === SLIDE CONTROLLER === */
+class SlidePresentation {
+  constructor() {
+    this.slides = Array.from(document.querySelectorAll('.slide'));
+    this.total = this.slides.length;
+    this.current = 0;
+    this.stage = document.getElementById('stage');
+    this.counter = document.getElementById('nav-counter');
+    this.scaleStage();
+    window.addEventListener('resize', () => this.scaleStage());
+    document.addEventListener('keydown', e => this.onKey(e));
+    this.addPointer();
+    this.addTouch();
+    this.show(0);
+  }
+
+  scaleStage() {
+    const f = Math.min(innerWidth / 1920, innerHeight / 1080);
+    const x = (innerWidth - 1920 * f) / 2;
+    const y = (innerHeight - 1080 * f) / 2;
+    this.stage.style.transform = `translate(${x}px,${y}px) scale(${f})`;
+  }
+
+  show(n) {
+    n = Math.max(0, Math.min(n, this.total - 1));
+    this.slides.forEach((s, i) => {
+      const on = i === n;
+      s.classList.toggle('active', on);
+      // Slight delay before adding .visible so CSS transitions fire
+      if (on) { requestAnimationFrame(() => requestAnimationFrame(() => s.classList.add('visible'))); }
+      else { s.classList.remove('visible'); }
+    });
+    this.current = n;
+    if (this.counter) {
+      this.counter.textContent = String(n + 1).padStart(2,'0') + ' / ' + String(this.total).padStart(2,'0');
+    }
+  }
+
+  next() { this.show(this.current + 1); }
+  prev() { this.show(this.current - 1); }
+
+  onKey(e) {
+    if (e.target && e.target.getAttribute('contenteditable')) return;
+    if (e.key === 'ArrowRight' || e.key === 'ArrowDown' || e.key === ' ') { e.preventDefault(); this.next(); }
+    if (e.key === 'ArrowLeft'  || e.key === 'ArrowUp')                    { e.preventDefault(); this.prev(); }
+    if (e.key === 'Home') { e.preventDefault(); this.show(0); }
+    if (e.key === 'End')  { e.preventDefault(); this.show(this.total - 1); }
+  }
+
+  addPointer() {
+    // Click right half → next, left half → prev
+    document.addEventListener('click', e => {
+      if (e.target.id === 'editToggle' || e.target.closest('#editToggle')) return;
+      if (e.clientX > innerWidth / 2) this.next(); else this.prev();
+    });
+  }
+
+  addTouch() {
+    let sx = 0, sy = 0;
+    document.addEventListener('touchstart', e => {
+      sx = e.touches[0].clientX; sy = e.touches[0].clientY;
+    }, { passive: true });
+    document.addEventListener('touchend', e => {
+      const dx = e.changedTouches[0].clientX - sx;
+      const dy = e.changedTouches[0].clientY - sy;
+      if (Math.abs(dx) > Math.abs(dy) && Math.abs(dx) > 50) {
+        dx < 0 ? this.next() : this.prev();
+      }
+    }, { passive: true });
+  }
+}
+
+const deck = new SlidePresentation();
+
+/* === INLINE EDIT MODE === */
+const editToggle = document.getElementById('editToggle');
+const hotzone    = document.getElementById('editHotzone');
+let isEditing = false;
+let hideTimeout = null;
+
+function toggleEdit() {
+  isEditing = !isEditing;
+  editToggle.classList.toggle('active', isEditing);
+  document.querySelectorAll('.slide.active [class]').forEach(el => {
+    if (el.children.length === 0 || el.tagName === 'TD' || el.tagName === 'LI' || el.tagName === 'P') {
+      el.contentEditable = isEditing ? 'true' : 'false';
+    }
+  });
+  // Make all text in active slide editable
+  if (isEditing) {
+    document.querySelectorAll('.slide.active').forEach(slide => {
+      slide.querySelectorAll('h1,h2,h3,p,li,td,th,span:not(.kicker ~ *),.kicker,.h1,.h2,.h3,.lead,.body-text,.label,.stat-num,.stat-desc,.big-num,.big-note,.cover-title,.cover-sub,.l-desc,.evo-name,.evo-detail,.evo-issue,.arch-desc').forEach(el => {
+        el.contentEditable = 'true';
+        el.style.outline = '1px dashed rgba(200,168,112,.4)';
+      });
+    });
+    editToggle.textContent = '✓ Done';
+  } else {
+    document.querySelectorAll('[contenteditable]').forEach(el => {
+      el.contentEditable = 'false';
+      el.style.outline = '';
+    });
+    editToggle.textContent = '✎ Edit';
+  }
+}
+
+hotzone.addEventListener('mouseenter', () => {
+  clearTimeout(hideTimeout);
+  editToggle.classList.add('show');
+});
+hotzone.addEventListener('mouseleave', () => {
+  hideTimeout = setTimeout(() => { if (!isEditing) editToggle.classList.remove('show'); }, 400);
+});
+editToggle.addEventListener('mouseenter', () => clearTimeout(hideTimeout));
+editToggle.addEventListener('mouseleave', () => {
+  hideTimeout = setTimeout(() => { if (!isEditing) editToggle.classList.remove('show'); }, 400);
+});
+hotzone.addEventListener('click', toggleEdit);
+editToggle.addEventListener('click', e => { e.stopPropagation(); toggleEdit(); });
+
+document.addEventListener('keydown', e => {
+  if ((e.key === 'e' || e.key === 'E') && !e.target.getAttribute('contenteditable')) toggleEdit();
+});
+</script>
+</body>
+</html>
