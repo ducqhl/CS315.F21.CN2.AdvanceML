@@ -1,9 +1,10 @@
-import { useState, useMemo, useCallback } from 'react';
-import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useState, useMemo, useCallback, useEffect } from 'react';
+import { useQuery, useQueryClient, keepPreviousData } from '@tanstack/react-query';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   TrendingUp, TrendingDown, Minus, Brain, ChevronDown, ChevronUp,
   RefreshCw, Clock, CheckCircle, XCircle, Loader, Zap,
+  Layers, Play, Archive, Sparkles,
 } from 'lucide-react';
 import {
   ResponsiveContainer, ComposedChart, Area, XAxis, YAxis,
@@ -11,9 +12,10 @@ import {
 } from 'recharts';
 import {
   fetchHistorical, fetchPredictions, fetchPredictionHistory,
-  fetchModels, setActiveModel, triggerRetrain, fetchRetrainStatus,
+  fetchModels, triggerRetrain, fetchRetrainStatus,
+  predictNow, fetchPredictStatus,
 } from '../api/client';
-import type { PredictionPoint, RetrainJob } from '../api/client';
+import type { PredictionPoint, RetrainJob, ModelRegistryEntry, PredictJob } from '../api/client';
 
 interface Props { coin: 'bitcoin' | 'dogecoin' }
 
@@ -51,6 +53,44 @@ function JobIcon({ status }: { status: string }) {
   return <Clock size={13} color="var(--warn)" />;
 }
 
+function PredictButton({ job, busy, onRun }: {
+  job?: PredictJob;
+  busy: boolean;
+  onRun: () => void;
+}) {
+  const running = job?.status === 'pending' || job?.status === 'running' || busy;
+  const done    = job?.status === 'completed';
+  const failed  = job?.status === 'failed';
+
+  const label = running ? (job?.status === 'running' ? 'Running…' : 'Queued…')
+    : done   ? 'Re-run'
+    : failed ? 'Retry'
+    : 'Predict Now';
+
+  return (
+    <button
+      onClick={() => !running && onRun()}
+      disabled={running}
+      style={{
+        display: 'inline-flex', alignItems: 'center', gap: '7px', flexShrink: 0,
+        padding: '8px 16px', borderRadius: '8px',
+        fontSize: '12px', fontWeight: 600, fontFamily: 'Plus Jakarta Sans',
+        border: `1px solid ${running ? 'var(--border)' : 'rgba(99,102,241,0.4)'}`,
+        background: running ? 'transparent' : 'var(--accent-muted)',
+        color: running ? 'var(--text-muted)' : 'var(--accent-light)',
+        cursor: running ? 'not-allowed' : 'pointer',
+        transition: 'all 0.15s ease',
+      }}
+    >
+      {running ? <Loader size={12} className="spin" />
+        : done ? <CheckCircle size={12} color="var(--up)" />
+        : failed ? <XCircle size={12} color="var(--down)" />
+        : <Play size={12} />}
+      {label}
+    </button>
+  );
+}
+
 const ForecastTooltip = ({ active, payload, label, decimals }: {
   active?: boolean;
   payload?: { name: string; value: number; color: string }[];
@@ -78,7 +118,9 @@ export default function PredictionsPage({ coin }: Props) {
   const queryClient = useQueryClient();
 
   const [activeHorizon,   setActiveHorizon]   = useState<7 | 15 | 60>(7);
-  const [switching,       setSwitching]        = useState(false);
+  const [selectedModelId, setSelectedModelId]  = useState<string | null>(null);
+  const [predicting,      setPredicting]       = useState(false);
+  const [predictJobs,     setPredictJobs]      = useState<Record<string, PredictJob>>({});
   const [retrainLoading,  setRetrainLoading]   = useState(false);
   const [showHistory,     setShowHistory]      = useState(false);
   const [showRetrain,     setShowRetrain]      = useState(false);
@@ -99,24 +141,72 @@ export default function PredictionsPage({ coin }: Props) {
     queryKey: ['ml-models', symbol],
     queryFn:  async () => {
       const r = await fetchModels(symbol);
-      const active = r.models.find(m => m.is_active);
-      if (active) setActiveHorizon(active.horizon as 7 | 15 | 60);
+      // Default the view to H7 if trained, else the first horizon that has a model.
+      if (!r.models.some(m => m.horizon === activeHorizon && m.model_exists)) {
+        const firstTrained = [7, 15, 60].find(h => r.models.some(m => m.horizon === h && m.model_exists));
+        if (firstTrained) setActiveHorizon(firstTrained as 7 | 15 | 60);
+      }
       return r.models;
     },
     staleTime: 60_000,
   });
 
+  // Versions available for the active horizon, newest-first (the default lives at [0])
+  const activeVersions = useMemo<ModelRegistryEntry[]>(() => (
+    models
+      .filter(m => m.horizon === activeHorizon)
+      .sort((a, b) => Number(b.is_newest) - Number(a.is_newest) || b.version - a.version)
+  ), [models, activeHorizon]);
+
+  const newestModel   = activeVersions.find(m => m.is_newest) ?? activeVersions[0] ?? null;
+  const selectedModel = activeVersions.find(m => m.model_id === selectedModelId) ?? newestModel;
+  const viewingArchived = !!selectedModel && !selectedModel.is_newest;
+
+  // When the active horizon (or its model set) changes, snap selection back to newest
+  useEffect(() => {
+    if (newestModel) setSelectedModelId(newestModel.model_id);
+  }, [activeHorizon, newestModel?.model_id]);
+
+  // Newest is auto-predicted by the scheduler → query by horizon (keeps legacy fallback).
+  // Archived versions are filtered strictly by model_id.
+  const viewModelId = viewingArchived ? selectedModel!.model_id : undefined;
+
   const { data: predictions, isLoading: loadingPred } = useQuery({
-    queryKey: ['predictions', coin, activeHorizon],
-    queryFn:  () => fetchPredictions(coin, activeHorizon),
+    queryKey: ['predictions', coin, activeHorizon, viewModelId ?? 'newest'],
+    queryFn:  () => fetchPredictions(coin, activeHorizon, viewModelId),
     staleTime: 120_000,
   });
 
-  const { data: predHistory = [] } = useQuery({
-    queryKey: ['predictions-history', coin],
-    queryFn:  () => fetchPredictionHistory(coin, 60),
-    staleTime: 300_000,
+  // Poll on-demand predict job status while one is in flight for the selected model
+  const selectedJob = selectedModel ? predictJobs[selectedModel.model_id] : undefined;
+  const jobInFlight = selectedJob?.status === 'pending' || selectedJob?.status === 'running';
+  useQuery({
+    queryKey: ['predict-status', symbol, selectedModel?.model_id],
+    queryFn:  async () => {
+      const r = await fetchPredictStatus(symbol, selectedModel?.model_id);
+      const latest = r.jobs[0];
+      if (latest && selectedModel) {
+        setPredictJobs(prev => ({ ...prev, [selectedModel.model_id]: latest }));
+        if (latest.status === 'completed') {
+          queryClient.invalidateQueries({ queryKey: ['predictions', coin, activeHorizon, selectedModel.model_id] });
+        }
+      }
+      return r.jobs;
+    },
+    enabled: jobInFlight,
+    refetchInterval: jobInFlight ? 5_000 : false,
+    staleTime: 0,
   });
+
+  const { data: predHistoryPage } = useQuery({
+    queryKey: ['predictions-history', coin, activeHorizon, histPage, HIST_PAGE_SIZE],
+    queryFn:  () => fetchPredictionHistory(coin, histPage, HIST_PAGE_SIZE, activeHorizon),
+    staleTime: 300_000,
+    placeholderData: keepPreviousData,
+  });
+
+  // Reset to first page + newest model when the coin changes
+  useEffect(() => { setHistPage(1); setSelectedModelId(null); }, [coin]);
 
   // Polling for retrain jobs when panel is open
   useQuery({
@@ -136,23 +226,17 @@ export default function PredictionsPage({ coin }: Props) {
     setTimeout(() => setToast(null), 3000);
   }, []);
 
-  const handleHorizonSwitch = useCallback(async (h: 7 | 15 | 60) => {
-    if (h === activeHorizon || switching) return;
+  // H7 / H15 / H60 are independent models that run in parallel — selecting one is
+  // a pure client-side view switch (no server-side "active" mutation, no toast).
+  const handleHorizonSelect = useCallback((h: 7 | 15 | 60) => {
+    if (h === activeHorizon) return;
     const entry = models.find(m => m.horizon === h);
     if (!entry?.model_exists) return;
-    setSwitching(true);
-    try {
-      await setActiveModel(coin, h);
-      setActiveHorizon(h);
-      setForecastPage(1);
-      await queryClient.invalidateQueries({ queryKey: ['predictions', coin] });
-      showToast(`Active model set to H${h}`, 'ok');
-    } catch {
-      showToast('Failed to switch model', 'err');
-    } finally {
-      setSwitching(false);
-    }
-  }, [activeHorizon, coin, models, queryClient, showToast, switching]);
+    setActiveHorizon(h);
+    setForecastPage(1);
+    setHistPage(1);
+    setSelectedModelId(null);
+  }, [activeHorizon, models]);
 
   const handleRetrain = useCallback(async (h: number) => {
     setRetrainLoading(true);
@@ -164,6 +248,19 @@ export default function PredictionsPage({ coin }: Props) {
       showToast('Failed to queue retrain', 'err');
     } finally {
       setRetrainLoading(false);
+    }
+  }, [coin, showToast]);
+
+  const handlePredictNow = useCallback(async (model: ModelRegistryEntry) => {
+    setPredicting(true);
+    try {
+      const job = await predictNow(coin, model.model_id);
+      setPredictJobs(prev => ({ ...prev, [model.model_id]: job }));
+      showToast(`Prediction queued for ${model.version_label}`, 'ok');
+    } catch {
+      showToast('Failed to queue prediction', 'err');
+    } finally {
+      setPredicting(false);
     }
   }, [coin, showToast]);
 
@@ -219,11 +316,19 @@ export default function PredictionsPage({ coin }: Props) {
     forecastPage * FORECAST_PAGE_SIZE,
   );
 
-  const totalHistPages = Math.max(1, Math.ceil(predHistory.length / HIST_PAGE_SIZE));
-  const visibleHistory = predHistory.slice(
-    (histPage - 1) * HIST_PAGE_SIZE,
-    histPage * HIST_PAGE_SIZE,
-  );
+  const visibleHistory   = predHistoryPage?.items ?? [];
+  const totalHistRecords = predHistoryPage?.total ?? 0;
+  const totalHistPages   = predHistoryPage?.total_pages ?? 1;
+
+  // Windowed page numbers (current ±2) so the control never overflows its row
+  const histPageWindow = useMemo(() => {
+    const span = 2;
+    const start = Math.max(1, histPage - span);
+    const end   = Math.min(totalHistPages, histPage + span);
+    const pages: number[] = [];
+    for (let p = start; p <= end; p++) pages.push(p);
+    return pages;
+  }, [histPage, totalHistPages]);
 
   const periodLabel = `${activeHorizon}-Day`;
 
@@ -277,7 +382,7 @@ export default function PredictionsPage({ coin }: Props) {
           marginBottom: '10px',
         }}>
           <Zap size={10} color="var(--accent-light)" />
-          Forecast Horizon — click to activate
+          Forecast Horizon — independent models, click to view
         </div>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '10px' }}>
           {HORIZONS.map(h => {
@@ -288,14 +393,13 @@ export default function PredictionsPage({ coin }: Props) {
             return (
               <div
                 key={h.value}
-                onClick={() => !isActive && !switching && handleHorizonSwitch(h.value as 7 | 15 | 60)}
+                onClick={() => !isActive && handleHorizonSelect(h.value as 7 | 15 | 60)}
                 style={{
                   padding: '16px', borderRadius: '11px', position: 'relative',
                   border: isActive ? '1px solid rgba(99,102,241,0.35)' : '1px solid var(--border)',
                   background: isActive ? 'var(--accent-muted)' : 'var(--bg-card)',
                   cursor: isActive ? 'default' : hasModel ? 'pointer' : 'not-allowed',
                   transition: 'all 0.15s ease',
-                  opacity: switching && !isActive ? 0.5 : 1,
                 }}
                 onMouseEnter={e => {
                   if (!isActive && hasModel) {
@@ -318,7 +422,7 @@ export default function PredictionsPage({ coin }: Props) {
                     background: 'var(--accent-subtle)', color: 'var(--accent-light)',
                     border: '1px solid rgba(99,102,241,0.25)',
                   }}>
-                    active
+                    viewing
                   </div>
                 )}
 
@@ -365,9 +469,7 @@ export default function PredictionsPage({ coin }: Props) {
                     color: hasModel ? 'var(--text-secondary)' : 'var(--text-muted)',
                     display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '5px',
                   }}>
-                    {switching
-                      ? <><Loader size={9} className="spin" /> Switching…</>
-                      : hasModel ? 'Activate →' : 'No model'}
+                    {hasModel ? 'View →' : 'No model'}
                   </div>
                 )}
               </div>
@@ -375,6 +477,88 @@ export default function PredictionsPage({ coin }: Props) {
           })}
         </div>
       </div>
+
+      {/* ── Model version selector (per active horizon) ───────────────────────── */}
+      {activeVersions.length > 0 && (
+        <div className="card" style={{ padding: '16px 18px', marginBottom: '14px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '12px' }}>
+            <Layers size={12} color="var(--accent-light)" />
+            <span style={{
+              fontSize: '10px', fontFamily: 'Plus Jakarta Sans', fontWeight: 600,
+              color: 'var(--text-muted)', letterSpacing: '0.08em', textTransform: 'uppercase',
+            }}>
+              H{activeHorizon} Model Version
+            </span>
+            <span style={{ fontSize: '10px', color: 'var(--text-muted)', fontFamily: 'Plus Jakarta Sans' }}>
+              · newest runs live · pick an archived build to compare
+            </span>
+          </div>
+
+          <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+            {activeVersions.map(m => {
+              const isSel = m.model_id === selectedModel?.model_id;
+              return (
+                <button
+                  key={m.model_id}
+                  onClick={() => setSelectedModelId(m.model_id)}
+                  title={m.model_id}
+                  style={{
+                    display: 'flex', alignItems: 'center', gap: '7px',
+                    padding: '8px 12px', borderRadius: '9px', cursor: 'pointer',
+                    fontFamily: 'IBM Plex Mono', fontSize: '12px',
+                    border: isSel ? '1px solid rgba(99,102,241,0.45)' : '1px solid var(--border)',
+                    background: isSel ? 'var(--accent-muted)' : 'var(--bg-elevated)',
+                    color: isSel ? 'var(--accent-light)' : 'var(--text-secondary)',
+                    transition: 'all 0.15s ease',
+                  }}
+                >
+                  {m.is_newest ? <Sparkles size={11} /> : <Archive size={11} />}
+                  <span style={{ fontWeight: 500 }}>{m.version_label}</span>
+                  {m.is_newest && (
+                    <span style={{
+                      padding: '1px 6px', borderRadius: '4px', fontSize: '8px',
+                      letterSpacing: '0.05em', textTransform: 'uppercase',
+                      background: 'var(--accent-subtle)', color: 'var(--accent-light)',
+                      border: '1px solid rgba(99,102,241,0.25)',
+                    }}>
+                      default
+                    </span>
+                  )}
+                </button>
+              );
+            })}
+          </div>
+
+          {/* Archived-version action bar */}
+          {viewingArchived && selectedModel && (
+            <div style={{
+              marginTop: '12px', padding: '12px 14px', borderRadius: '9px',
+              border: '1px solid var(--warn-border, rgba(234,179,8,0.25))',
+              background: 'linear-gradient(135deg, var(--bg-elevated) 60%, rgba(234,179,8,0.06))',
+              display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '12px', flexWrap: 'wrap',
+            }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '9px', minWidth: 0 }}>
+                <Archive size={14} color="var(--warn)" />
+                <div style={{ minWidth: 0 }}>
+                  <div style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text-primary)', fontFamily: 'Plus Jakarta Sans' }}>
+                    Archived build · <span className="font-mono">{selectedModel.model_id}</span>
+                  </div>
+                  <div style={{ fontSize: '10px', color: 'var(--text-secondary)', fontFamily: 'Plus Jakarta Sans', marginTop: '2px' }}>
+                    {(predictions?.predictions?.length ?? 0) > 0
+                      ? 'Showing this version’s forecast. Re-run to refresh from the latest seed.'
+                      : 'No forecast stored yet — run it on demand to generate one.'}
+                  </div>
+                </div>
+              </div>
+              <PredictButton
+                job={selectedJob}
+                busy={predicting}
+                onRun={() => handlePredictNow(selectedModel)}
+              />
+            </div>
+          )}
+        </div>
+      )}
 
       {/* ── Main: chart + sidebar metrics ─────────────────────────────────────── */}
       <div style={{
@@ -536,11 +720,21 @@ export default function PredictionsPage({ coin }: Props) {
           <div style={{ fontSize: '14px', fontWeight: 600, color: 'var(--text-primary)', fontFamily: 'Plus Jakarta Sans' }}>
             {periodLabel} Daily Forecast
           </div>
-          <div style={{ fontSize: '11px', color: 'var(--text-secondary)', fontFamily: 'Plus Jakarta Sans' }}>
+          <div style={{ fontSize: '11px', color: 'var(--text-secondary)', fontFamily: 'Plus Jakarta Sans', display: 'flex', alignItems: 'center', gap: '6px' }}>
             Model:{' '}
-            <span className="font-mono" style={{ color: 'var(--purple)' }}>
-              {predictions?.model_version ?? '—'}
+            <span className="font-mono" style={{ color: viewingArchived ? 'var(--warn)' : 'var(--purple)' }}>
+              {selectedModel?.model_id ?? predictions?.active_model_id ?? predictions?.model_version ?? '—'}
             </span>
+            {viewingArchived && (
+              <span style={{
+                display: 'inline-flex', alignItems: 'center', gap: '3px',
+                padding: '1px 6px', borderRadius: '4px', fontSize: '9px',
+                background: 'rgba(234,179,8,0.12)', color: 'var(--warn)',
+                border: '1px solid var(--warn-border, rgba(234,179,8,0.25))',
+              }}>
+                <Archive size={8} /> archived
+              </span>
+            )}
           </div>
         </div>
         <table className="data-table">
@@ -747,7 +941,7 @@ export default function PredictionsPage({ coin }: Props) {
       </div>
 
       {/* ── Prediction history (collapsible) ─────────────────────────────────── */}
-      {predHistory.length > 0 && (
+      {totalHistRecords > 0 && (
         <div className="card" style={{ overflow: 'hidden' }}>
           <button
             onClick={() => setShowHistory(v => !v)}
@@ -767,7 +961,7 @@ export default function PredictionsPage({ coin }: Props) {
                 padding: '1px 7px', borderRadius: '5px', fontSize: '10px', fontFamily: 'IBM Plex Mono',
                 background: 'var(--purple-subtle)', color: 'var(--purple)',
               }}>
-                {predHistory.length}
+                {totalHistRecords}
               </span>
             </div>
             {showHistory ? <ChevronUp size={14} color="var(--text-secondary)" /> : <ChevronDown size={14} color="var(--text-secondary)" />}
@@ -827,7 +1021,7 @@ export default function PredictionsPage({ coin }: Props) {
                     ← Prev
                   </button>
                   <div style={{ display: 'flex', gap: '4px', alignItems: 'center' }}>
-                    {Array.from({ length: totalHistPages }, (_, i) => i + 1).map(page => (
+                    {histPageWindow.map(page => (
                       <button
                         key={page}
                         onClick={() => setHistPage(page)}

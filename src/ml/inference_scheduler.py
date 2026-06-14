@@ -284,6 +284,74 @@ def process_retrain_requests() -> None:
             pass
 
 
+# ── On-demand predict request processor ───────────────────────────────────────
+
+def process_inference_requests() -> None:
+    """
+    Poll MongoDB inference_jobs for pending on-demand predict requests (written by
+    the API when a user clicks "Predict Now" on a specific model version) and run
+    them synchronously. Marks jobs running → completed / failed.
+
+    Each job names an explicit model_id (e.g. lstm_bitcoin_h7_v2); inference loads
+    that exact version and tags the predictions with it so they can be filtered
+    independently of the active (newest) model.
+    """
+    try:
+        import pymongo as _pymongo  # noqa: PLC0415
+        client = _pymongo.MongoClient(MONGO_URI, serverSelectionTimeoutMS=3000)
+        pending = list(client["crypto_db"].inference_jobs.find({"status": "pending"}, {"_id": 0}))
+        client.close()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Could not poll inference_jobs (non-fatal): %s", exc)
+        return
+
+    for job in pending:
+        jid      = job["job_id"]
+        coin     = job["coin_id"]
+        horizon  = job.get("horizon", 7)
+        model_id = job.get("model_id")
+        logger.info("Processing predict request: %s  model=%s", jid, model_id)
+
+        try:
+            import pymongo as _pymongo  # noqa: PLC0415
+            _c = _pymongo.MongoClient(MONGO_URI, serverSelectionTimeoutMS=3000)
+            _c["crypto_db"].inference_jobs.update_one(
+                {"job_id": jid},
+                {"$set": {"status": "running", "started_at": datetime.now(timezone.utc)}},
+            )
+            _c.close()
+        except Exception:
+            pass
+
+        try:
+            docs = run_inference(
+                coin=coin, mongo_uri=MONGO_URI, horizon=horizon, model_id=model_id
+            )
+            logger.info(
+                "On-demand predict complete: %s  %s — %d predictions written.",
+                jid, model_id, len(docs),
+            )
+            status, err_msg = "completed", None
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("On-demand predict failed for %s (%s): %s", jid, model_id, exc)
+            status, err_msg = "failed", str(exc)
+
+        try:
+            import pymongo as _pymongo  # noqa: PLC0415
+            _c = _pymongo.MongoClient(MONGO_URI, serverSelectionTimeoutMS=3000)
+            _c["crypto_db"].inference_jobs.update_one(
+                {"job_id": jid},
+                {"$set": {
+                    "status":      status,
+                    "finished_at": datetime.now(timezone.utc),
+                    "error":       err_msg,
+                }},
+            )
+            _c.close()
+        except Exception:
+            pass
+
+
 # ── Inference cycle ────────────────────────────────────────────────────────────
 
 def run_cycle(consecutive_failures: int) -> int:
@@ -292,8 +360,9 @@ def run_cycle(consecutive_failures: int) -> int:
 
     Returns updated consecutive_failures count (resets to 0 on any success).
     """
-    # Step 0: process any pending retrain requests from the API (blocking if any)
+    # Step 0: process any pending retrain + on-demand predict requests from the API
     process_retrain_requests()
+    process_inference_requests()
 
     # Step 1: pull fresh price data into live_prices before seeding the model
     if SCHEDULER_FETCH_COINGECKO:

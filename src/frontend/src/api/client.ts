@@ -55,6 +55,8 @@ export interface PredictionPoint {
   prediction_date: string;
   confidence: number;
   model_version: string;
+  model_id?: string;          // model file stem that produced this forecast
+  version?: number;           // numeric version of that model
   created_at: string;
   run_date?: string;          // when this prediction was made (from prediction_runs)
   actual_price?: number;      // actual closing price for that date (joined from historical_sma)
@@ -64,10 +66,19 @@ export interface PredictionPoint {
   trend_strength?: 'STRONG' | 'MODERATE' | 'WEAK';
 }
 
+export interface PredictionHistoryResponse {
+  items: PredictionPoint[];
+  total: number;
+  page: number;
+  limit: number;
+  total_pages: number;
+}
+
 export interface PredictionsResponse {
   coin: string;
   model_version: string | null;
   active_horizon: number;
+  active_model_id?: string | null;
   predictions: PredictionPoint[];
   next_day_price: number | null;
   seven_day_high: number | null;
@@ -151,11 +162,15 @@ export const fetchRealtime = (coin: string) =>
 export const fetchHistorical = (coin: string, days = 90) =>
   api.get<HistoricalPoint[]>(`/historical/${coin}`, { params: { days } }).then(r => r.data);
 
-export const fetchPredictions = (coin: string, horizon?: number) =>
-  api.get<PredictionsResponse>(`/predictions/${coin}`, { params: horizon ? { horizon } : {} }).then(r => r.data);
+export const fetchPredictions = (coin: string, horizon?: number, modelId?: string) =>
+  api.get<PredictionsResponse>(`/predictions/${coin}`, {
+    params: { ...(horizon ? { horizon } : {}), ...(modelId ? { model_id: modelId } : {}) },
+  }).then(r => r.data);
 
-export const fetchPredictionHistory = (coin: string, days = 30) =>
-  api.get<PredictionPoint[]>(`/predictions/${coin}/history`, { params: { days } }).then(r => r.data);
+export const fetchPredictionHistory = (coin: string, page = 1, limit = 15, horizon?: number, days = 60) =>
+  api.get<PredictionHistoryResponse>(`/predictions/${coin}/history`, {
+    params: { page, limit, days, ...(horizon ? { horizon } : {}) },
+  }).then(r => r.data);
 
 export const fetchTechnical = (coin: string, days = 180) =>
   api.get<HistoricalPoint[]>(`/technical/${coin}`, { params: { days } }).then(r => r.data);
@@ -210,17 +225,20 @@ export interface ModelRegistryEntry {
   coin: string;
   coin_id: string;
   horizon: number;
-  model_file: string;
-  scaler_file: string;
+  version: number;
+  version_label: string;       // "v3" | "v2 (legacy)"
+  model_id: string;            // "lstm_bitcoin_h7_v3"
+  is_legacy: boolean;
+  is_newest: boolean;          // newest version for its horizon (default)
   model_exists: boolean;
-  is_active: boolean;
+  is_active: boolean;          // newest model of the coin's active horizon
   metrics?: {
     rmse?: number;
     mae?: number;
     directional_accuracy_pct?: number;
     epochs_trained?: number;
     best_val_loss?: number;
-  };
+  } | null;
   registered_at?: string;
 }
 
@@ -258,3 +276,31 @@ export const triggerRetrain = (coin: string, horizon: number) =>
 
 export const fetchRetrainStatus = (coin?: string) =>
   api.get<RetrainStatusResponse>('/ml/retrain/status', { params: coin ? { coin } : {} }).then(r => r.data);
+
+// ── On-demand prediction (predict with a specific model version) ─────────────────
+export interface PredictJob {
+  job_id: string;
+  coin: string;
+  model_id: string;
+  horizon?: number;
+  version?: number;
+  status: 'pending' | 'running' | 'completed' | 'failed';
+  message?: string;
+  created_at?: string;
+  started_at?: string;
+  finished_at?: string;
+  error?: string | null;
+}
+
+export interface PredictStatusResponse {
+  jobs: PredictJob[];
+  count: number;
+}
+
+export const predictNow = (coin: string, modelId: string) =>
+  api.post<PredictJob>('/ml/predict', { coin, model_id: modelId }).then(r => r.data);
+
+export const fetchPredictStatus = (coin?: string, modelId?: string) =>
+  api.get<PredictStatusResponse>('/ml/predict/status', {
+    params: { ...(coin ? { coin } : {}), ...(modelId ? { model_id: modelId } : {}) },
+  }).then(r => r.data);

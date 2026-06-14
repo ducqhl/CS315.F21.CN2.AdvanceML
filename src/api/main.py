@@ -390,22 +390,43 @@ def get_historical(
 def get_predictions(
     coin: str,
     horizon: int | None = Query(default=None, description="Horizon override: 7, 15, or 60. Defaults to active model."),
+    model_id: str | None = Query(default=None, description="View a specific model version's forecast (e.g. lstm_bitcoin_h7_v2). Overrides horizon."),
     _user: dict = Depends(get_current_user),
 ) -> dict:
     symbol = _resolve_symbol(coin)
-
-    # Resolve active horizon from registry (or query param override)
-    active_horizon: int = horizon if horizon in (7, 15, 60) else 7
-    if horizon is None:
-        registry_doc = db.model_registry.find_one({"coin": symbol, "is_active": True}, {"_id": 0, "horizon": 1})
-        if registry_doc:
-            active_horizon = int(registry_doc["horizon"])
-
+    coin_id = coin.lower() if coin.lower() in {"bitcoin", "dogecoin"} else \
+              ("bitcoin" if symbol == "BTC" else "dogecoin")
     today = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
-    # Match on horizon field (new docs) OR fall back to docs without horizon (legacy)
-    horizon_filter: dict = {"$or": [{"horizon": active_horizon}, {"horizon": {"$exists": False}}]} if active_horizon == 7 else {"horizon": active_horizon}
+
+    # ── Resolve selection: explicit model_id wins, else newest of active horizon ──
+    if model_id:
+        catalog = _discover_model_files(coin_id)
+        entry = next((d for d in catalog if d["model_id"] == model_id), None)
+        active_horizon = entry["horizon"] if entry else (horizon if horizon in (7, 15, 60) else 7)
+        active_model_id = model_id
+        model_filter: dict = {"model_id": model_id}
+    else:
+        active_horizon = horizon if horizon in (7, 15, 60) else 7
+        if horizon is None:
+            registry_doc = db.model_registry.find_one({"coin": symbol, "is_active": True}, {"_id": 0, "horizon": 1})
+            if registry_doc:
+                active_horizon = int(registry_doc["horizon"])
+        # Newest model for this horizon → only show its forecast (old on-demand runs excluded)
+        catalog = _discover_model_files(coin_id)
+        newest = next((d for d in catalog if d["horizon"] == active_horizon and d["is_newest"]), None)
+        active_model_id = newest["model_id"] if newest else None
+        if active_model_id:
+            # Match newest model_id OR legacy docs lacking model identity (back-compat)
+            model_filter = {"$or": [
+                {"model_id": active_model_id},
+                {"model_id": {"$in": [None, ""]}, "horizon": active_horizon},
+                {"model_id": {"$exists": False}, "horizon": active_horizon},
+            ]}
+        else:
+            model_filter = {"$or": [{"horizon": active_horizon}, {"horizon": {"$exists": False}}]} if active_horizon == 7 else {"horizon": active_horizon}
+
     cursor = db.predictions.find(
-        {"coin": symbol, "prediction_date": {"$gte": today}, **horizon_filter},
+        {"coin": symbol, "prediction_date": {"$gte": today}, **model_filter},
         sort=[("prediction_date", 1)],
         projection={"_id": 0},
     )
@@ -413,17 +434,18 @@ def get_predictions(
     if not docs:
         return {
             "coin": symbol, "model_version": None, "active_horizon": active_horizon,
+            "active_model_id": active_model_id,
             "predictions": [], "dominant_direction": None, "direction_counts": {},
             "avg_confidence": None, "dominant_strength": None,
             "next_day_price": None, "seven_day_high": None, "seven_day_low": None,
-            "message": f"No predictions for {symbol} H{active_horizon}. Run inference first.",
+            "message": f"No predictions for {symbol} {active_model_id or f'H{active_horizon}'}. Run inference first.",
         }
     model_version = docs[-1].get("model_version", "lstm_v1") if docs else "lstm_v1"
     prices = [d["predicted_price"] for d in docs]
     serialized = []
     for d in docs:
         row = _serialize(d)
-        for field in ("direction", "direction_prob", "trend_strength", "confidence"):
+        for field in ("direction", "direction_prob", "trend_strength", "confidence", "model_id", "version"):
             if field in d:
                 row[field] = d[field]
         serialized.append(row)
@@ -443,6 +465,7 @@ def get_predictions(
         "coin": symbol,
         "model_version": model_version,
         "active_horizon": active_horizon,
+        "active_model_id": active_model_id,
         "predictions": serialized,
         # Trend-first summary fields
         "dominant_direction": dominant_direction,
@@ -460,40 +483,65 @@ def get_predictions(
 def get_prediction_history(
     coin: str,
     days: int = Query(default=60, ge=1, le=365),
+    page: int = Query(default=1, ge=1),
+    limit: int = Query(default=15, ge=1, le=100),
+    horizon: int | None = Query(default=None, description="Scope history to a horizon (7/15/60). Omit for all."),
     _user: dict = Depends(get_current_user),
-) -> list[dict]:
+) -> dict:
     """
-    Return prediction_runs history joined with actual prices for accuracy review.
+    Return a page of prediction_runs history joined with actual prices.
 
     Each record represents what the model predicted for a given date on the day
     the prediction was made (run_date), plus the actual closing price if that
     date has since passed (from historical_sma).
 
+    Server-side paginated: pass ``page`` (1-based) and ``limit``. Response shape:
+    ``{items, total, page, limit, total_pages}``.
+
     Falls back to the predictions collection if prediction_runs is empty
     (useful right after first deploy before runs accumulate).
     """
+    import math
+
     symbol = _resolve_symbol(coin)
     today = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
     since = today - timedelta(days=days)
+    skip = (page - 1) * limit
 
-    # ── Read from prediction_runs (append-only log) ──────────────────────────
-    runs = list(db.prediction_runs.find(
-        {"coin": symbol, "run_date": {"$gte": since}},
-        sort=[("prediction_date", 1), ("run_date", 1)],
-        limit=days * 14,
-        projection={"_id": 0},
-    ))
+    def _empty(total: int) -> dict:
+        return {
+            "items": [],
+            "total": total,
+            "page": page,
+            "limit": limit,
+            "total_pages": max(1, math.ceil(total / limit)),
+        }
 
-    # ── Fallback: use predictions collection if runs log is still empty ──────
-    if not runs:
-        runs = list(db.predictions.find(
-            {"coin": symbol},
+    # ── Read a page from prediction_runs (append-only log) ───────────────────
+    horizon_filter: dict = {"horizon": horizon} if horizon in (7, 15, 60) else {}
+    runs_filter = {"coin": symbol, "run_date": {"$gte": since}, **horizon_filter}
+    total = db.prediction_runs.count_documents(runs_filter)
+
+    if total > 0:
+        runs = list(db.prediction_runs.find(
+            runs_filter,
+            sort=[("prediction_date", 1), ("run_date", 1)],
+            skip=skip,
+            limit=limit,
+            projection={"_id": 0},
+        ))
+    else:
+        # ── Fallback: use predictions collection if runs log is still empty ──
+        fallback = list(db.predictions.find(
+            {"coin": symbol, **horizon_filter},
             sort=[("prediction_date", 1)],
             projection={"_id": 0},
         ))
+        total = len(fallback)
+        runs = fallback[skip:skip + limit]
 
     if not runs:
-        return []
+        return _empty(total)
 
     # ── Build actual-price lookup from historical_sma ────────────────────────
     # Fetch actual closes for all dates that appear in the run records
@@ -517,7 +565,6 @@ def get_prediction_history(
         prev_close = actual_sma_docs[i - 1]["avg_close"]
         curr_close = actual_sma_docs[i]["avg_close"]
         if prev_close and curr_close and prev_close > 0:
-            import math
             lr = math.log(curr_close / prev_close)
             if lr > 0.01:
                 actual_direction_map[actual_sma_docs[i]["date"]] = "UP"
@@ -546,7 +593,13 @@ def get_prediction_history(
                 d["direction_correct"] = (pred_dir == actual_dir)
         enriched.append(d)
 
-    return enriched
+    return {
+        "items": enriched,
+        "total": total,
+        "page": page,
+        "limit": limit,
+        "total_pages": max(1, math.ceil(total / limit)),
+    }
 
 
 @app.get("/api/predictions/{coin}/accuracy")
@@ -797,9 +850,58 @@ import threading as _threading
 import subprocess as _subprocess
 from pathlib import Path as _Path
 
+import re as _re
+
 _ML_DIR = _Path(__file__).resolve().parent.parent / "ml"
+_MODEL_DIR = _Path(os.environ.get("MODEL_DIR", str(_ML_DIR / "model")))
 _VALID_HORIZONS = {7, 15, 60}
 _VALID_COINS = {"bitcoin", "dogecoin", "BTC", "DOGE", "btc", "doge"}
+
+
+def _discover_model_files(coin_id: str) -> list[dict]:
+    """
+    Torch-free disk scan of trained model artifacts for *coin_id* (e.g. "bitcoin").
+
+    Mirrors inference.discover_models without importing torch (the API container
+    has no ML deps). Returns entries sorted by (horizon, -version):
+        {model_id, horizon, version, version_label, is_legacy, is_newest, model_exists}
+    Legacy (pre-horizon) files map to horizon 7.
+    """
+    found: list[dict] = []
+
+    for p in _MODEL_DIR.glob(f"lstm_{coin_id}_h*_v*.pt"):
+        m = _re.match(rf"lstm_{_re.escape(coin_id)}_h(\d+)_v(\d+)\.pt$", p.name)
+        if not m:
+            continue
+        horizon, version = int(m.group(1)), int(m.group(2))
+        if (_MODEL_DIR / f"scaler_{coin_id}_h{horizon}_v{version}.pkl").exists():
+            found.append({"model_id": p.stem, "horizon": horizon, "version": version, "is_legacy": False})
+
+    for p in _MODEL_DIR.glob(f"lstm_{coin_id}_v*.pt"):
+        m = _re.match(rf"lstm_{_re.escape(coin_id)}_v(\d+)\.pt$", p.name)
+        if not m:
+            continue
+        version = int(m.group(1))
+        if version < 2:   # v1 predates the 9-feature pipeline and is unloadable
+            continue
+        has_scaler = (_MODEL_DIR / f"scaler_{coin_id}_v{version}.pkl").exists() or (_MODEL_DIR / f"scaler_{coin_id}.pkl").exists()
+        if has_scaler:
+            found.append({"model_id": p.stem, "horizon": 7, "version": version, "is_legacy": True})
+
+    by_horizon: dict[int, dict] = {}
+    for d in found:
+        rank = (0 if d["is_legacy"] else 1, d["version"])
+        cur = by_horizon.get(d["horizon"])
+        if cur is None or rank > (0 if cur["is_legacy"] else 1, cur["version"]):
+            by_horizon[d["horizon"]] = d
+    newest_ids = {d["model_id"] for d in by_horizon.values()}
+    for d in found:
+        d["is_newest"]     = d["model_id"] in newest_ids
+        d["version_label"] = f"v{d['version']}" + (" (legacy)" if d["is_legacy"] else "")
+        d["model_exists"]  = True
+
+    found.sort(key=lambda d: (d["horizon"], -d["version"], d["is_legacy"]))
+    return found
 
 # In-memory store for background retrain jobs (resets on restart; MongoDB is authoritative)
 _retrain_lock = _threading.Lock()
@@ -821,19 +923,48 @@ def get_ml_models(
     _user: dict = Depends(get_current_user),
 ) -> dict:
     """
-    List all registered LSTM models with their metrics and active status.
+    List all trained LSTM models (one entry per coin · horizon · version).
 
-    Each entry shows horizon (7/15/60), whether the model file exists on disk,
-    current metrics (RMSE, MAE, dir accuracy), and which model is active.
+    The 3 main horizons (7/15/60) each carry a version history; the newest version
+    is the default (is_newest). Older versions stay selectable for on-demand
+    "predict now" runs. Metrics from the registry are attached to the newest entry
+    of each horizon. is_active marks the newest model of the coin's active horizon.
+
+    Each entry: {coin, coin_id, horizon, version, version_label, model_id,
+                 is_legacy, is_newest, model_exists, is_active, metrics}.
     """
-    query: dict = {}
-    if coin:
-        coin_norm = COIN_SYMBOL_MAP.get(coin.lower(), coin.upper())
-        query = {"$or": [{"coin": coin_norm}, {"coin_id": coin.lower()}]}
+    coin_ids = [coin.lower()] if coin and coin.lower() in {"bitcoin", "dogecoin"} else \
+               ([_id for _id in ("bitcoin", "dogecoin")
+                 if not coin or COIN_SYMBOL_MAP.get(coin.lower()) == COIN_SYMBOL_MAP.get(_id)] or ["bitcoin", "dogecoin"])
 
-    docs = list(db.model_registry.find(query, {"_id": 0}, sort=[("coin", 1), ("horizon", 1)]))
-    # model_exists is maintained by the training pipeline; API reads it from registry
-    serialized = [_serialize(d) for d in docs]
+    models: list[dict] = []
+    for coin_id in coin_ids:
+        symbol = COIN_SYMBOL_MAP[coin_id]
+        catalog = _discover_model_files(coin_id)
+
+        # Registry: metrics keyed by (coin, horizon) + which horizon is active
+        reg_docs = {d["horizon"]: d for d in db.model_registry.find({"coin": symbol}, {"_id": 0})}
+        active_doc = db.model_registry.find_one({"coin": symbol, "is_active": True}, {"_id": 0, "horizon": 1})
+        active_horizon = int(active_doc["horizon"]) if active_doc else 7
+
+        for entry in catalog:
+            reg = reg_docs.get(entry["horizon"], {})
+            models.append({
+                "coin":          symbol,
+                "coin_id":       coin_id,
+                "horizon":       entry["horizon"],
+                "version":       entry["version"],
+                "version_label": entry["version_label"],
+                "model_id":      entry["model_id"],
+                "is_legacy":     entry["is_legacy"],
+                "is_newest":     entry["is_newest"],
+                "model_exists":  entry["model_exists"],
+                "is_active":     entry["horizon"] == active_horizon and entry["is_newest"],
+                # Metrics only meaningful for the newest (last-trained) artifact
+                "metrics":       reg.get("metrics") if entry["is_newest"] else None,
+            })
+
+    serialized = [_serialize(m) for m in models]
     return {
         "models": serialized,
         "count": len(serialized),
@@ -978,3 +1109,100 @@ def get_retrain_status(
         "jobs":  [_serialize(j) for j in jobs],
         "count": len(jobs),
     }
+
+
+# ── On-demand prediction (select a specific model version to predict with) ─────
+
+class _PredictRequest(BaseModel):
+    coin: str
+    model_id: str
+
+
+@app.post("/api/ml/predict")
+def trigger_predict(
+    req: _PredictRequest,
+    _user: dict = Depends(get_current_user),
+) -> dict:
+    """
+    Queue an on-demand inference run for a specific model version.
+
+    Body: { "coin": "bitcoin"|"dogecoin", "model_id": "lstm_bitcoin_h7_v2" }
+
+    Newest models are already predicted every scheduler cycle — this is mainly for
+    running an OLDER version on demand so its forecast can be viewed/compared. The
+    scheduler picks the job up on its next cycle (~5 min) and writes predictions
+    tagged with model_id. Poll GET /api/ml/predict/status.
+    """
+    coin_id = req.coin.lower()
+    coin_norm = COIN_SYMBOL_MAP.get(coin_id)
+    if not coin_norm:
+        raise HTTPException(status_code=400, detail=f"Unknown coin: {req.coin}")
+
+    # Validate the model exists on disk and belongs to this coin
+    catalog = _discover_model_files(coin_id)
+    entry = next((d for d in catalog if d["model_id"] == req.model_id), None)
+    if entry is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Model '{req.model_id}' not found for {coin_norm}. "
+                   f"Available: {[d['model_id'] for d in catalog]}",
+        )
+
+    # Reject duplicate pending/running jobs for the same model
+    existing = db.inference_jobs.find_one(
+        {"model_id": req.model_id, "status": {"$in": ["pending", "running"]}},
+        {"_id": 0, "job_id": 1, "status": 1},
+    )
+    if existing:
+        return {
+            "job_id":   existing["job_id"],
+            "coin":     coin_norm,
+            "model_id": req.model_id,
+            "status":   existing["status"],
+            "message":  f"A {existing['status']} predict job already exists for {req.model_id}.",
+        }
+
+    job_id = f"predict_{req.model_id}_{int(datetime.now(timezone.utc).timestamp())}"
+    db.inference_jobs.insert_one({
+        "job_id":      job_id,
+        "coin":        coin_norm,
+        "coin_id":     coin_id,
+        "horizon":     entry["horizon"],
+        "version":     entry["version"],
+        "model_id":    req.model_id,
+        "status":      "pending",
+        "created_at":  datetime.now(timezone.utc),
+        "started_at":  None,
+        "finished_at": None,
+        "error":       None,
+    })
+
+    return {
+        "job_id":   job_id,
+        "coin":     coin_norm,
+        "model_id": req.model_id,
+        "horizon":  entry["horizon"],
+        "status":   "pending",
+        "message":  f"Predict queued for {req.model_id}. The scheduler runs it on the "
+                    f"next cycle (~5 min); poll /api/ml/predict/status?coin={req.coin}.",
+    }
+
+
+@app.get("/api/ml/predict/status")
+def get_predict_status(
+    coin: str | None = Query(default=None, description="Filter by coin"),
+    model_id: str | None = Query(default=None, description="Filter by model_id"),
+    limit: int = Query(default=20, ge=1, le=100),
+    _user: dict = Depends(get_current_user),
+) -> dict:
+    """Return recent on-demand predict job records (status pending|running|completed|failed)."""
+    query: dict = {}
+    if coin:
+        query["coin"] = COIN_SYMBOL_MAP.get(coin.lower(), coin.upper())
+    if model_id:
+        query["model_id"] = model_id
+
+    jobs = list(db.inference_jobs.find(
+        query, {"_id": 0}, sort=[("created_at", -1)], limit=limit,
+    ))
+    return {"jobs": [_serialize(j) for j in jobs], "count": len(jobs)}

@@ -52,6 +52,7 @@ import argparse
 import logging
 import os
 import pickle
+import re
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -128,6 +129,137 @@ def _model_path_v2(coin: str) -> Path:
 
 def _model_path_v1(coin: str) -> Path:
     return _MODEL_DIR / f"lstm_{coin}_v1.pt"
+
+
+# ── Model discovery & version resolution ────────────────────────────────────────
+#
+# A "model" is identified by its file stem (model_id), e.g.
+#   horizon-typed:  lstm_bitcoin_h7_v3   (horizon=7,  version=3)
+#   legacy:         lstm_bitcoin_v2      (horizon=7,  version=2, pre-horizon naming)
+#
+# Each of the 3 main horizons (7/15/60) may carry several versions on disk; the
+# newest is the default used by the scheduler, older versions stay selectable for
+# on-demand "predict now" runs. Predictions are tagged with model_id so forecasts
+# from different versions can coexist and be filtered independently.
+
+def discover_models(coin: str) -> list[dict]:
+    """
+    Scan the model dir for every trained artifact belonging to *coin*.
+
+    Returns a list of dicts (one per model file with a matching scaler), each:
+        {
+          "model_id":   "lstm_bitcoin_h7_v3",
+          "horizon":    7,
+          "version":    3,
+          "is_legacy":  False,
+          "is_newest":  True,            # newest version for its horizon
+          "model_file": "lstm_bitcoin_h7_v3.pt",
+          "scaler_file":"scaler_bitcoin_h7_v3.pkl",
+        }
+    Sorted by (horizon, -version). Legacy (pre-horizon) files map to horizon 7.
+    """
+    found: list[dict] = []
+
+    # Horizon-typed: lstm_{coin}_h{H}_v{V}.pt
+    for p in _MODEL_DIR.glob(f"lstm_{coin}_h*_v*.pt"):
+        m = re.match(rf"lstm_{re.escape(coin)}_h(\d+)_v(\d+)\.pt$", p.name)
+        if not m:
+            continue
+        horizon, version = int(m.group(1)), int(m.group(2))
+        scaler = _MODEL_DIR / f"scaler_{coin}_h{horizon}_v{version}.pkl"
+        if scaler.exists():
+            found.append({
+                "model_id":    p.stem,
+                "horizon":     horizon,
+                "version":     version,
+                "is_legacy":   False,
+                "model_file":  p.name,
+                "scaler_file": scaler.name,
+            })
+
+    # Legacy (pre-horizon): lstm_{coin}_v{V}.pt → horizon 7
+    # v1 predates the current 9-feature pipeline (5-feature input, scaler gone) and
+    # is unloadable — skip it so it never appears as a selectable/predictable model.
+    for p in _MODEL_DIR.glob(f"lstm_{coin}_v*.pt"):
+        m = re.match(rf"lstm_{re.escape(coin)}_v(\d+)\.pt$", p.name)
+        if not m:
+            continue
+        version = int(m.group(1))
+        if version < 2:
+            continue
+        scaler = _MODEL_DIR / f"scaler_{coin}_v{version}.pkl"
+        if not scaler.exists():
+            scaler = _MODEL_DIR / f"scaler_{coin}.pkl"
+        if scaler.exists():
+            found.append({
+                "model_id":    p.stem,
+                "horizon":     7,
+                "version":     version,
+                "is_legacy":   True,
+                "model_file":  p.name,
+                "scaler_file": scaler.name,
+            })
+
+    # Mark newest per horizon: horizon-typed beats legacy, then higher version wins
+    by_horizon: dict[int, dict] = {}
+    for d in found:
+        rank = (0 if d["is_legacy"] else 1, d["version"])
+        cur = by_horizon.get(d["horizon"])
+        if cur is None or rank > (0 if cur["is_legacy"] else 1, cur["version"]):
+            by_horizon[d["horizon"]] = d
+    newest_ids = {d["model_id"] for d in by_horizon.values()}
+    for d in found:
+        d["is_newest"] = d["model_id"] in newest_ids
+
+    found.sort(key=lambda d: (d["horizon"], -d["version"], d["is_legacy"]))
+    return found
+
+
+def _resolve_model(
+    coin: str,
+    horizon: int,
+    model_id: str | None = None,
+) -> dict:
+    """
+    Resolve which model to load.
+
+    If *model_id* is given, load exactly that artifact. Otherwise pick the newest
+    version for *horizon*. Returns the discovery dict augmented with absolute
+    ``model_path`` / ``scaler_path`` and a ``version_label`` ("v3").
+
+    Raises FileNotFoundError when nothing matches.
+    """
+    catalog = discover_models(coin)
+    if not catalog:
+        raise FileNotFoundError(
+            f"No trained model found for {coin}. "
+            f"Run  python src/ml/train_lstm.py --coin {coin}  first."
+        )
+
+    if model_id:
+        match = next((d for d in catalog if d["model_id"] == model_id), None)
+        if match is None:
+            raise FileNotFoundError(
+                f"Model '{model_id}' not found for {coin}. "
+                f"Available: {[d['model_id'] for d in catalog]}"
+            )
+        chosen = match
+    else:
+        horizon_models = [d for d in catalog if d["horizon"] == horizon]
+        if not horizon_models:
+            raise FileNotFoundError(
+                f"No trained model for {coin} horizon={horizon}. "
+                f"Run  python src/ml/train_lstm.py --coin {coin} --horizon {horizon}  first."
+            )
+        chosen = next(d for d in horizon_models if d["is_newest"]) \
+            if any(d["is_newest"] for d in horizon_models) \
+            else max(horizon_models, key=lambda d: d["version"])
+
+    chosen = {**chosen}
+    chosen["model_path"]    = _MODEL_DIR / chosen["model_file"]
+    chosen["scaler_path"]   = _MODEL_DIR / chosen["scaler_file"]
+    chosen["version_label"] = f"v{chosen['version']}"
+    return chosen
 
 
 # ── Data loading ───────────────────────────────────────────────────────────────
@@ -395,6 +527,8 @@ def _write_predictions(
     vol_predictions: np.ndarray | None = None,
     model_version_str: str = MODEL_VERSION,
     horizon: int = HORIZON,
+    model_id: str = "",
+    version: int | None = None,
 ) -> list[dict]:
     """
     Write 7-day forecast to  predictions  collection (upsert on coin + prediction_date).
@@ -438,6 +572,8 @@ def _write_predictions(
             "prediction_date": prediction_date,
             "confidence":      confidence,
             "model_version":   model_version_str,
+            "model_id":        model_id,
+            "version":         version,
             "seed_source":     seed_source,
             "created_at":      now_utc,
             "horizon":         horizon,
@@ -454,7 +590,12 @@ def _write_predictions(
             doc["predicted_volatility"] = float(vol_predictions[idx])
 
         collection.update_one(
-            {"coin": doc["coin"], "prediction_date": doc["prediction_date"], "horizon": doc["horizon"]},
+            {
+                "coin": doc["coin"],
+                "prediction_date": doc["prediction_date"],
+                "horizon": doc["horizon"],
+                "model_id": doc["model_id"],
+            },
             {"$set": doc},
             upsert=True,
         )
@@ -480,6 +621,7 @@ def _write_predictions(
             {
                 "coin":            run_doc["coin"],
                 "horizon":         run_doc["horizon"],
+                "model_id":        run_doc["model_id"],
                 "run_date":        run_date_day,
                 "prediction_date": run_doc["prediction_date"],
             },
@@ -493,52 +635,38 @@ def _write_predictions(
 
 # ── Main entry-point ───────────────────────────────────────────────────────────
 
-def run_inference(coin: str = "bitcoin", mongo_uri: str | None = None, horizon: int = HORIZON) -> list[dict]:
+def run_inference(
+    coin: str = "bitcoin",
+    mongo_uri: str | None = None,
+    horizon: int = HORIZON,
+    model_id: str | None = None,
+) -> list[dict]:
     """
     Full inference pipeline: load model → build seed → forecast → write to MongoDB.
-
-    Tries to load v2 model first; falls back to v1 (no direction head) if v2 not found.
 
     Parameters
     ----------
     coin      : CoinGecko coin id — "bitcoin" or "dogecoin"
     mongo_uri : optional MongoDB URI override
+    horizon   : forecast horizon (7/15/60). Used to pick the newest model for that
+                horizon when *model_id* is not given.
+    model_id  : optional explicit model file stem (e.g. "lstm_bitcoin_h7_v3").
+                When given, that exact version is loaded and its predictions are
+                tagged with it — used for on-demand "predict now" with old models.
 
     Returns list of prediction documents.
     """
     coin_symbol = _COIN_SYMBOL_MAP.get(coin, coin.upper())
 
-    # ── 1. Load model — horizon-specific v3 → legacy v3 → v2 → v1 ───────────
-    # Primary: horizon-specific artifact (e.g. lstm_bitcoin_h7_v3.pt)
-    path_h = _MODEL_DIR / f"lstm_{coin}_h{horizon}_v3.pt"
-    scaler_h = _MODEL_DIR / f"scaler_{coin}_h{horizon}_v3.pkl"
-
-    # Legacy fallbacks (pre-horizon naming)
-    path_v3 = _model_path_v3(coin)
-    path_v2 = _model_path_v2(coin)
-    path_v1 = _model_path_v1(coin)
-
-    if path_h.exists() and scaler_h.exists():
-        model_path     = path_h
-        scaler_path    = scaler_h
-        loaded_version = "v3"
-    elif path_v3.exists() and _scaler_path_v3(coin).exists():
-        model_path     = path_v3
-        scaler_path    = _scaler_path_v3(coin)
-        loaded_version = "v3"
-    elif path_v2.exists():
-        model_path     = path_v2
-        scaler_path    = _scaler_path(coin)
-        loaded_version = "v2"
-    elif path_v1.exists():
-        model_path     = path_v1
-        scaler_path    = _scaler_path(coin)
-        loaded_version = "v1"
-    else:
-        raise FileNotFoundError(
-            f"No trained model found for {coin} (horizon={horizon}). "
-            f"Run  python src/ml/train_lstm.py --coin {coin} --horizon {horizon}  first."
-        )
+    # ── 1. Resolve & load model (explicit model_id, else newest for horizon) ──
+    resolved       = _resolve_model(coin, horizon, model_id=model_id)
+    model_path     = resolved["model_path"]
+    scaler_path    = resolved["scaler_path"]
+    loaded_version = resolved["version_label"]   # "v1" | "v2" | "v3"
+    resolved_id    = resolved["model_id"]
+    version_num    = resolved["version"]
+    # Honour the resolved model's own horizon (legacy artifacts pin to 7)
+    horizon        = resolved["horizon"]
 
     if not scaler_path.exists():
         raise FileNotFoundError(
@@ -676,6 +804,8 @@ def run_inference(coin: str = "bitcoin", mongo_uri: str | None = None, horizon: 
         vol_predictions=vol_predictions,
         model_version_str=mv_str,
         horizon=horizon,
+        model_id=resolved_id,
+        version=version_num,
     )
     return docs
 
@@ -687,9 +817,18 @@ if __name__ == "__main__":
         choices=["bitcoin", "dogecoin"],
         help="CoinGecko coin id (default: bitcoin)",
     )
+    parser.add_argument(
+        "--horizon", type=int, default=HORIZON, choices=[7, 15, 60],
+        help="Forecast horizon; picks newest model for that horizon (default: 7)",
+    )
+    parser.add_argument(
+        "--model-id", type=str, default=None,
+        help="Explicit model file stem to load (e.g. lstm_bitcoin_h7_v3). "
+             "Overrides --horizon's newest-model selection.",
+    )
     args = parser.parse_args()
 
-    docs = run_inference(coin=args.coin)
+    docs = run_inference(coin=args.coin, horizon=args.horizon, model_id=args.model_id)
     print(f"\nWrote {len(docs)} predictions for {args.coin} to MongoDB predictions collection.")
     for d in docs:
         direction = d.get("direction", "—")

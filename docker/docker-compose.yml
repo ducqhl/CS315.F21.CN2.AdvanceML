@@ -220,6 +220,9 @@ services:
       ADMIN_USERNAME: ${ADMIN_USERNAME:-admin}
       ADMIN_PASSWORD: ${ADMIN_PASSWORD:-password123}
       JWT_SECRET_KEY: ${JWT_SECRET_KEY:-crypto_quantum_terminal_secret_2026}
+      MODEL_DIR: /ml/model
+    volumes:
+      - ../src/ml/model:/ml/model:ro   # model artifacts for version discovery (read-only)
     healthcheck:
       test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health')\" || exit 1"]
       interval: 15s
