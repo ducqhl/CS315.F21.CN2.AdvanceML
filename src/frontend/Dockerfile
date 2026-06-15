@@ -3,6 +3,8 @@ WORKDIR /app
 COPY package*.json .
 RUN npm ci --legacy-peer-deps
 COPY . .
+# public/docs is a host symlink to ../../../docs/html (outside build context); drop it so vite build doesn't choke
+RUN rm -f public/docs
 ARG VITE_API_URL
 ENV VITE_API_URL=$VITE_API_URL
 RUN npm run build
