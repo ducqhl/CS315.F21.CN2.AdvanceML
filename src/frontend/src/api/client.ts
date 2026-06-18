@@ -221,6 +221,29 @@ export const fetchIntraday = (coin: string, params: { date?: string; range?: Int
   api.get<IntradayResponse>(`/intraday/${coin}`, { params }).then(r => r.data);
 
 // ── ML Model Registry types ────────────────────────────────────────────────────
+export interface FoldMetric {
+  fold: number;
+  rmse: number;
+  mae: number;
+  dir_acc: number;
+  n_train: number;
+  n_val: number;
+}
+
+export interface ScoreReport {
+  coin: string;
+  horizon: number;
+  rmse: number;
+  mae: number;
+  directional_accuracy_pct: number;
+  walk_forward_dir_acc_mean?: number | null;
+  walk_forward_rmse_mean?: number | null;
+  per_fold_metrics?: FoldMetric[];
+  epochs_trained?: number | null;
+  best_val_loss?: number | null;
+  window_days?: number | null;
+}
+
 export interface ModelRegistryEntry {
   coin: string;
   coin_id: string;
@@ -239,6 +262,7 @@ export interface ModelRegistryEntry {
     epochs_trained?: number;
     best_val_loss?: number;
   } | null;
+  score_report?: ScoreReport | null;
   registered_at?: string;
 }
 
@@ -304,3 +328,7 @@ export const fetchPredictStatus = (coin?: string, modelId?: string) =>
   api.get<PredictStatusResponse>('/ml/predict/status', {
     params: { ...(coin ? { coin } : {}), ...(modelId ? { model_id: modelId } : {}) },
   }).then(r => r.data);
+
+// ── System Overview ────────────────────────────────────────────────────────────
+export const fetchSystemOverview = () =>
+  api.get('/system/overview').then(r => r.data);

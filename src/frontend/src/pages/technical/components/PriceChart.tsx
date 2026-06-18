@@ -1,21 +1,55 @@
 import {
-  ResponsiveContainer, ComposedChart, Line, Area, XAxis, YAxis, CartesianGrid, Tooltip,
+  ResponsiveContainer, ComposedChart, Line, Area, Bar, XAxis, YAxis, CartesianGrid, Tooltip,
 } from 'recharts';
 import ChartTooltip from '../../../components/charts/ChartTooltip';
-import { fmtPrice, type TechnicalPoint, type OverlayKey } from '../types';
+import { fmtPrice, type TechnicalPoint, type OverlayKey, type ChartType } from '../types';
 import type { Coin } from '../../../lib/coin';
 
 interface PriceChartProps {
   coin: Coin;
   data: TechnicalPoint[];
   overlays: Record<OverlayKey, boolean>;
+  chartType: ChartType;
   xInterval: number;
   yWidth: number;
 }
 
-/** Main price area chart with MA20/MA50/Bollinger overlays. */
-export default function PriceChart({ coin, data, overlays, xInterval, yWidth }: PriceChartProps) {
+const UP = '#00F0A0';
+const DOWN = '#FF3864';
+
+// Custom recharts shape for one candle. Geometry (x/y/width/height) describes the
+// floating bar spanning [low, high]; open/close come from the datum payload.
+function Candle(props: any) {
+  const { x, y, width, height, payload } = props;
+  const { open, close, high, low } = payload as TechnicalPoint;
+  if (high == null || low == null) return null;
+
+  const up = close >= open;
+  const color = up ? UP : DOWN;
+  const cx = x + width / 2;
+  const bodyW = Math.max(1, Math.min(width * 0.7, 10));
+
+  // Map a price within [low, high] to a y pixel using the bar's geometry.
+  const span = high - low;
+  const priceToY = (p: number) =>
+    span === 0 ? y : y + ((high - p) / span) * height;
+
+  const bodyTop = priceToY(Math.max(open, close));
+  const bodyBot = priceToY(Math.min(open, close));
+  const bodyH = Math.max(1, bodyBot - bodyTop); // ≥1px so flat days stay visible
+
+  return (
+    <g>
+      <line x1={cx} x2={cx} y1={y} y2={y + height} stroke={color} strokeWidth={1} />
+      <rect x={cx - bodyW / 2} y={bodyTop} width={bodyW} height={bodyH} fill={color} />
+    </g>
+  );
+}
+
+/** Main price chart (line or candle) with MA20/MA50/Bollinger overlays. */
+export default function PriceChart({ coin, data, overlays, chartType, xInterval, yWidth }: PriceChartProps) {
   const dec = coin === 'bitcoin' ? 2 : 6;
+  const isCandle = chartType === 'candle';
   return (
     <div className="card" style={{ padding: '20px', marginBottom: '10px' }}>
       <div style={{ fontSize: '13px', fontWeight: 600, color: 'var(--text-primary)', fontFamily: 'Plus Jakarta Sans', marginBottom: '14px' }}>
@@ -38,8 +72,12 @@ export default function PriceChart({ coin, data, overlays, xInterval, yWidth }: 
             domain={['auto', 'auto']}
             tickFormatter={v => fmtPrice(v, coin)} />
           <Tooltip content={<ChartTooltip skipNull format={v => `$${v.toLocaleString('en-US', { minimumFractionDigits: dec, maximumFractionDigits: dec })}`} />} />
-          <Area type="monotone" dataKey="close" name="Close"
-            stroke="var(--accent-light)" strokeWidth={2} fill="url(#techGrad)" dot={false} />
+          {isCandle ? (
+            <Bar dataKey="range" name="Close" shape={<Candle />} isAnimationActive={false} legendType="none" />
+          ) : (
+            <Area type="monotone" dataKey="close" name="Close"
+              stroke="var(--accent-light)" strokeWidth={2} fill="url(#techGrad)" dot={false} />
+          )}
           {overlays.ma20 && (
             <Line type="monotone" dataKey="sma20" name="MA 20"
               stroke="var(--warn)" strokeWidth={1.5} strokeDasharray="4 2" dot={false} connectNulls />

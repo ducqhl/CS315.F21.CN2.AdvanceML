@@ -9,8 +9,20 @@ import TechnicalPage from './pages/TechnicalPage';
 import PredictionsPage from './pages/PredictionsPage';
 import CorrelationPage from './pages/CorrelationPage';
 import ModelRegistryPage from './pages/ModelRegistryPage';
+import SystemStatsPage from './pages/SystemStatsPage';
 import LSTMResearchPage from './pages/LSTMResearchPage';
 import DocsPage from './pages/DocsPage';
+import ArchitectureDoc from './pages/docs/ArchitectureDoc';
+import ProducerDoc from './pages/docs/ProducerDoc';
+import SparkStreamingDoc from './pages/docs/SparkStreamingDoc';
+import SparkBatchDoc from './pages/docs/SparkBatchDoc';
+import MongoDBDoc from './pages/docs/MongoDBDoc';
+import LSTMDoc from './pages/docs/LSTMDoc';
+import APIDoc from './pages/docs/APIDoc';
+import FrontendDoc from './pages/docs/FrontendDoc';
+import TestingDoc from './pages/docs/TestingDoc';
+import DeploymentDoc from './pages/docs/DeploymentDoc';
+import InterviewQADoc from './pages/docs/InterviewQADoc';
 import { fetchStats } from './api/client';
 import { type Coin } from './lib/coin';
 import { PUBLIC_PAGES, pageVariants, type Page } from './components/layout/navigation';
@@ -78,8 +90,19 @@ function AppShell() {
   if (!isAuthenticated && PUBLIC_PAGES.has(page)) {
     return (
       <PublicShell page={page} setPage={setPage}>
-        {page === 'docs'          && <DocsPage onNavigate={(p) => setPage(p as Page)} />}
-        {page === 'lstm-research' && <LSTMResearchPage />}
+        {page === 'docs'             && <DocsPage onNavigate={(p) => setPage(p as Page)} />}
+        {page === 'lstm-research'    && <LSTMResearchPage />}
+        {page === 'doc-architecture' && <ArchitectureDoc />}
+        {page === 'doc-producer'     && <ProducerDoc />}
+        {page === 'doc-streaming'    && <SparkStreamingDoc />}
+        {page === 'doc-batch'        && <SparkBatchDoc />}
+        {page === 'doc-mongodb'      && <MongoDBDoc />}
+        {page === 'doc-lstm'         && <LSTMDoc />}
+        {page === 'doc-api'          && <APIDoc />}
+        {page === 'doc-frontend'     && <FrontendDoc />}
+        {page === 'doc-testing'      && <TestingDoc />}
+        {page === 'doc-deployment'   && <DeploymentDoc />}
+        {page === 'doc-qa'           && <InterviewQADoc />}
       </PublicShell>
     );
   }
@@ -125,8 +148,20 @@ function AppShell() {
             {page === 'predictions' && <PredictionsPage coin={coin} />}
             {page === 'correlation' && <CorrelationPage />}
             {page === 'models'        && <ModelRegistryPage />}
+            {page === 'system-stats'  && <SystemStatsPage />}
             {page === 'lstm-research' && <LSTMResearchPage />}
             {page === 'docs'          && <DocsPage onNavigate={(p) => setPage(p as Page)} />}
+            {page === 'doc-architecture' && <ArchitectureDoc />}
+            {page === 'doc-producer'     && <ProducerDoc />}
+            {page === 'doc-streaming'    && <SparkStreamingDoc />}
+            {page === 'doc-batch'        && <SparkBatchDoc />}
+            {page === 'doc-mongodb'      && <MongoDBDoc />}
+            {page === 'doc-lstm'         && <LSTMDoc />}
+            {page === 'doc-api'          && <APIDoc />}
+            {page === 'doc-frontend'     && <FrontendDoc />}
+            {page === 'doc-testing'      && <TestingDoc />}
+            {page === 'doc-deployment'   && <DeploymentDoc />}
+            {page === 'doc-qa'           && <InterviewQADoc />}
           </motion.div>
         </AnimatePresence>
       </main>

@@ -471,14 +471,6 @@ def train(
         logger.info("Model saved to %s", out_model_path)
         logger.info("Scaler saved to %s", scaler_out)
 
-        # Register model in MongoDB registry (always, even if test set was empty)
-        try:
-            from model_registry import register_model   # noqa: PLC0415
-            register_model(coin=coin, horizon=horizon, metrics=metrics)
-            logger.info("Model registered in registry (coin=%s, horizon=%d).", coin, horizon)
-        except Exception as _reg_exc:
-            logger.warning("Model registry update skipped (non-fatal): %s", _reg_exc)
-
     # ── Walk-forward validation + score report ────────────────────────────────
     if not dry_run:
         from walk_forward import walk_forward_validation, FOLD_SIZE  # noqa: PLC0415
@@ -521,6 +513,14 @@ def train(
         logger.info("  Test dir acc:       %.1f%%", score_report["directional_accuracy_pct"])
         logger.info("  WF dir acc (mean):  %.1f%%", wf.get("dir_acc_mean") or 0)
         logger.info("  WF RMSE (mean):     $%.2f",  wf.get("rmse_mean") or 0)
+
+        # Register model in MongoDB registry with full score_report
+        try:
+            from model_registry import register_model   # noqa: PLC0415
+            register_model(coin=coin, horizon=horizon, metrics=metrics, score_report=score_report)
+            logger.info("Model registered in registry (coin=%s, horizon=%d).", coin, horizon)
+        except Exception as _reg_exc:
+            logger.warning("Model registry update skipped (non-fatal): %s", _reg_exc)
 
     return metrics
 

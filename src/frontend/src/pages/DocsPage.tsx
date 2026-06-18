@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { ArrowLeft, ExternalLink, Brain, FileText } from 'lucide-react';
+import { Brain, FileText } from 'lucide-react';
 
 /* ── Types ──────────────────────────────────────────────────────────────── */
 type DocEntry = {
@@ -36,118 +36,128 @@ const DOCS: DocEntry[] = [
     num: '01',
     title: 'Lambda Architecture',
     emoji: '🏗️',
-    description: 'Thiết kế tổng quan, lý do chọn Lambda vs Kappa, luồng dữ liệu ba layer. Trade-off latency vs accuracy.',
-    file: '/docs/01_architecture.html',
+    description: 'Thiết kế tổng quan, lý do chọn Lambda vs Kappa, luồng dữ liệu ba layer, các quyết định thiết kế quan trọng và trade-off latency vs accuracy.',
+    inApp: 'doc-architecture',
     category: 'Architecture',
     accent: '#5c8aff',
     tags: ['Lambda', 'Design', 'Trade-offs'],
+    badge: 'IN-APP',
   },
   {
     id: 'producer',
     num: '02',
     title: 'CoinGecko Producer',
     emoji: '📡',
-    description: 'Poll mỗi 600s, acks=all, retries=3, linger_ms=100. OHLC mỗi 3 cycle. Rate limit + exponential backoff.',
-    file: '/docs/02_producer.html',
+    description: 'Thành phần thu thập dữ liệu giá từ CoinGecko API mỗi 600 giây với acks=all, retries=3. OHLC mỗi 3 chu kỳ. Rate limit budget và exponential backoff.',
+    inApp: 'doc-producer',
     category: 'Data Pipeline',
     accent: '#f97316',
     tags: ['Kafka', 'Ingestion', 'Rate Limit'],
+    badge: 'IN-APP',
   },
   {
     id: 'streaming',
     num: '03',
     title: 'Spark Streaming',
     emoji: '⚡',
-    description: 'Watermark 10min, micro-batch 30s. Query A: windowed agg. Query B: RSI/Bollinger/VWAP/ATR per-record. foreachBatch writes MongoDB.',
-    file: '/docs/03_spark_streaming.html',
+    description: 'Spark Structured Streaming với watermark 10 phút, micro-batch 30 giây. Query A: windowed aggregation. Query B: RSI/Bollinger/VWAP/ATR per-record. foreachBatch writes MongoDB.',
+    inApp: 'doc-streaming',
     category: 'Data Pipeline',
     accent: '#f97316',
     tags: ['Spark', 'Streaming', 'Indicators'],
+    badge: 'IN-APP',
   },
   {
     id: 'batch',
     num: '04',
     title: 'Spark Batch',
     emoji: '📦',
-    description: '4,165 ngày lịch sử. Outputs: daily_stats, historical_sma (SMA-7/30/90), coin_correlation. Submitted via run_batch.sh.',
-    file: '/docs/04_spark_batch.html',
+    description: 'Batch Layer xử lý 4.165 ngày lịch sử. Outputs: daily_stats, historical_sma (SMA-7/14/30/90), coin_correlation BTC-DOGE. Kết quả r=0.528.',
+    inApp: 'doc-batch',
     category: 'Data Pipeline',
     accent: '#f97316',
     tags: ['Spark', 'Batch', 'SMA'],
+    badge: 'IN-APP',
   },
   {
     id: 'mongodb',
     num: '05',
     title: 'MongoDB',
     emoji: '🗄️',
-    description: '7 collections. TTL policy trên speed layer. Compound indexes cho time-range queries. Single serving store.',
-    file: '/docs/05_mongodb.html',
+    description: 'Single serving store với 7+ collections. TTL policy trên Speed Layer (7 ngày). Compound indexes cho time-range queries. Upsert idempotency cho predictions.',
+    inApp: 'doc-mongodb',
     category: 'Data Pipeline',
     accent: '#34d399',
     tags: ['MongoDB', 'Schema', 'Indexes'],
+    badge: 'IN-APP',
   },
   {
     id: 'lstm',
     num: '06',
     title: 'LSTM Model',
     emoji: '🧠',
-    description: '9 features · 2-layer encoder · 128 hidden units · dual-head. Walk-forward validation, 61.1% directional accuracy (BTC).',
-    file: '/docs/06_lstm.html',
+    description: '9 features, sequence_length=60, 2-layer LSTM encoder, 128 hidden units, dual-head output. Walk-forward validation với 61.1% directional accuracy (BTC backtest H7).',
+    inApp: 'doc-lstm',
     category: 'Machine Learning',
     accent: '#c084fc',
     tags: ['LSTM', 'Dual-Head', '61.1% Acc'],
+    badge: 'IN-APP',
   },
   {
     id: 'api',
     num: '07',
     title: 'FastAPI Backend',
     emoji: '🔌',
-    description: 'JWT stateless auth. REST endpoints: prices, predictions, model registry, accuracy. Merges batch + speed views per query.',
-    file: '/docs/07_api.html',
+    description: 'JWT stateless auth (TTL 24h). REST endpoints: prices, predictions, model registry, accuracy. Merges batch + speed views per query. Auto-refresh interceptor.',
+    inApp: 'doc-api',
     category: 'Serving Layer',
     accent: '#6366f1',
     tags: ['FastAPI', 'JWT', 'REST'],
+    badge: 'IN-APP',
   },
   {
     id: 'frontend',
     num: '08',
     title: 'React + Streamlit',
     emoji: '🖥️',
-    description: 'React 19 + TypeScript + Vite + Tailwind. 5 trang: Dashboard, Realtime, Technical, Predictions, Correlation. Streamlit port 8501.',
-    file: '/docs/08_frontend.html',
+    description: 'React 19 + TypeScript + Vite + Tailwind. 5 trang phân tích: Dashboard, Realtime, Technical, Predictions, Correlation. Streamlit dashboard port 8501.',
+    inApp: 'doc-frontend',
     category: 'Serving Layer',
     accent: '#6366f1',
     tags: ['React', 'Streamlit', 'Frontend'],
+    badge: 'IN-APP',
   },
   {
     id: 'testing',
     num: '09',
     title: 'E2E Testing',
     emoji: '🧪',
-    description: '3-layer E2E với testcontainers thật. Layer 1: Producer→Kafka. Layer 2: Spark Batch→MongoDB. Layer 3: ML Pipeline→MongoDB. 24 test cases.',
-    file: '/docs/09_testing.html',
+    description: '3-layer E2E với testcontainers thật. Layer 1: Producer→Kafka. Layer 2: Spark Batch→MongoDB. Layer 3: ML Pipeline→MongoDB. 7 unit test suites + 3 E2E suites.',
+    inApp: 'doc-testing',
     category: 'Testing & Ops',
     accent: '#22c55e',
-    tags: ['Pytest', 'E2E', '24 Tests'],
+    tags: ['Pytest', 'E2E', 'testcontainers'],
+    badge: 'IN-APP',
   },
   {
     id: 'deploy',
     num: '10',
     title: 'Docker Compose',
     emoji: '🐳',
-    description: '9 services: Zookeeper, Kafka, Kafka-UI, MongoDB, Spark Master+Worker, Producer, API, Dashboard, Frontend, Inference Scheduler.',
-    file: '/docs/10_deployment.html',
+    description: '9 services: Zookeeper, Kafka, Kafka-UI, MongoDB, Spark Master+Worker, Producer, API, Dashboard, Frontend, Inference Scheduler. Health checks và dependency chain.',
+    inApp: 'doc-deployment',
     category: 'Testing & Ops',
     accent: '#22c55e',
     tags: ['Docker', '9 Services', 'DevOps'],
+    badge: 'IN-APP',
   },
   {
     id: 'qa',
     num: '11',
     title: 'Phản biện Q&A',
     emoji: '🎯',
-    description: '20+ câu hỏi phản biện với câu trả lời chi tiết cho buổi bảo vệ. Architectural decisions, ML limitations, production trade-offs.',
-    file: '/docs/11_interview_qa.html',
+    description: '28 câu hỏi phản biện với câu trả lời chi tiết cho buổi bảo vệ. Architectural decisions, ML limitations, production trade-offs. Accordion expand/collapse.',
+    inApp: 'doc-qa',
     category: 'Interview Prep',
     accent: '#f87171',
     tags: ['Q&A', 'Defense', 'Important'],
@@ -283,118 +293,6 @@ function DocCard({
   );
 }
 
-/* ── DocViewer ──────────────────────────────────────────────────────────── */
-function DocViewer({ entry, onBack }: { entry: DocEntry; onBack: () => void }) {
-  const [loaded, setLoaded] = useState(false);
-
-  return (
-    <motion.div
-      initial={{ opacity: 0, y: 6 }}
-      animate={{ opacity: 1, y: 0 }}
-      exit={{ opacity: 0, y: -4 }}
-      transition={{ duration: 0.18 }}
-      style={{ display: 'flex', flexDirection: 'column' }}
-    >
-      {/* Viewer header bar */}
-      <div style={{
-        display: 'flex', alignItems: 'center', gap: '12px',
-        padding: '10px 0', marginBottom: '12px',
-        borderBottom: `1px solid color-mix(in srgb, ${entry.accent} 25%, var(--border))`,
-      }}>
-        <button
-          onClick={onBack}
-          style={{
-            display: 'flex', alignItems: 'center', gap: '6px',
-            background: 'none', border: '1px solid var(--border)', borderRadius: '7px',
-            padding: '6px 12px', cursor: 'pointer', color: 'var(--text-secondary)',
-            fontFamily: 'Plus Jakarta Sans', fontSize: '12px', fontWeight: 500,
-            transition: 'all 0.12s',
-          }}
-          onMouseEnter={e => {
-            e.currentTarget.style.borderColor = 'var(--border-active)';
-            e.currentTarget.style.color = 'var(--text-primary)';
-          }}
-          onMouseLeave={e => {
-            e.currentTarget.style.borderColor = 'var(--border)';
-            e.currentTarget.style.color = 'var(--text-secondary)';
-          }}
-        >
-          <ArrowLeft size={13} />
-          Documents
-        </button>
-
-        <div style={{ width: '1px', height: '20px', background: 'var(--border)' }} />
-
-        <span style={{ fontSize: '18px' }}>{entry.emoji}</span>
-
-        <div>
-          <span style={{ fontFamily: 'Plus Jakarta Sans', fontSize: '14px', fontWeight: 700, color: 'var(--text-primary)' }}>
-            {entry.title}
-          </span>
-          <span style={{
-            marginLeft: '8px', fontFamily: 'IBM Plex Mono', fontSize: '9px',
-            color: entry.accent,
-            padding: '1px 6px', borderRadius: '3px',
-            background: `color-mix(in srgb, ${entry.accent} 12%, transparent)`,
-          }}>
-            {entry.category}
-          </span>
-        </div>
-
-        <div style={{ flex: 1 }} />
-
-        <a
-          href={entry.file}
-          target="_blank"
-          rel="noopener noreferrer"
-          style={{
-            display: 'flex', alignItems: 'center', gap: '5px',
-            fontFamily: 'Plus Jakarta Sans', fontSize: '12px', fontWeight: 500,
-            color: 'var(--text-muted)', textDecoration: 'none',
-            padding: '6px 10px', borderRadius: '6px', border: '1px solid var(--border)',
-            transition: 'all 0.12s',
-          }}
-          onMouseEnter={e => {
-            e.currentTarget.style.color = 'var(--text-secondary)';
-            e.currentTarget.style.borderColor = 'var(--border-active)';
-          }}
-          onMouseLeave={e => {
-            e.currentTarget.style.color = 'var(--text-muted)';
-            e.currentTarget.style.borderColor = 'var(--border)';
-          }}
-        >
-          <ExternalLink size={11} />
-          New tab
-        </a>
-      </div>
-
-      {/* Loading skeleton */}
-      {!loaded && (
-        <div className="skeleton" style={{ width: '100%', height: 'calc(100vh - 200px)', borderRadius: '8px' }} />
-      )}
-
-      {/* Iframe */}
-      <div style={{
-        borderRadius: '10px', overflow: 'hidden',
-        border: `1px solid color-mix(in srgb, ${entry.accent} 20%, var(--border))`,
-        display: loaded ? 'block' : 'none',
-      }}>
-        <iframe
-          src={entry.file}
-          title={entry.title}
-          onLoad={() => setLoaded(true)}
-          style={{
-            width: '100%',
-            height: 'calc(100vh - 200px)',
-            border: 'none',
-            display: 'block',
-            minHeight: '700px',
-          }}
-        />
-      </div>
-    </motion.div>
-  );
-}
 
 /* ── Main DocsPage ──────────────────────────────────────────────────────── */
 interface Props {
@@ -402,33 +300,17 @@ interface Props {
 }
 
 export default function DocsPage({ onNavigate }: Props) {
-  const [viewing, setViewing] = useState<DocEntry | null>(null);
   const [activeCategory, setActiveCategory] = useState<string>('All');
 
   const handleCardClick = (entry: DocEntry) => {
     if (entry.inApp) {
       onNavigate(entry.inApp);
-    } else if (entry.file) {
-      setViewing(entry);
     }
   };
 
   const filtered = activeCategory === 'All'
     ? DOCS
     : DOCS.filter(d => d.category === activeCategory);
-
-  /* ── Viewer mode ── */
-  if (viewing) {
-    return (
-      <AnimatePresence mode="wait">
-        <DocViewer
-          key={viewing.id}
-          entry={viewing}
-          onBack={() => setViewing(null)}
-        />
-      </AnimatePresence>
-    );
-  }
 
   /* ── Grid mode ── */
   return (
@@ -511,9 +393,8 @@ export default function DocsPage({ onNavigate }: Props) {
         display: 'flex', alignItems: 'center', gap: '10px',
       }}>
         <span style={{ fontSize: '13px', color: 'var(--text-muted)', fontFamily: 'Plus Jakarta Sans' }}>
-          Nhấn vào card để xem tài liệu trong app ·
-          <span style={{ color: 'var(--accent-light)', marginLeft: '4px' }}>IN-APP</span> docs mở ngay trong trang ·
-          <span style={{ color: '#5c8aff', marginLeft: '4px' }}>HTML</span> docs hiển thị trong trình xem nhúng
+          Tất cả 12 tài liệu mở trực tiếp trong app ·
+          <span style={{ color: 'var(--accent-light)', marginLeft: '4px' }}>IN-APP</span> — nội dung học thuật bằng tiếng Việt đầy đủ · CS315.F21.CN2
         </span>
       </div>
     </div>

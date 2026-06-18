@@ -61,6 +61,7 @@ def register_model(
     coin: str,
     horizon: int,
     metrics: dict,
+    score_report: dict | None = None,
     mongo_uri: str | None = None,
 ) -> None:
     """
@@ -81,6 +82,7 @@ def register_model(
         "scaler_file":   scaler_filename(coin, horizon),
         "model_exists":  model_exists(coin, horizon),
         "metrics":       metrics,
+        "score_report":  score_report,
         "registered_at": datetime.now(timezone.utc),
     }
 

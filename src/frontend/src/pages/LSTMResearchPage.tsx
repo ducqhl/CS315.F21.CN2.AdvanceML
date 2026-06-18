@@ -1,794 +1,487 @@
 import { useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
-  BookOpen, Brain, Cpu, Layers, Network, ExternalLink,
-  ChevronRight, Info, BookMarked, Calculator,
+  Target, Database, Boxes, Dumbbell, Sparkles, BarChart3,
+  BookMarked, ExternalLink, ArrowRight, Network,
 } from 'lucide-react';
+import {
+  SectionCard, SectionTitle, BodyText, Callout, CodeBlock,
+  EqBlock, TeX, DataTable, FlowDiagram, Mono, Tag, SubTitle,
+} from './docs/shared';
 
-type Tab = 'intro' | 'architecture' | 'math' | 'variants' | 'application' | 'references';
+/* ════════════════════════════════════════════════════════════════════════════
+   LSTM — Ứng dụng vào bài toán dự đoán giá crypto của dự án
+   Trang này KHÔNG dạy lại lý thuyết LSTM (xem trang "LSTM — Long Short-Term
+   Memory" trong Docs). Ở đây ta đi thẳng vào: dự án dùng LSTM NHƯ THẾ NÀO,
+   kèm code thật trích từ src/ml/.
+   ════════════════════════════════════════════════════════════════════════════ */
+
+type Tab =
+  | 'overview' | 'data' | 'model' | 'training' | 'inference'
+  | 'results' | 'references';
 
 const TABS: { id: Tab; label: string; icon: React.ReactNode }[] = [
-  { id: 'intro',        label: 'Giới thiệu',  icon: <BookOpen size={13} /> },
-  { id: 'architecture', label: 'Kiến trúc',   icon: <Brain size={13} /> },
-  { id: 'math',         label: 'Toán học',    icon: <Calculator size={13} /> },
-  { id: 'variants',     label: 'Biến thể',    icon: <Layers size={13} /> },
-  { id: 'application',  label: 'Ứng dụng',    icon: <Cpu size={13} /> },
-  { id: 'references',   label: 'Tài liệu',    icon: <BookMarked size={13} /> },
+  { id: 'overview',   label: 'Tổng quan',   icon: <Target size={13} /> },
+  { id: 'data',       label: 'Dữ liệu',     icon: <Database size={13} /> },
+  { id: 'model',      label: 'Mô hình',     icon: <Boxes size={13} /> },
+  { id: 'training',   label: 'Huấn luyện',  icon: <Dumbbell size={13} /> },
+  { id: 'inference',  label: 'Suy luận',    icon: <Sparkles size={13} /> },
+  { id: 'results',    label: 'Kết quả',     icon: <BarChart3 size={13} /> },
+  { id: 'references', label: 'Tài liệu',    icon: <BookMarked size={13} /> },
 ];
-
-/* ── shared sub-components ──────────────────────────────────────────────── */
-
-function SectionCard({ children, style }: { children: React.ReactNode; style?: React.CSSProperties }) {
-  return (
-    <div className="card" style={{ padding: '24px', marginBottom: '16px', ...style }}>
-      {children}
-    </div>
-  );
-}
-
-function SectionTitle({ children, accent = 'var(--accent-light)' }: { children: React.ReactNode; accent?: string }) {
-  return (
-    <div style={{
-      display: 'flex', alignItems: 'center', gap: '8px',
-      marginBottom: '14px',
-    }}>
-      <div style={{ width: '3px', height: '18px', background: accent, borderRadius: '2px', flexShrink: 0 }} />
-      <h2 style={{ margin: 0, fontSize: '15px', fontWeight: 700, color: 'var(--text-primary)', fontFamily: 'Plus Jakarta Sans' }}>
-        {children}
-      </h2>
-    </div>
-  );
-}
-
-function BodyText({ children, style }: { children: React.ReactNode; style?: React.CSSProperties }) {
-  return (
-    <p style={{
-      margin: '0 0 12px', fontSize: '13.5px', lineHeight: 1.75,
-      color: 'var(--text-secondary)', fontFamily: 'Plus Jakarta Sans',
-      ...style,
-    }}>
-      {children}
-    </p>
-  );
-}
-
-function MathBlock({ children }: { children: React.ReactNode }) {
-  return (
-    <div style={{
-      background: 'var(--bg-elevated)', border: '1px solid var(--border)',
-      borderRadius: '8px', padding: '14px 18px', margin: '10px 0',
-    }}>
-      <code style={{ fontFamily: 'IBM Plex Mono', fontSize: '13px', color: 'var(--text-primary)', whiteSpace: 'pre' }}>
-        {children}
-      </code>
-    </div>
-  );
-}
 
 function Cite({ n }: { n: number }) {
   return (
-    <sup style={{
-      fontFamily: 'IBM Plex Mono', fontSize: '10px',
-      color: 'var(--accent-light)', marginLeft: '2px',
-    }}>
+    <sup style={{ fontFamily: 'IBM Plex Mono', fontSize: '10px', color: 'var(--accent-light)', marginLeft: '2px' }}>
       [{n}]
     </sup>
   );
 }
 
-function InfoBox({ children, color = 'var(--accent)' }: { children: React.ReactNode; color?: string }) {
+/* Một dòng "lý thuyết → code của chúng ta" */
+function MapRow({ theory, code }: { theory: React.ReactNode; code: React.ReactNode }) {
   return (
-    <div style={{
-      display: 'flex', gap: '10px', padding: '12px 14px',
-      background: `color-mix(in srgb, ${color} 8%, transparent)`,
-      border: `1px solid color-mix(in srgb, ${color} 20%, transparent)`,
-      borderRadius: '8px', marginBottom: '12px',
-    }}>
-      <Info size={14} color={color} style={{ flexShrink: 0, marginTop: '2px' }} />
-      <p style={{ margin: 0, fontSize: '13px', lineHeight: 1.65, color: 'var(--text-secondary)', fontFamily: 'Plus Jakarta Sans' }}>
-        {children}
-      </p>
+    <div style={{ display: 'flex', gap: '10px', alignItems: 'center', flexWrap: 'wrap', marginBottom: '8px' }}>
+      <span style={{ fontSize: '12.5px', color: 'var(--text-secondary)', fontFamily: 'Plus Jakarta Sans', flex: '1 1 200px' }}>
+        {theory}
+      </span>
+      <ArrowRight size={13} color="var(--text-muted)" style={{ flexShrink: 0 }} />
+      <span style={{ flex: '1 1 200px' }}>{code}</span>
     </div>
   );
 }
 
-/* ── LSTM Cell SVG Diagram ──────────────────────────────────────────────── */
-function LSTMDiagram() {
-  const gateForget = '#F97316';  // orange
-  const gateInput  = '#818CF8';  // indigo
-  const gateOutput = '#22C55E';  // green
-  const stateLine  = '#94A3B8';  // slate
+/* ── 1. TỔNG QUAN ─────────────────────────────────────────────────────────── */
 
-  return (
-    <div style={{ overflowX: 'auto', margin: '16px 0' }}>
-      <svg viewBox="0 0 780 310" style={{ width: '100%', maxWidth: '780px', minWidth: '600px' }} aria-label="LSTM Cell Diagram">
-        <defs>
-          <marker id="arr-gray" markerWidth="7" markerHeight="7" refX="4" refY="3.5" orient="auto">
-            <path d="M0,0.5 L0,6.5 L6,3.5 z" fill={stateLine} />
-          </marker>
-          <marker id="arr-orange" markerWidth="7" markerHeight="7" refX="4" refY="3.5" orient="auto">
-            <path d="M0,0.5 L0,6.5 L6,3.5 z" fill={gateForget} />
-          </marker>
-          <marker id="arr-indigo" markerWidth="7" markerHeight="7" refX="4" refY="3.5" orient="auto">
-            <path d="M0,0.5 L0,6.5 L6,3.5 z" fill={gateInput} />
-          </marker>
-          <marker id="arr-green" markerWidth="7" markerHeight="7" refX="4" refY="3.5" orient="auto">
-            <path d="M0,0.5 L0,6.5 L6,3.5 z" fill={gateOutput} />
-          </marker>
-        </defs>
-
-        {/* ── Cell state conveyor belt (top) ── */}
-        {/* C_{t-1} input */}
-        <line x1="10" y1="75" x2="148" y2="75" stroke={stateLine} strokeWidth="2.5" markerEnd="url(#arr-gray)" />
-        <text x="8" y="64" fontFamily="IBM Plex Mono" fontSize="11" fill={stateLine}>C</text>
-        <text x="14" y="67" fontFamily="IBM Plex Mono" fontSize="8" fill={stateLine}>t-1</text>
-
-        {/* × Forget on cell state */}
-        <circle cx="165" cy="75" r="14" fill="none" stroke={gateForget} strokeWidth="2" />
-        <text x="165" y="80" textAnchor="middle" fontFamily="IBM Plex Mono" fontSize="16" fill={gateForget} fontWeight="bold">×</text>
-
-        {/* Cell state line: forget → add */}
-        <line x1="179" y1="75" x2="358" y2="75" stroke={stateLine} strokeWidth="2.5" markerEnd="url(#arr-gray)" />
-
-        {/* + Add (input gate) on cell state */}
-        <circle cx="374" cy="75" r="14" fill="none" stroke={gateInput} strokeWidth="2" />
-        <text x="374" y="81" textAnchor="middle" fontFamily="IBM Plex Mono" fontSize="18" fill={gateInput} fontWeight="bold">+</text>
-
-        {/* Cell state line: add → C_t */}
-        <line x1="388" y1="75" x2="620" y2="75" stroke={stateLine} strokeWidth="2.5" />
-
-        {/* tanh applied to C_t for output */}
-        <rect x="621" y="58" width="56" height="34" rx="7" fill="none" stroke={gateOutput} strokeWidth="1.5" strokeDasharray="4 2" />
-        <text x="649" y="76" textAnchor="middle" fontFamily="IBM Plex Mono" fontSize="11" fill={gateOutput}>tanh</text>
-        <text x="649" y="86" textAnchor="middle" fontFamily="IBM Plex Mono" fontSize="8" fill="var(--text-muted)">(C_t)</text>
-
-        {/* C_t label + arrow out */}
-        <line x1="677" y1="75" x2="710" y2="75" stroke={stateLine} strokeWidth="2.5" markerEnd="url(#arr-gray)" />
-        <text x="716" y="79" fontFamily="IBM Plex Mono" fontSize="11" fill={stateLine}>C</text>
-        <text x="722" y="82" fontFamily="IBM Plex Mono" fontSize="8" fill={stateLine}>t</text>
-
-        {/* ── FORGET GATE ── */}
-        <rect x="128" y="148" width="74" height="38" rx="8" fill={`${gateForget}22`} stroke={gateForget} strokeWidth="1.5" />
-        <text x="165" y="164" textAnchor="middle" fontFamily="IBM Plex Mono" fontSize="10" fill={gateForget} fontWeight="600">σ  f</text>
-        <text x="172" y="167" fontFamily="IBM Plex Mono" fontSize="7" fill={gateForget}>t</text>
-        <text x="165" y="178" textAnchor="middle" fontFamily="Plus Jakarta Sans" fontSize="9" fill="var(--text-muted)">Forget Gate</text>
-
-        {/* Forget gate → × on cell state */}
-        <line x1="165" y1="148" x2="165" y2="90" stroke={gateForget} strokeWidth="1.5" markerEnd="url(#arr-orange)" strokeDasharray="3 2" />
-
-        {/* ── INPUT GATE: σ ── */}
-        <rect x="278" y="148" width="68" height="38" rx="8" fill={`${gateInput}22`} stroke={gateInput} strokeWidth="1.5" />
-        <text x="312" y="164" textAnchor="middle" fontFamily="IBM Plex Mono" fontSize="10" fill={gateInput} fontWeight="600">σ  i</text>
-        <text x="319" y="167" fontFamily="IBM Plex Mono" fontSize="7" fill={gateInput}>t</text>
-        <text x="312" y="178" textAnchor="middle" fontFamily="Plus Jakarta Sans" fontSize="9" fill="var(--text-muted)">Input Gate</text>
-
-        {/* ── INPUT GATE: tanh (candidate) ── */}
-        <rect x="360" y="148" width="76" height="38" rx="8" fill={`${gateInput}22`} stroke={gateInput} strokeWidth="1.5" />
-        <text x="398" y="164" textAnchor="middle" fontFamily="IBM Plex Mono" fontSize="10" fill={gateInput} fontWeight="600">tanh g̃</text>
-        <text x="398" y="178" textAnchor="middle" fontFamily="Plus Jakarta Sans" fontSize="9" fill="var(--text-muted)">Candidate</text>
-
-        {/* i_t × g̃_t → + on cell state */}
-        <line x1="374" y1="148" x2="374" y2="90" stroke={gateInput} strokeWidth="1.5" markerEnd="url(#arr-indigo)" strokeDasharray="3 2" />
-
-        {/* ── OUTPUT GATE ── */}
-        <rect x="536" y="148" width="74" height="38" rx="8" fill={`${gateOutput}22`} stroke={gateOutput} strokeWidth="1.5" />
-        <text x="573" y="164" textAnchor="middle" fontFamily="IBM Plex Mono" fontSize="10" fill={gateOutput} fontWeight="600">σ  o</text>
-        <text x="580" y="167" fontFamily="IBM Plex Mono" fontSize="7" fill={gateOutput}>t</text>
-        <text x="573" y="178" textAnchor="middle" fontFamily="Plus Jakarta Sans" fontSize="9" fill="var(--text-muted)">Output Gate</text>
-
-        {/* ── × for h_t (output gate × tanh(C_t)) ── */}
-        <circle cx="573" cy="240" r="14" fill="none" stroke={gateOutput} strokeWidth="2" />
-        <text x="573" y="245" textAnchor="middle" fontFamily="IBM Plex Mono" fontSize="16" fill={gateOutput} fontWeight="bold">×</text>
-
-        {/* output gate → × (h_t) */}
-        <line x1="573" y1="186" x2="573" y2="226" stroke={gateOutput} strokeWidth="1.5" markerEnd="url(#arr-green)" />
-
-        {/* tanh(C_t) → × (h_t) */}
-        <line x1="649" y1="92" x2="649" y2="240" stroke={gateOutput} strokeWidth="1.5" />
-        <line x1="649" y1="240" x2="587" y2="240" stroke={gateOutput} strokeWidth="1.5" markerEnd="url(#arr-green)" />
-
-        {/* h_t output */}
-        <line x1="573" y1="254" x2="573" y2="285" stroke={gateOutput} strokeWidth="2" markerEnd="url(#arr-green)" />
-        <text x="573" y="300" textAnchor="middle" fontFamily="IBM Plex Mono" fontSize="12" fill={gateOutput} fontWeight="600">h</text>
-        <text x="580" y="303" fontFamily="IBM Plex Mono" fontSize="8" fill={gateOutput}>t</text>
-
-        {/* h_t also feeds back as h_{t+1} */}
-        <line x1="587" y1="240" x2="730" y2="240" stroke={gateOutput} strokeWidth="1.5" strokeDasharray="4 3" />
-        <text x="735" y="244" fontFamily="IBM Plex Mono" fontSize="9" fill="var(--text-muted)">→ next step</text>
-
-        {/* ── Shared input [h_{t-1}, x_t] ── */}
-        <rect x="90" y="238" width="150" height="32" rx="8" fill="var(--bg-elevated)" stroke="var(--border)" strokeWidth="1.5" />
-        <text x="165" y="254" textAnchor="middle" fontFamily="IBM Plex Mono" fontSize="10" fill="var(--text-secondary)">[h</text>
-        <text x="181" y="257" fontFamily="IBM Plex Mono" fontSize="7" fill="var(--text-secondary)">t-1</text>
-        <text x="188" y="254" fontFamily="IBM Plex Mono" fontSize="10" fill="var(--text-secondary)">, x</text>
-        <text x="202" y="257" fontFamily="IBM Plex Mono" fontSize="7" fill="var(--text-secondary)">t</text>
-        <text x="207" y="254" fontFamily="IBM Plex Mono" fontSize="10" fill="var(--text-secondary)">]</text>
-        <text x="165" y="265" textAnchor="middle" fontFamily="Plus Jakarta Sans" fontSize="9" fill="var(--text-muted)">Concatenated Input</text>
-
-        {/* Lines from input to each gate */}
-        <line x1="165" y1="238" x2="165" y2="186" stroke={stateLine} strokeWidth="1.2" markerEnd="url(#arr-gray)" />
-        <line x1="180" y1="254" x2="312" y2="186" stroke={stateLine} strokeWidth="1.2" markerEnd="url(#arr-gray)" />
-        <line x1="200" y1="238" x2="398" y2="186" stroke={stateLine} strokeWidth="1.2" markerEnd="url(#arr-gray)" />
-        <line x1="240" y1="250" x2="573" y2="186" stroke={stateLine} strokeWidth="1.2" strokeDasharray="3 2" markerEnd="url(#arr-gray)" />
-
-        {/* Legend */}
-        <rect x="10" y="270" width="10" height="10" rx="2" fill={`${gateForget}33`} stroke={gateForget} strokeWidth="1" />
-        <text x="24" y="279" fontFamily="Plus Jakarta Sans" fontSize="9" fill="var(--text-secondary)">Forget</text>
-        <rect x="78" y="270" width="10" height="10" rx="2" fill={`${gateInput}33`} stroke={gateInput} strokeWidth="1" />
-        <text x="92" y="279" fontFamily="Plus Jakarta Sans" fontSize="9" fill="var(--text-secondary)">Input</text>
-        <rect x="130" y="270" width="10" height="10" rx="2" fill={`${gateOutput}33`} stroke={gateOutput} strokeWidth="1" />
-        <text x="144" y="279" fontFamily="Plus Jakarta Sans" fontSize="9" fill="var(--text-secondary)">Output</text>
-      </svg>
-    </div>
-  );
-}
-
-/* ── Gate explanation card ──────────────────────────────────────────────── */
-function GateCard({
-  color, label, symbol, formula, description,
-}: {
-  color: string; label: string; symbol: string; formula: string; description: string;
-}) {
-  return (
-    <div style={{
-      background: `color-mix(in srgb, ${color} 6%, var(--bg-card))`,
-      border: `1px solid color-mix(in srgb, ${color} 22%, var(--border))`,
-      borderRadius: '10px', padding: '16px', flex: '1 1 220px',
-    }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '10px' }}>
-        <div style={{
-          width: '28px', height: '28px', borderRadius: '7px',
-          background: `color-mix(in srgb, ${color} 18%, transparent)`,
-          border: `1px solid color-mix(in srgb, ${color} 30%, transparent)`,
-          display: 'flex', alignItems: 'center', justifyContent: 'center',
-          fontFamily: 'IBM Plex Mono', fontSize: '14px', color, fontWeight: 700,
-        }}>
-          {symbol}
-        </div>
-        <span style={{ fontFamily: 'Plus Jakarta Sans', fontWeight: 700, fontSize: '14px', color: 'var(--text-primary)' }}>
-          {label}
-        </span>
-      </div>
-      <code style={{ display: 'block', fontFamily: 'IBM Plex Mono', fontSize: '11.5px', color, marginBottom: '8px' }}>
-        {formula}
-      </code>
-      <p style={{ margin: 0, fontSize: '12.5px', color: 'var(--text-secondary)', lineHeight: 1.65, fontFamily: 'Plus Jakarta Sans' }}>
-        {description}
-      </p>
-    </div>
-  );
-}
-
-/* ── Timeline item ──────────────────────────────────────────────────────── */
-function TimelineItem({ year, event, citation }: { year: string; event: string; citation?: string }) {
-  return (
-    <div style={{ display: 'flex', gap: '14px', marginBottom: '14px' }}>
-      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', flexShrink: 0 }}>
-        <div style={{
-          width: '52px', height: '22px', borderRadius: '5px',
-          background: 'var(--accent-muted)', border: '1px solid rgba(99,102,241,0.2)',
-          display: 'flex', alignItems: 'center', justifyContent: 'center',
-        }}>
-          <span style={{ fontFamily: 'IBM Plex Mono', fontSize: '10px', color: 'var(--accent-light)', fontWeight: 600 }}>{year}</span>
-        </div>
-        <div style={{ width: '1px', flex: 1, background: 'var(--border)', marginTop: '4px' }} />
-      </div>
-      <div style={{ paddingTop: '2px', paddingBottom: '14px' }}>
-        <p style={{ margin: 0, fontSize: '13px', color: 'var(--text-secondary)', fontFamily: 'Plus Jakarta Sans', lineHeight: 1.6 }}>
-          {event}
-          {citation && <span style={{ fontFamily: 'IBM Plex Mono', fontSize: '10px', color: 'var(--accent-light)', marginLeft: '4px' }}>{citation}</span>}
-        </p>
-      </div>
-    </div>
-  );
-}
-
-/* ── Sections ───────────────────────────────────────────────────────────── */
-
-function IntroSection() {
+function OverviewSection() {
   return (
     <div>
       <SectionCard>
-        <SectionTitle>LSTM là gì?</SectionTitle>
+        <SectionTitle accent="#5C8AFF">Bài toán: dự đoán giá Bitcoin & Dogecoin</SectionTitle>
         <BodyText>
-          <strong style={{ color: 'var(--text-primary)' }}>Long Short-Term Memory (LSTM)</strong> là một kiến trúc mạng nơ-ron hồi tiếp (Recurrent Neural Network — RNN) đặc biệt, được thiết kế để học các <em>phụ thuộc dài hạn</em> trong dữ liệu tuần tự. LSTM được giới thiệu lần đầu bởi <strong style={{ color: 'var(--text-primary)' }}>Sepp Hochreiter và Jürgen Schmidhuber</strong> năm 1997 trong bài báo nổi tiếng đăng trên tạp chí <em>Neural Computation</em>.<Cite n={1} />
+          Mục tiêu cụ thể của dự án: <strong style={{ color: 'var(--text-primary)' }}>nhìn 60 ngày gần nhất của một
+          đồng coin, rồi dự đoán đường giá cho nhiều ngày tới</strong>. Đây đúng là dạng bài "dữ liệu chuỗi" mà LSTM
+          sinh ra để giải — quá khứ có thứ tự, và thứ tự đó mang thông tin (xu hướng, đà tăng/giảm, chu kỳ).
         </BodyText>
         <BodyText>
-          Khác với RNN truyền thống — vốn bị hạn chế bởi vấn đề <strong style={{ color: 'var(--warn)' }}>vanishing gradient</strong> — LSTM sử dụng cơ chế <em>gate</em> (cổng) để kiểm soát luồng thông tin, cho phép mạng "nhớ" hoặc "quên" thông tin một cách có chọn lọc qua hàng trăm đến hàng nghìn bước thời gian.<Cite n={3} />
+          Thay vì đoán một con số duy nhất, ta huấn luyện <strong style={{ color: 'var(--text-primary)' }}>3 mô hình
+          riêng cho 3 "tầm nhìn" (horizon)</strong>: 7, 15 và 60 ngày. Mỗi mô hình đoán <em>cả</em> chuỗi ngày của
+          horizon đó trong <strong style={{ color: 'var(--text-primary)' }}>một lần chạy duy nhất</strong> (gọi là
+          MIMO — Multi-Input Multi-Output), nên lỗi không bị tích lũy dần như cách "đoán từng ngày rồi nạp lại".
         </BodyText>
-        <InfoBox>
-          Tính đến năm 2017, LSTM là kiến trúc RNN được sử dụng rộng rãi nhất trong các bài toán nhận dạng giọng nói, dịch máy, phân tích cảm xúc và dự báo chuỗi thời gian — trước khi Transformer (Vaswani et al., 2017) dần chiếm ưu thế trong NLP.
-        </InfoBox>
+        <Callout variant="info">
+          <strong>Trang này nói về "cách dùng", không phải "lý thuyết".</strong> Nếu bạn cần hiểu LSTM hoạt động
+          bên trong ra sao (cổng quên/ghi/xuất, băng chuyền Cell State, vì sao tránh được vanishing gradient), hãy
+          đọc trang <em>"LSTM — Long Short-Term Memory"</em> trong mục Docs. Ở đây ta tập trung vào{' '}
+          <strong style={{ color: 'var(--text-primary)' }}>dữ liệu, kiến trúc, cách huấn luyện và suy luận thực tế
+          của dự án</strong> — kèm code thật.
+        </Callout>
       </SectionCard>
 
       <SectionCard>
-        <SectionTitle accent="var(--warn)">Vấn đề Vanishing Gradient trong RNN</SectionTitle>
+        <SectionTitle>Đường đi của dữ liệu — từ giá thô tới dự đoán</SectionTitle>
         <BodyText>
-          Khi huấn luyện RNN bằng giải thuật <strong style={{ color: 'var(--text-primary)' }}>Backpropagation Through Time (BPTT)</strong>, gradient lan truyền ngược qua nhiều timestep. Theo Bengio et al. (1994)<Cite n={2} />, gradient giảm theo hàm số mũ:
+          Toàn bộ pipeline có thể tóm trong một dòng. Mỗi khối dưới đây tương ứng một phần của trang này:
         </BodyText>
-        <MathBlock>{`‖∂h_t / ∂h_k‖ ≤ (λ_max · ‖W‖)^(t-k)
-
-Khi λ_max · ‖W‖ < 1:  gradient → 0  (vanishing)
-Khi λ_max · ‖W‖ > 1:  gradient → ∞  (exploding)`}</MathBlock>
-        <BodyText>
-          Hệ quả: RNN thông thường chỉ học được các phụ thuộc ngắn hạn (short-term dependencies). LSTM giải quyết điều này thông qua <strong style={{ color: 'var(--accent-light)' }}>cell state</strong> — một "đường cao tốc" thẳng chạy qua toàn bộ chuỗi với rất ít phép biến đổi phi tuyến, giữ cho gradient ổn định.
-        </BodyText>
-      </SectionCard>
-
-      <SectionCard>
-        <SectionTitle accent="var(--purple)">Lịch sử phát triển</SectionTitle>
-        <div style={{ marginTop: '4px' }}>
-          <TimelineItem year="1991" event="Hochreiter chỉ ra vấn đề vanishing gradient trong luận văn tốt nghiệp tại TU Munich." citation="[8]" />
-          <TimelineItem year="1997" event="Hochreiter & Schmidhuber công bố LSTM — kiến trúc đầu tiên dùng gated cell state để giải quyết long-term dependencies." citation="[1]" />
-          <TimelineItem year="2000" event="Gers et al. bổ sung forget gate và peephole connections, giúp LSTM mô hình hóa thời gian tốt hơn." citation="[5]" />
-          <TimelineItem year="2005" event="Graves & Schmidhuber giới thiệu Bidirectional LSTM (BiLSTM) cho bài toán nhận dạng ngữ âm." citation="[6]" />
-          <TimelineItem year="2014" event="Cho et al. đề xuất GRU (Gated Recurrent Unit) — phiên bản đơn giản hóa của LSTM với 2 gate." citation="[4]" />
-          <TimelineItem year="2015" event='Colah xuất bản bài viết nổi tiếng "Understanding LSTMs" giải thích kiến trúc một cách trực quan.' citation="[3]" />
-          <TimelineItem year="2017" event="Google sử dụng LSTM đa tầng trong hệ thống dịch thuật Google Translate, đạt kết quả tiệm cận con người." />
-        </div>
-      </SectionCard>
-    </div>
-  );
-}
-
-function ArchitectureSection() {
-  return (
-    <div>
-      <SectionCard>
-        <SectionTitle>Sơ đồ LSTM Cell</SectionTitle>
-        <BodyText>
-          Mỗi LSTM cell nhận vào hai trạng thái từ bước trước: <code style={{ fontFamily: 'IBM Plex Mono', fontSize: '12px', color: 'var(--accent-light)' }}>h_{"{t-1}"}</code> (hidden state) và <code style={{ fontFamily: 'IBM Plex Mono', fontSize: '12px', color: 'var(--accent-light)' }}>C_{"{t-1}"}</code> (cell state). Cùng với input hiện tại <code style={{ fontFamily: 'IBM Plex Mono', fontSize: '12px', color: 'var(--accent-light)' }}>x_t</code>, chúng tạo ra <code style={{ fontFamily: 'IBM Plex Mono', fontSize: '12px', color: '#22C55E' }}>h_t</code> và <code style={{ fontFamily: 'IBM Plex Mono', fontSize: '12px', color: '#94A3B8' }}>C_t</code> mới.<Cite n={3} />
-        </BodyText>
-        <LSTMDiagram />
-        <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap', marginTop: '8px' }}>
+        <FlowDiagram nodes={[
+          { label: 'CSV / MongoDB', sub: 'giá lịch sử', variant: 'mongo' },
+          { label: '9 Features', sub: 'log-return…', variant: 'lstm' },
+          { label: 'StandardScaler', sub: 'fit trên train', variant: 'lstm' },
+          { label: 'Cửa sổ trượt', sub: '60 × 9 → 7', variant: 'lstm' },
+          { label: 'LSTM 2 lớp', sub: 'hidden 128', variant: 'lstm' },
+          { label: 'Price + Vol Head', variant: 'lstm' },
+          { label: 'predictions', sub: 'MongoDB', variant: 'mongo' },
+        ]} />
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: '10px', marginTop: '12px' }}>
           {[
-            { color: '#F97316', label: '× Forget', desc: 'Loại bỏ thông tin cũ' },
-            { color: '#818CF8', label: '+ Input',  desc: 'Thêm thông tin mới' },
-            { color: '#22C55E', label: '× Output', desc: 'Lọc đầu ra h_t' },
-            { color: '#94A3B8', label: 'C_t belt', desc: 'Conveyor cell state' },
-          ].map(({ color, label, desc }) => (
-            <div key={label} style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-              <div style={{ width: '10px', height: '10px', borderRadius: '50%', background: color, flexShrink: 0 }} />
-              <span style={{ fontFamily: 'IBM Plex Mono', fontSize: '10px', color: 'var(--text-secondary)' }}>
-                {label} — {desc}
-              </span>
-            </div>
-          ))}
-        </div>
-      </SectionCard>
-
-      <SectionCard>
-        <SectionTitle>Ba cổng của LSTM</SectionTitle>
-        <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap' }}>
-          <GateCard
-            color="#F97316" label="Forget Gate" symbol="f"
-            formula="f_t = σ(W_f·[h_{t-1}, x_t] + b_f)"
-            description="Quyết định thông tin nào trong cell state cũ cần được quên. Output là vector trong [0,1]: 0 = quên hoàn toàn, 1 = giữ lại hoàn toàn."
-          />
-          <GateCard
-            color="#818CF8" label="Input Gate" symbol="i"
-            formula={"i_t = σ(W_i·[h_{t-1}, x_t] + b_i)\ng̃_t = tanh(W_c·[h_{t-1}, x_t] + b_c)"}
-            description="Hai phần: i_t (cổng sigmoid) quyết định thông tin nào được cập nhật; g̃_t (tanh) tạo ra vector ứng viên của giá trị mới cần thêm vào."
-          />
-          <GateCard
-            color="#22C55E" label="Output Gate" symbol="o"
-            formula={"o_t = σ(W_o·[h_{t-1}, x_t] + b_o)\nh_t = o_t ⊙ tanh(C_t)"}
-            description="Lọc phần nào của cell state sẽ là output. tanh(C_t) đưa giá trị về [-1,1]; o_t (sigmoid) quyết định phần nào được phép qua."
-          />
-        </div>
-      </SectionCard>
-
-      <SectionCard>
-        <SectionTitle>Cell State — Conveyor Belt</SectionTitle>
-        <BodyText>
-          Điểm mấu chốt của LSTM chính là <strong style={{ color: 'var(--accent-light)' }}>cell state C_t</strong> — một luồng thông tin chạy thẳng qua toàn bộ chuỗi, chỉ bị biến đổi bởi các phép tính tuyến tính nhỏ.<Cite n={3} /> Colah (2015) mô tả đây là "conveyor belt" — băng truyền chạy dọc theo chuỗi, dễ dàng truyền gradient về đầu mà không bị suy giảm.
-        </BodyText>
-        <MathBlock>{`C_t = f_t ⊙ C_{t-1}  +  i_t ⊙ g̃_t
-         │                  │
-         └── Quên cũ         └── Thêm mới`}</MathBlock>
-        <BodyText>
-          Ký hiệu <code style={{ fontFamily: 'IBM Plex Mono', fontSize: '12px', color: 'var(--text-primary)' }}>⊙</code> là phép nhân Hadamard (element-wise). Gradient của loss qua C_t chủ yếu chỉ đi qua phép cộng (<code style={{ fontFamily: 'IBM Plex Mono', fontSize: '11px', color: 'var(--text-primary)' }}>+</code>), tránh được vấn đề vanishing.
-        </BodyText>
-      </SectionCard>
-    </div>
-  );
-}
-
-function MathSection() {
-  return (
-    <div>
-      <SectionCard>
-        <SectionTitle>Hệ phương trình LSTM đầy đủ</SectionTitle>
-        <BodyText>
-          Tại mỗi timestep <em>t</em>, LSTM tính toán theo hệ 6 phương trình sau<Cite n={1} /><Cite n={7} />:
-        </BodyText>
-        <MathBlock>{`(1) Forget gate:      f_t = σ(W_f · [h_{t-1}, x_t] + b_f)
-
-(2) Input gate:       i_t = σ(W_i · [h_{t-1}, x_t] + b_i)
-
-(3) Candidate state:  g̃_t = tanh(W_c · [h_{t-1}, x_t] + b_c)
-
-(4) Cell state:       C_t = f_t ⊙ C_{t-1} + i_t ⊙ g̃_t
-
-(5) Output gate:      o_t = σ(W_o · [h_{t-1}, x_t] + b_o)
-
-(6) Hidden state:     h_t = o_t ⊙ tanh(C_t)`}</MathBlock>
-      </SectionCard>
-
-      <SectionCard>
-        <SectionTitle>Ký hiệu và chiều dữ liệu</SectionTitle>
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: '10px' }}>
-          {[
-            { sym: 'x_t ∈ ℝⁿ',       desc: 'Input tại timestep t (n = số features)' },
-            { sym: 'h_t ∈ ℝʰ',        desc: 'Hidden state (h = hidden units, e.g. 128)' },
-            { sym: 'C_t ∈ ℝʰ',        desc: 'Cell state, cùng chiều với h_t' },
-            { sym: 'W_f, W_i, W_c, W_o', desc: 'Ma trận trọng số ∈ ℝʰˣ⁽ʰ⁺ⁿ⁾' },
-            { sym: 'b_f, b_i, b_c, b_o', desc: 'Bias vectors ∈ ℝʰ' },
-            { sym: 'σ(z) = 1/(1+e⁻ᶻ)', desc: 'Sigmoid — nén về [0, 1]' },
-            { sym: 'tanh(z)',           desc: 'Hyperbolic tangent — nén về [-1, 1]' },
-            { sym: '⊙',                desc: 'Element-wise (Hadamard) multiplication' },
-          ].map(({ sym, desc }) => (
-            <div key={sym} style={{
-              background: 'var(--bg-elevated)', borderRadius: '8px', padding: '12px',
-              display: 'flex', gap: '10px',
+            { c: '#22C55E', t: 'Vì sao LSTM hợp?', d: 'Giá crypto phụ thuộc xa (chu kỳ 30–90 ngày) — đúng thế mạnh của Cell State.' },
+            { c: '#A78BFA', t: 'Dữ liệu nhiễu mạnh', d: 'Kurtosis 11–77: pump/crash cực đoan thường xuyên → cần loss bền với outlier (Huber).' },
+            { c: '#F59E0B', t: 'Không stationary', d: 'Giá trôi theo thời gian → ta học trên log-return (đã dừng) thay vì giá thô.' },
+          ].map(x => (
+            <div key={x.t} style={{
+              background: `color-mix(in srgb, ${x.c} 6%, var(--bg-card))`,
+              border: `1px solid color-mix(in srgb, ${x.c} 20%, var(--border))`,
+              borderTop: `3px solid ${x.c}`, borderRadius: '8px', padding: '13px',
             }}>
-              <code style={{ fontFamily: 'IBM Plex Mono', fontSize: '11px', color: 'var(--accent-light)', flexShrink: 0, paddingTop: '1px' }}>
-                {sym}
-              </code>
-              <span style={{ fontSize: '12.5px', color: 'var(--text-secondary)', fontFamily: 'Plus Jakarta Sans', lineHeight: 1.5 }}>
-                {desc}
-              </span>
+              <div style={{ fontFamily: 'Plus Jakarta Sans', fontWeight: 700, fontSize: '12.5px', color: 'var(--text-primary)', marginBottom: '5px' }}>{x.t}</div>
+              <div style={{ fontFamily: 'Plus Jakarta Sans', fontSize: '11.5px', color: 'var(--text-secondary)', lineHeight: 1.55 }}>{x.d}</div>
             </div>
           ))}
         </div>
-      </SectionCard>
-
-      <SectionCard>
-        <SectionTitle>Hàm mất mát và Backpropagation Through Time</SectionTitle>
-        <BodyText>
-          LSTM được huấn luyện bằng <strong style={{ color: 'var(--text-primary)' }}>BPTT (Backpropagation Through Time)</strong>. Gradient của loss được tính qua cả sequence:
-        </BodyText>
-        <MathBlock>{`∂L / ∂W = Σ_t  ∂L_t / ∂W
-
-Gradient qua cell state (chain rule):
-∂C_t / ∂C_{t-k} = Π_{j=t-k+1}^{t}  f_j     ← product of forget gates
-
-→ Khi f_j ≈ 1: gradient không suy giảm  ✓
-→ Khi f_j ≈ 0: cell state bị cắt đứt có chủ ý  ✓`}</MathBlock>
-        <BodyText>
-          Đây là lý do tại sao forget gate (với bias khởi tạo = 1) giúp LSTM tránh được vanishing gradient — gradient chỉ cần nhân với giá trị forget gate gần 1.<Cite n={5} />
-        </BodyText>
-      </SectionCard>
-
-      <SectionCard>
-        <SectionTitle>Số lượng tham số</SectionTitle>
-        <BodyText>
-          Tổng số tham số của một LSTM layer với input size <em>n</em> và hidden size <em>h</em>:
-        </BodyText>
-        <MathBlock>{`Params = 4 × (h × (h + n) + h)
-       = 4 × (h² + h·n + h)
-
-Ví dụ dự án này: h=128, n=số features (~10-20)
-Params ≈ 4 × (128² + 128×15 + 128) = 4 × (16384 + 1920 + 128)
-       ≈ 74,128 tham số / layer × 2 layers = ~148K params`}</MathBlock>
       </SectionCard>
     </div>
   );
 }
 
-function VariantsSection() {
+/* ── 2. DỮ LIỆU ───────────────────────────────────────────────────────────── */
+
+function DataSection() {
   return (
     <div>
       <SectionCard>
-        <SectionTitle>Peephole Connections</SectionTitle>
+        <SectionTitle accent="#22C55E">Mỗi ngày là một vector 9 con số</SectionTitle>
         <BodyText>
-          Gers & Schmidhuber (2000)<Cite n={5} /> đề xuất cho phép các gate "nhìn vào" cell state C_{"{t-1}"} trực tiếp (không chỉ qua h_{"{t-1}"}):
+          LSTM không "nhìn" giá thô. Mỗi ngày <TeX>{String.raw`x_t`}</TeX> được mô tả bằng{' '}
+          <strong style={{ color: 'var(--text-primary)' }}>9 đặc trưng (feature)</strong> — coi như "9 giác quan" để
+          cảm nhận thị trường: đà tăng, độ biến động, quá mua/quá bán… Quan trọng nhất:{' '}
+          <strong style={{ color: 'var(--text-primary)' }}>feature số 0 bắt buộc là <Mono>log_return_1d</Mono></strong>{' '}
+          — vì lúc suy luận ta sẽ đảo ngược chính cột này để dựng lại giá USD.
         </BodyText>
-        <MathBlock>{`f_t = σ(W_f · [C_{t-1}, h_{t-1}, x_t] + b_f)
-i_t = σ(W_i · [C_{t-1}, h_{t-1}, x_t] + b_i)
-o_t = σ(W_o · [C_t,   h_{t-1}, x_t] + b_o)  ← dùng C_t hiện tại`}</MathBlock>
-        <BodyText>
-          Điều này giúp LSTM mô hình hóa chính xác hơn các khoảng thời gian (timing), đặc biệt hữu ích trong nhận dạng giọng nói và nhịp điệu âm nhạc.
-        </BodyText>
+        <DataTable
+          headers={['#', 'Feature', 'Nhóm', 'Ý nghĩa dễ hiểu']}
+          rows={[
+            ['0', <Mono>log_return_1d</Mono>, <Tag variant="blue">Momentum</Tag>, '% thay đổi giá so với hôm qua (dạng log). Có tính dừng — đầu vào "sạch" cho mô hình.'],
+            ['1', <Mono>momentum_30d</Mono>, <Tag variant="blue">Momentum</Tag>, 'Giá đang cao/thấp bao nhiêu so với trung bình 30 ngày → xu hướng trung hạn.'],
+            ['2', <Mono>realized_vol_14d</Mono>, <Tag variant="amber">Volatility</Tag>, 'Thị trường gần đây "rung lắc" mạnh hay êm. Đầu vào chính cho Volatility Head.'],
+            ['3', <Mono>RSI_14</Mono>, <Tag variant="purple">Oscillator</Tag>, 'Quá mua / quá bán (0–100). Đã nằm sẵn trong khoảng đẹp.'],
+            ['4', <Mono>log_volume</Mono>, <Tag variant="green">Volume</Tag>, 'Khối lượng giao dịch (lấy log). Volume xác nhận một cú breakout là thật hay giả.'],
+            ['5', <Mono>macd_norm</Mono>, <Tag variant="purple">Oscillator</Tag>, 'MACD chuẩn hoá theo giá → dùng được ở mọi mức giá.'],
+            ['6', <Mono>bb_pct_b</Mono>, <Tag variant="purple">Oscillator</Tag>, 'Giá đang ở đâu trong dải Bollinger (0 = đáy dải, 1 = đỉnh dải).'],
+            ['7', <Mono>atr_norm</Mono>, <Tag variant="amber">Volatility</Tag>, 'Biên độ dao động tức thì — bổ sung cho realized_vol.'],
+            ['8', <Mono>fear_greed</Mono>, <Tag variant="red">Sentiment</Tag>, 'Tâm lý thị trường (sợ hãi/tham lam). Hiện để placeholder 0.5.'],
+          ]}
+        />
       </SectionCard>
 
       <SectionCard>
-        <SectionTitle>GRU — Gated Recurrent Unit</SectionTitle>
+        <SectionTitle>Chuẩn hoá: chỉ "học" thống kê từ quá khứ</SectionTitle>
         <BodyText>
-          Cho et al. (2014)<Cite n={4} /> giới thiệu GRU — phiên bản đơn giản hóa của LSTM với <strong style={{ color: 'var(--text-primary)' }}>2 gate thay vì 3</strong>, không có cell state riêng:
+          9 feature có thang đo rất khác nhau (RSI tới 100, log-return quanh 0). Ta đưa tất cả về cùng thang bằng{' '}
+          <Mono>StandardScaler</Mono>. Mấu chốt: <strong style={{ color: 'var(--text-primary)' }}>chỉ <Mono>fit</Mono>{' '}
+          trên tập train</strong> rồi mới <Mono>transform</Mono> cả train/val/test — nếu fit trên toàn bộ, mô hình sẽ
+          "nhìn trộm" thống kê của tương lai (data leakage) và kết quả đẹp giả tạo.
         </BodyText>
-        <MathBlock>{`z_t = σ(W_z · [h_{t-1}, x_t])       ← Update gate
-r_t = σ(W_r · [h_{t-1}, x_t])       ← Reset gate
-h̃_t = tanh(W · [r_t ⊙ h_{t-1}, x_t])
-h_t = (1 - z_t) ⊙ h_{t-1} + z_t ⊙ h̃_t`}</MathBlock>
-        <BodyText>
-          GRU có ít tham số hơn (~75% so với LSTM) và thường đạt hiệu năng tương đương trên nhiều bài toán. Trong thực tế, việc lựa chọn giữa LSTM và GRU nên dựa trên thực nghiệm với dữ liệu cụ thể.<Cite n={7} />
-        </BodyText>
+        <CodeBlock lang="python">{`# src/ml/preprocess.py
+scaler = StandardScaler()
+scaler.fit(feat_train)               # CHỈ fit trên tập train → tránh data leakage
+scaled_train = scaler.transform(feat_train)
+scaled_val   = scaler.transform(feat_val)
+scaled_test  = scaler.transform(feat_test)
+
+# Lưu lại giá USD cuối cùng để lúc suy luận dựng ngược ra giá
+scaler.last_price_usd_ = float(close_prices[-1])`}</CodeBlock>
       </SectionCard>
 
       <SectionCard>
-        <SectionTitle>Bidirectional LSTM</SectionTitle>
+        <SectionTitle>Cửa sổ trượt: cắt chuỗi dài thành các mẫu (60 → 7)</SectionTitle>
         <BodyText>
-          Graves & Schmidhuber (2005)<Cite n={6} /> đề xuất xử lý sequence theo <strong style={{ color: 'var(--text-primary)' }}>cả hai chiều</strong> — forward và backward — rồi ghép (concatenate) kết quả:
+          LSTM cần các mẫu có dạng "60 ngày quá khứ → 7 ngày tương lai". Ta trượt một cửa sổ dọc theo chuỗi: mỗi vị
+          trí lấy 60 ngày làm <strong style={{ color: 'var(--text-primary)' }}>input <TeX>{String.raw`X`}</TeX></strong>{' '}
+          và 7 ngày kế tiếp (chỉ cột log-return, feature 0) làm{' '}
+          <strong style={{ color: 'var(--text-primary)' }}>mục tiêu <TeX>{String.raw`y`}</TeX></strong>.
         </BodyText>
-        <MathBlock>{`→h_t = LSTM_forward(x_1, ..., x_t)
-←h_t = LSTM_backward(x_T, ..., x_t)
-y_t  = [→h_t ; ←h_t]   ← concatenate, size = 2h`}</MathBlock>
-        <BodyText>
-          Đặc biệt hiệu quả khi toàn bộ sequence đã có sẵn (batch processing), ví dụ: phân loại văn bản, nhận dạng thực thể. Không áp dụng được cho real-time forecasting (vì chưa có dữ liệu tương lai).
-        </BodyText>
-      </SectionCard>
-
-      <SectionCard>
-        <SectionTitle>So sánh các biến thể</SectionTitle>
-        <div style={{ overflowX: 'auto' }}>
-          <table className="data-table">
-            <thead>
-              <tr>
-                <th>Kiến trúc</th>
-                <th>Gates</th>
-                <th>Tham số</th>
-                <th>Cell State</th>
-                <th>Ưu điểm</th>
-                <th>Nguồn</th>
-              </tr>
-            </thead>
-            <tbody>
-              {[
-                { name: 'Vanilla RNN', gates: '0', params: 'n²+nh', cell: '✗', pro: 'Đơn giản', src: '—' },
-                { name: 'LSTM', gates: '3 (f, i, o)', params: '4(h²+hn)', cell: '✓', pro: 'Long-range deps', src: '[1]' },
-                { name: 'LSTM + Peephole', gates: '3 + peep', params: '4(h²+hn)+3h', cell: '✓', pro: 'Precision timing', src: '[5]' },
-                { name: 'GRU', gates: '2 (z, r)', params: '3(h²+hn)', cell: '✗', pro: 'Ít params hơn', src: '[4]' },
-                { name: 'BiLSTM', gates: '3 × 2', params: '8(h²+hn)', cell: '✓', pro: 'Ngữ cảnh đầy đủ', src: '[6]' },
-              ].map(r => (
-                <tr key={r.name}>
-                  <td><span className="font-mono" style={{ fontSize: '12px', color: 'var(--accent-light)' }}>{r.name}</span></td>
-                  <td><span style={{ fontSize: '12px', color: 'var(--text-secondary)', fontFamily: 'Plus Jakarta Sans' }}>{r.gates}</span></td>
-                  <td><code style={{ fontFamily: 'IBM Plex Mono', fontSize: '11px', color: 'var(--text-primary)' }}>{r.params}</code></td>
-                  <td><span style={{ fontSize: '13px' }}>{r.cell}</span></td>
-                  <td><span style={{ fontSize: '12px', color: 'var(--text-secondary)', fontFamily: 'Plus Jakarta Sans' }}>{r.pro}</span></td>
-                  <td><span className="font-mono" style={{ fontSize: '10px', color: 'var(--accent-light)' }}>{r.src}</span></td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+        <CodeBlock lang="python">{`# src/ml/preprocess.py — _create_sequences()
+for i in range(seq_len, n - horizon + 1):
+    X.append(scaled[i - seq_len : i])      # (60, 9)  — 60 ngày quá khứ
+    y.append(scaled[i : i + horizon, 0])   # (7,)     — log-return 7 ngày tới
+# → X: (M, 60, 9)   y: (M, 7)`}</CodeBlock>
+        <Callout variant="info">
+          <strong>Sao chỉ lấy cột 0 làm target?</strong> Vì ta chỉ cần dự đoán <em>log-return</em> (cột 0). Từ chuỗi
+          log-return dự đoán được, công thức <TeX>{String.raw`\text{price}_k = \text{price}_0 \cdot e^{\sum \text{log-ret}}`}</TeX>{' '}
+          sẽ dựng lại giá USD (xem tab "Suy luận"). 8 feature còn lại chỉ là <em>ngữ cảnh đầu vào</em>, không phải thứ cần đoán.
+        </Callout>
       </SectionCard>
     </div>
   );
 }
 
-function ApplicationSection() {
+/* ── 3. MÔ HÌNH ───────────────────────────────────────────────────────────── */
+
+function ModelSection() {
   return (
     <div>
       <SectionCard>
-        <SectionTitle>LSTM trong dự án Crypto Analytics</SectionTitle>
+        <SectionTitle accent="#A78BFA">Kiến trúc: 1 thân LSTM, 2 cái đầu</SectionTitle>
         <BodyText>
-          Dự án này triển khai mô hình LSTM <strong style={{ color: 'var(--text-primary)' }}>dual-head</strong> để dự báo giá Bitcoin và Dogecoin. Kiến trúc được thiết kế để vừa hồi quy (regression) vừa phân loại (classification) từ cùng một backbone LSTM.
+          Mô hình gồm một <strong style={{ color: 'var(--text-primary)' }}>thân LSTM 2 lớp (hidden = 128)</strong> đóng
+          vai trò "đọc hiểu" 60 ngày, rồi nén toàn bộ ngữ cảnh vào{' '}
+          <strong style={{ color: 'var(--text-primary)' }}>hidden state ở bước cuối <TeX>{String.raw`h_T`}</TeX></strong>{' '}
+          (một vector 128 chiều). Từ <TeX>{String.raw`h_T`}</TeX> ta gắn 2 "đầu" (head) dự đoán song song:
         </BodyText>
-        <MathBlock>{`Model: 2-layer LSTM
-  Input:    sequence_length = 60 timesteps (60 phiên giao dịch)
-  Layer 1:  LSTM(hidden=128, dropout=0.2)
-  Layer 2:  LSTM(hidden=128, dropout=0.2)
-            ↓
-  ┌─────────────────────┬──────────────────────┐
-  │  Regression Head    │ Classification Head  │
-  │  Linear(128 → 1)    │ Linear(128 → 3)      │
-  │  HuberLoss          │ CrossEntropyLoss      │
-  │  → next-day price   │ → UP / FLAT / DOWN   │
-  └─────────────────────┴──────────────────────┘`}</MathBlock>
-      </SectionCard>
-
-      <SectionCard>
-        <SectionTitle accent="#22C55E">Đặc trưng đầu vào (Features)</SectionTitle>
-        <BodyText>
-          Mô hình học trên chuỗi 60 timestep, mỗi timestep gồm các đặc trưng kỹ thuật tính từ Spark Streaming:
-        </BodyText>
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: '8px', marginTop: '12px' }}>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px', marginBottom: '14px' }}>
           {[
-            { name: 'Price (close)', desc: 'Giá đóng cửa, chuẩn hóa MinMax' },
-            { name: 'Volume',        desc: 'Khối lượng giao dịch' },
-            { name: 'SMA-7/21/50',   desc: 'Simple Moving Average' },
-            { name: 'RSI',           desc: 'Relative Strength Index (0–100)' },
-            { name: 'VWAP',          desc: 'Volume-Weighted Average Price' },
-            { name: 'Bollinger Bands', desc: 'Upper/Middle/Lower bands' },
-            { name: 'ATR',           desc: 'Average True Range (volatility)' },
-            { name: 'Log Returns',   desc: 'ln(P_t / P_{t-1})' },
-          ].map(f => (
-            <div key={f.name} style={{
-              background: 'var(--bg-elevated)', borderRadius: '7px', padding: '10px 12px',
-              display: 'flex', alignItems: 'flex-start', gap: '8px',
+            { c: '#5C8AFF', t: 'Price Head', d: 'Đoán log-return cho cả horizon. Không chặn dấu (giá lên hoặc xuống đều được).' },
+            { c: '#F59E0B', t: 'Volatility Head', d: 'Đoán độ biến động mỗi ngày. Có Softplus ở cuối nên kết quả luôn > 0.' },
+          ].map(x => (
+            <div key={x.t} style={{
+              background: `color-mix(in srgb, ${x.c} 6%, var(--bg-card))`,
+              border: `1px solid color-mix(in srgb, ${x.c} 22%, var(--border))`,
+              borderTop: `3px solid ${x.c}`, borderRadius: '8px', padding: '14px',
             }}>
-              <ChevronRight size={12} color="var(--accent-light)" style={{ marginTop: '2px', flexShrink: 0 }} />
-              <div>
-                <div style={{ fontFamily: 'IBM Plex Mono', fontSize: '11.5px', color: 'var(--text-primary)', fontWeight: 600 }}>{f.name}</div>
-                <div style={{ fontFamily: 'Plus Jakarta Sans', fontSize: '11px', color: 'var(--text-muted)', marginTop: '2px' }}>{f.desc}</div>
-              </div>
+              <div style={{ fontFamily: 'Plus Jakarta Sans', fontWeight: 700, fontSize: '13px', color: 'var(--text-primary)', marginBottom: '6px' }}>{x.t}</div>
+              <div style={{ fontFamily: 'Plus Jakarta Sans', fontSize: '12px', color: 'var(--text-secondary)', lineHeight: 1.6 }}>{x.d}</div>
             </div>
           ))}
         </div>
+        <BodyText>
+          Điểm hay: <Mono>nn.LSTM</Mono> đã gói sẵn toàn bộ cơ chế cổng (forget/input/output) — ta không phải tự cài.
+          Việc của ta chỉ là <strong style={{ color: 'var(--text-primary)' }}>lấy đúng <TeX>{String.raw`h_T`}</TeX></strong>{' '}
+          rồi nối hai đầu dự đoán vào.
+        </BodyText>
       </SectionCard>
 
       <SectionCard>
-        <SectionTitle accent="var(--purple)">Huấn luyện và Suy luận</SectionTitle>
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
-          {[
-            {
-              title: 'Training Pipeline',
-              items: [
-                'Dữ liệu lịch sử từ CoinGecko API',
-                'Chuẩn hóa: MinMaxScaler (lưu file .pkl)',
-                'Train/Val split: 80/20 theo thời gian',
-                'Optimizer: Adam (lr=1e-3, weight_decay=1e-5)',
-                'Epochs: 50 (configurable)',
-                'Artifact: lstm_{coin}_v2.pt',
-              ],
-            },
-            {
-              title: 'Inference Pipeline',
-              items: [
-                'Load model + scaler từ disk',
-                'Lấy 60 ngày gần nhất từ MongoDB',
-                'Dự báo 7 ngày tiếp theo (auto-regressive)',
-                'Ghi kết quả vào collection predictions',
-                'Scheduler chạy mỗi 5 phút (intraday)',
-                'Fallback: đọc từ live_prices nếu thiếu data',
-              ],
-            },
-          ].map(col => (
-            <div key={col.title} style={{
-              background: 'var(--bg-elevated)', borderRadius: '8px', padding: '14px',
-            }}>
-              <div style={{ fontFamily: 'Plus Jakarta Sans', fontWeight: 700, fontSize: '13px', color: 'var(--text-primary)', marginBottom: '10px' }}>
-                {col.title}
-              </div>
-              {col.items.map(item => (
-                <div key={item} style={{ display: 'flex', gap: '7px', alignItems: 'flex-start', marginBottom: '6px' }}>
-                  <div style={{ width: '4px', height: '4px', borderRadius: '50%', background: 'var(--accent-light)', flexShrink: 0, marginTop: '6px' }} />
-                  <span style={{ fontFamily: 'Plus Jakarta Sans', fontSize: '12px', color: 'var(--text-secondary)', lineHeight: 1.5 }}>{item}</span>
-                </div>
-              ))}
-            </div>
-          ))}
+        <SectionTitle>Định nghĩa mô hình — code thật</SectionTitle>
+        <CodeBlock lang="python">{`# src/ml/model.py — LSTMModel.__init__
+self.lstm = nn.LSTM(
+    input_size=9, hidden_size=128, num_layers=2,
+    batch_first=True,      # x: (batch, seq_len, features)
+    dropout=0.2,           # dropout GIỮA 2 lớp LSTM
+)
+
+# Price Head: 128 → 64 → output_size (= horizon 7/15/60)
+self.fc = nn.Sequential(
+    nn.Linear(128, 64), nn.ReLU(), nn.Dropout(0.1),
+    nn.Linear(64, output_size),
+)
+
+# Volatility Head: kết thúc bằng Softplus → vol luôn > 0
+self.vol_head = nn.Sequential(
+    nn.Linear(128, 64), nn.ReLU(), nn.Dropout(0.1),
+    nn.Linear(64, output_size), nn.Softplus(),
+)`}</CodeBlock>
+
+        <SubTitle>Forward pass: chỗ lấy <TeX>{String.raw`h_T`}</TeX></SubTitle>
+        <CodeBlock lang="python">{`# src/ml/model.py — LSTMModel.forward
+def forward(self, x):                  # x: (batch, 60, 9)
+    lstm_out, _ = self.lstm(x)         # (batch, 60, 128)
+    last_hidden = lstm_out[:, -1, :]   # (batch, 128) — trí nhớ ở NGÀY CUỐI
+    price_preds = self.fc(last_hidden)         # (batch, 7) — log-return
+    vol_preds   = self.vol_head(last_hidden)   # (batch, 7) — độ biến động > 0
+    return price_preds, vol_preds`}</CodeBlock>
+        <Callout variant="info">
+          <strong><Mono>lstm_out[:, -1, :]</Mono> chính là lý thuyết.</strong> Đây đúng là{' '}
+          <TeX>{String.raw`h_T`}</TeX> trong các công thức LSTM — hidden state sau khi đã "đọc" hết 60 ngày. Cả 60
+          ngày ngữ cảnh được cô đọng vào 128 con số này, rồi hai head đọc nó để đoán.
+        </Callout>
+      </SectionCard>
+
+      <SectionCard>
+        <SectionTitle>Bảng tham số (model H7)</SectionTitle>
+        <DataTable
+          headers={['Thành phần', 'Cấu hình', 'Tham số']}
+          rows={[
+            ['LSTM Layer 1', 'input 9 → hidden 128', '70.656'],
+            ['LSTM Layer 2', 'input 128 → hidden 128', '131.584'],
+            ['Price Head', 'Linear(128→64)→ReLU→Dropout→Linear(64→7)', '8.711'],
+            ['Volatility Head', '… → Linear(64→7) → Softplus', '8.711'],
+            [<strong>TỔNG</strong>, '—', <strong>219.662</strong>],
+          ]}
+        />
+      </SectionCard>
+    </div>
+  );
+}
+
+/* ── 4. HUẤN LUYỆN ────────────────────────────────────────────────────────── */
+
+function TrainingSection() {
+  return (
+    <div>
+      <SectionCard>
+        <SectionTitle accent="#F97316">Hàm mất mát: phạt nặng khi đoán SAI CHIỀU</SectionTitle>
+        <BodyText>
+          Với một trader, <strong style={{ color: 'var(--text-primary)' }}>đoán sai chiều (nói lên mà thực tế xuống)
+          tệ hơn nhiều</strong> so với lệch vài %. Vì vậy ta không dùng loss thường mà dùng{' '}
+          <strong style={{ color: 'var(--text-primary)' }}>Direction-weighted Huber</strong>: bắt đầu từ HuberLoss
+          (bền với outlier), rồi <em>nhân thêm trọng số</em> cho những mẫu mà mô hình đoán <strong style={{ color: 'var(--text-primary)' }}>ngược dấu</strong> với thực tế.
+        </BodyText>
+        <CodeBlock lang="python">{`# src/ml/train_lstm.py — _direction_weighted_huber
+base = F.huber_loss(pred, target, reduction="none", delta=delta)
+direction_correct = (pred.sign() == target.sign()).float()
+weight = 1.0 + (1.0 - direction_correct) * penalty_factor  # sai chiều → phạt nặng hơn
+return (base * weight).mean()`}</CodeBlock>
+        <BodyText>
+          Diễn giải: nếu dấu dự đoán <em>trùng</em> dấu thực tế thì <Mono>weight = 1</Mono> (lỗi tính bình thường);
+          nếu <em>ngược</em> dấu, <Mono>weight = 1 + penalty</Mono> → lỗi bị phóng đại, ép mô hình ưu tiên đoán đúng hướng.
+        </BodyText>
+      </SectionCard>
+
+      <SectionCard>
+        <SectionTitle>Vì sao Huber, không phải MSE?</SectionTitle>
+        <Callout variant="warning">
+          MSE bình phương lỗi → một cú pump/crash bất thường tạo lỗi khổng lồ, kéo cả mô hình chạy theo. HuberLoss xử
+          nhẹ nhàng hơn: lỗi nhỏ thì bình phương (mượt), lỗi lớn (<TeX>{String.raw`|e| > \delta`}</TeX>) chuyển sang
+          tuyến tính → bền (robust) trước outlier. Crypto đầy outlier (kurtosis BTC 11, DOGE 77) nên rất hợp.
+        </Callout>
+        <CodeBlock lang="python">{`# src/ml/train_lstm.py — setup
+price_criterion = nn.HuberLoss(delta=1.0)
+optimizer = torch.optim.Adam(
+    model.parameters(), lr=LEARNING_RATE, weight_decay=WEIGHT_DECAY,
+)`}</CodeBlock>
+      </SectionCard>
+
+      <SectionCard>
+        <SectionTitle>Ánh xạ lý thuyết → cài đặt</SectionTitle>
+        <BodyText>Mỗi khái niệm trong lý thuyết LSTM tương ứng một dòng code cụ thể trong dự án:</BodyText>
+        <div style={{ background: 'var(--bg-elevated)', border: '1px solid var(--border)', borderRadius: '8px', padding: '16px' }}>
+          <MapRow theory={<>Hidden state cuối <TeX>{String.raw`h_T`}</TeX> (cô đọng 60 ngày)</>} code={<Mono>lstm_out[:, -1, :]</Mono>} />
+          <MapRow theory="3 cổng forget / input / output" code={<Mono>nn.LSTM(...)</Mono>} />
+          <MapRow theory="Stacked LSTM 2 lớp (ngắn → dài hạn)" code={<Mono>num_layers=2</Mono>} />
+          <MapRow theory={<>Dự báo cả horizon 1 lần (MIMO)</>} code={<Mono>Linear(64, output_size)</Mono>} />
+          <MapRow theory="Độ biến động luôn dương" code={<Mono>nn.Softplus()</Mono>} />
+          <MapRow theory="Loss bền với outlier" code={<Mono>nn.HuberLoss(delta=1.0)</Mono>} />
         </div>
       </SectionCard>
+    </div>
+  );
+}
+
+/* ── 5. SUY LUẬN ──────────────────────────────────────────────────────────── */
+
+function InferenceSection() {
+  return (
+    <div>
+      <SectionCard>
+        <SectionTitle accent="#5C8AFF">Dự báo cả chuỗi trong MỘT lần chạy (MIMO)</SectionTitle>
+        <BodyText>
+          Khi suy luận, ta lấy 60 ngày gần nhất (đã chuẩn hoá) làm "hạt giống" (seed), đưa qua mô hình{' '}
+          <strong style={{ color: 'var(--text-primary)' }}>một lần duy nhất</strong>, và nhận về cả 7 (hoặc 15/60)
+          bước log-return cùng lúc. Cách này tránh "đoán t+1 rồi nạp lại để đoán t+2" — vốn khuếch đại lỗi với crypto biến động mạnh.
+        </BodyText>
+        <CodeBlock lang="python">{`# src/ml/inference.py — _mimo_predict
+x = torch.tensor(seed_features[np.newaxis, :, :], dtype=torch.float32)  # (1, 60, 9)
+result = model(x)
+log_rets_norm = result[0].squeeze(0).cpu().numpy()   # (7,) — đã chuẩn hoá`}</CodeBlock>
+      </SectionCard>
 
       <SectionCard>
-        <SectionTitle>Tại sao chọn LSTM cho Crypto Forecasting?</SectionTitle>
-        <InfoBox color="var(--up)">
-          Thị trường crypto thể hiện strong temporal dependencies — giá ngày hôm nay phụ thuộc vào hàng chục ngày trước. LSTM với sequence_length=60 cho phép mô hình "nhìn lại" 60 phiên giao dịch, đủ để nắm bắt các chu kỳ ngắn và trung hạn.
-        </InfoBox>
+        <SectionTitle>Đảo ngược: từ log-return chuẩn hoá → giá USD</SectionTitle>
         <BodyText>
-          Nghiên cứu của Fischer & Krauss (2018) cho thấy LSTM vượt trội so với các phương pháp thống kê truyền thống (ARIMA, Random Forest) trong dự báo giá cổ phiếu với Sharpe ratio cao hơn ~0.4 điểm. Tương tự, Siami-Namini et al. (2018) xác nhận LSTM giảm RMSE lên đến 85% so với ARIMA trên chuỗi thời gian tài chính.
+          Mô hình xuất ra log-return <em>đã chuẩn hoá</em>. Hai bước để ra giá thật: (1) đảo chuẩn hoá feature-0 bằng
+          chính <Mono>scale_</Mono> và <Mono>mean_</Mono> của scaler; (2) cộng dồn log-return rồi mũ hoá để dựng lại giá.
+        </BodyText>
+        <CodeBlock lang="python">{`# src/ml/inference.py — _mimo_predict (tiếp)
+# (1) Đưa feature-0 (log_return) về thang gốc:  norm * scale + mean
+log_rets = log_rets_norm * scaler.scale_[0] + scaler.mean_[0]
+
+# (2) Dựng lại giá USD:  price[k] = last_price * exp(cumsum(log_rets)[k])
+prices_usd = last_price_usd * np.exp(np.cumsum(log_rets))`}</CodeBlock>
+        <EqBlock
+          equations={[
+            { tex: String.raw`\text{price}_k = \text{price}_{\text{last}} \cdot \exp\!\Big(\sum_{j=0}^{k} r_j\Big)`,
+              note: <>cộng dồn (cumsum) log-return <TeX>{String.raw`r_j`}</TeX> rồi mũ hoá → giá ngày thứ k</> },
+          ]}
+        />
+        <Callout variant="info">
+          Đây chính là lý do <strong style={{ color: 'var(--text-primary)' }}>feature 0 bắt buộc là log-return</strong>{' '}
+          (tab "Dữ liệu"): ta cần biết đúng <Mono>scale_[0]</Mono> / <Mono>mean_[0]</Mono> để đảo ngược về giá USD.
+        </Callout>
+      </SectionCard>
+
+      <SectionCard>
+        <SectionTitle>Lịch chạy suy luận trong dự án</SectionTitle>
+        <DataTable
+          headers={['Vòng lặp', 'Tần suất', 'Làm gì']}
+          rows={[
+            ['Inference hằng ngày', '1 lần/ngày UTC (+ 1 lần lúc khởi động)', 'Đọc lịch sử → đoán H7/H15/H60 → upsert vào collection predictions'],
+            ['Vòng 5 phút', 'mỗi 5 phút', 'Chỉ refresh live_prices cho frontend realtime + phục vụ request predict/retrain on-demand'],
+          ]}
+        />
+        <BodyText style={{ margin: '8px 0 0' }}>
+          Khoá upsert của collection <Mono>predictions</Mono>: <Mono>(coin, prediction_date, horizon, model_id)</Mono>.
+          Artifact lưu dạng <Mono>lstm_{'{coin}'}_h7_v3.pt</Mono> + <Mono>scaler_{'{coin}'}_h7_v3.pkl</Mono>.
         </BodyText>
       </SectionCard>
     </div>
   );
 }
+
+/* ── 6. KẾT QUẢ ───────────────────────────────────────────────────────────── */
+
+function ResultsSection() {
+  return (
+    <div>
+      <SectionCard>
+        <SectionTitle accent="#22C55E">Đánh giá đúng cách: Walk-Forward</SectionTitle>
+        <BodyText>
+          Với chuỗi thời gian, <strong style={{ color: 'var(--text-primary)' }}>tuyệt đối không xáo trộn (shuffle)
+          dữ liệu</strong> — vì sẽ "nhìn trộm tương lai" (temporal leakage) và cho điểm số đẹp giả. Thay vào đó dùng
+          Walk-Forward: luôn train trên quá khứ, kiểm tra trên đoạn tương lai liền sau.
+        </BodyText>
+        <CodeBlock lang="text">{`Walk-Forward, cửa sổ trượt 730 ngày:
+  Fold 1: Train [t0, t0+730)  →  Validate [t0+730, t0+790)
+  Fold 2: Train [t1, t1+730)  →  Validate [t1+730, t1+790)
+  ...trượt 60 ngày mỗi fold — KHÔNG có temporal leakage`}</CodeBlock>
+        <DataTable
+          headers={['Phương pháp', 'Directional Accuracy', 'Ghi chú']}
+          rows={[
+            ['Walk-forward (6 folds)', '49,4% (trung bình)', 'Thực tế — gộp cả bull/bear/sideways'],
+            ['Backtest 6 tháng unseen', '61,1% (H7)', 'Giai đoạn có xu hướng rõ ràng'],
+            ['Random baseline', '50,0%', 'Mốc tung đồng xu'],
+            ['K-Fold có shuffle', '~65–70%', 'KHÔNG đáng tin — temporal leakage'],
+          ]}
+        />
+        <Callout variant="success">
+          <strong>Vì sao MIMO ăn đứt Autoregressive ở đây?</strong> Mô hình đoán cả 7 bước cùng lúc từ{' '}
+          <TeX>{String.raw`h_T`}</TeX> (một forward pass) → lỗi không tích lũy. Cách autoregressive (đoán t+1 rồi nạp
+          lại để đoán t+2) sẽ nhân lỗi lên với crypto biến động mạnh.
+        </Callout>
+      </SectionCard>
+
+      <SectionCard>
+        <SectionTitle>Bằng chứng từ tài liệu khoa học</SectionTitle>
+        <BodyText>
+          Fischer &amp; Krauss (2018)<Cite n={2} /> dùng LSTM dự báo chiều biến động cổ phiếu S&amp;P 500 (1992–2015),
+          đạt directional accuracy ~56% và vượt Random Forest, mạng feed-forward sâu, hồi quy logistic. Siami-Namini
+          et al. (2018)<Cite n={3} /> báo cáo LSTM giảm RMSE ~84–87% so với ARIMA trên chuỗi kinh tế - tài chính. Kết
+          quả ~61% (H7) của dự án nằm trong vùng hợp lý cho bài toán khó này.
+        </BodyText>
+      </SectionCard>
+    </div>
+  );
+}
+
+/* ── 7. TÀI LIỆU ──────────────────────────────────────────────────────────── */
 
 function ReferencesSection() {
   const refs = [
-    {
-      n: 1,
-      citation: 'Hochreiter, S., & Schmidhuber, J. (1997). Long short-term memory. Neural Computation, 9(8), 1735–1780.',
-      doi: 'https://doi.org/10.1162/neco.1997.9.8.1735',
-      type: 'Journal',
-    },
-    {
-      n: 2,
-      citation: 'Bengio, Y., Simard, P., & Frasconi, P. (1994). Learning long-term dependencies with gradient descent is difficult. IEEE Transactions on Neural Networks, 5(2), 157–166.',
-      doi: 'https://doi.org/10.1109/72.279181',
-      type: 'Journal',
-    },
-    {
-      n: 3,
-      citation: 'Olah, C. (2015). Understanding LSTM Networks. Colah\'s Blog.',
-      doi: 'https://colah.github.io/posts/2015-08-Understanding-LSTMs/',
-      type: 'Blog',
-    },
-    {
-      n: 4,
-      citation: 'Cho, K., van Merrienboer, B., Gulcehre, C., Bahdanau, D., Bougares, F., Schwenk, H., & Bengio, Y. (2014). Learning Phrase Representations using RNN Encoder-Decoder for Statistical Machine Translation. EMNLP 2014.',
-      doi: 'https://arxiv.org/abs/1406.1078',
-      type: 'Conference',
-    },
-    {
-      n: 5,
-      citation: 'Gers, F. A., Schmidhuber, J., & Cummins, F. (2000). Learning to forget: Continual prediction with LSTM. Neural Computation, 12(10), 2451–2471.',
-      doi: 'https://doi.org/10.1162/089976600300015015',
-      type: 'Journal',
-    },
-    {
-      n: 6,
-      citation: 'Graves, A., & Schmidhuber, J. (2005). Framewise phoneme classification with bidirectional LSTM and other neural network architectures. Neural Networks, 18(5–6), 602–610.',
-      doi: 'https://doi.org/10.1016/j.neunet.2005.06.042',
-      type: 'Journal',
-    },
-    {
-      n: 7,
-      citation: 'Goodfellow, I., Bengio, Y., & Courville, A. (2016). Deep Learning. MIT Press. Chapter 10: Sequence Modeling: Recurrent and Recursive Nets.',
-      doi: 'https://www.deeplearningbook.org/',
-      type: 'Book',
-    },
-    {
-      n: 8,
-      citation: 'Hochreiter, S. (1991). Untersuchungen zu dynamischen neuronalen Netzen [Diploma thesis]. Technische Universität München.',
-      doi: 'https://people.idsia.ch/~juergen/SeppHochreiter1991ThesisAdvisorSchmidhuber.pdf',
-      type: 'Thesis',
-    },
-    {
-      n: 9,
-      citation: 'Fischer, T., & Krauss, C. (2018). Deep learning with long short-term memory networks for financial market predictions. European Journal of Operational Research, 270(2), 654–669.',
-      doi: 'https://doi.org/10.1016/j.ejor.2017.11.054',
-      type: 'Journal',
-    },
-    {
-      n: 10,
-      citation: 'Siami-Namini, S., Tavakoli, N., & Namin, A. S. (2018). A comparison of ARIMA and LSTM in forecasting time series. 17th IEEE International Conference on Machine Learning and Applications (ICMLA).',
-      doi: 'https://doi.org/10.1109/ICMLA.2018.00227',
-      type: 'Conference',
-    },
+    { n: 1, citation: 'Hochreiter, S., & Schmidhuber, J. (1997). Long short-term memory. Neural Computation, 9(8), 1735–1780.', doi: 'https://doi.org/10.1162/neco.1997.9.8.1735', type: 'Journal' },
+    { n: 2, citation: 'Fischer, T., & Krauss, C. (2018). Deep learning with long short-term memory networks for financial market predictions. European Journal of Operational Research, 270(2), 654–669.', doi: 'https://doi.org/10.1016/j.ejor.2017.11.054', type: 'Journal' },
+    { n: 3, citation: 'Siami-Namini, S., Tavakoli, N., & Namin, A. S. (2018). A comparison of ARIMA and LSTM in forecasting time series. 17th IEEE ICMLA.', doi: 'https://doi.org/10.1109/ICMLA.2018.00227', type: 'Conference' },
+    { n: 4, citation: 'Olah, C. (2015). Understanding LSTM Networks. Colah\'s Blog.', doi: 'https://colah.github.io/posts/2015-08-Understanding-LSTMs/', type: 'Blog' },
+    { n: 5, citation: 'Goodfellow, I., Bengio, Y., & Courville, A. (2016). Deep Learning. MIT Press. Ch. 10.', doi: 'https://www.deeplearningbook.org/', type: 'Book' },
   ];
-
   const typeColor: Record<string, string> = {
-    Journal:    'var(--accent-light)',
-    Conference: 'var(--warn)',
-    Blog:       '#22C55E',
-    Book:       '#A78BFA',
-    Thesis:     '#94A3B8',
+    Journal: 'var(--accent-light)', Conference: 'var(--warn)', Blog: '#22C55E', Book: '#A78BFA',
   };
-
   return (
     <div>
       <SectionCard>
         <SectionTitle>Tài liệu tham khảo</SectionTitle>
-        <BodyText style={{ marginBottom: '18px' }}>
-          Tất cả nội dung trong trang này được tổng hợp từ các nguồn học thuật uy tín đã qua bình duyệt (peer-reviewed). Danh sách dưới đây sử dụng định dạng trích dẫn <strong style={{ color: 'var(--text-primary)' }}>IEEE</strong>.
+        <BodyText style={{ marginBottom: '16px' }}>
+          Phần lý thuyết LSTM đầy đủ (trực giác, công thức từng ký hiệu, các biến thể) nằm ở trang{' '}
+          <strong style={{ color: 'var(--text-primary)' }}>"LSTM — Long Short-Term Memory"</strong> trong mục Docs.
+          Trang ứng dụng này dẫn các nguồn liên quan trực tiếp tới cách dùng:
         </BodyText>
         <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
           {refs.map(ref => (
             <div key={ref.n} style={{
               background: 'var(--bg-elevated)', border: '1px solid var(--border)',
-              borderRadius: '9px', padding: '14px 16px',
-              display: 'flex', gap: '12px', alignItems: 'flex-start',
+              borderRadius: '9px', padding: '14px 16px', display: 'flex', gap: '12px', alignItems: 'flex-start',
             }}>
               <div style={{
                 width: '26px', height: '26px', borderRadius: '6px',
                 background: 'var(--accent-muted)', border: '1px solid rgba(99,102,241,0.2)',
-                display: 'flex', alignItems: 'center', justifyContent: 'center',
-                flexShrink: 0,
+                display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
               }}>
-                <span style={{ fontFamily: 'IBM Plex Mono', fontSize: '11px', color: 'var(--accent-light)', fontWeight: 700 }}>
-                  {ref.n}
-                </span>
+                <span style={{ fontFamily: 'IBM Plex Mono', fontSize: '11px', color: 'var(--accent-light)', fontWeight: 700 }}>{ref.n}</span>
               </div>
               <div style={{ flex: 1 }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '5px' }}>
-                  <span style={{
-                    fontFamily: 'IBM Plex Mono', fontSize: '9px', fontWeight: 600,
-                    color: typeColor[ref.type] ?? 'var(--text-muted)',
-                    padding: '2px 7px', borderRadius: '4px',
-                    background: `color-mix(in srgb, ${typeColor[ref.type] ?? 'gray'} 12%, transparent)`,
-                    border: `1px solid color-mix(in srgb, ${typeColor[ref.type] ?? 'gray'} 25%, transparent)`,
-                  }}>
-                    {ref.type.toUpperCase()}
-                  </span>
-                </div>
-                <p style={{ margin: '0 0 6px', fontSize: '13px', color: 'var(--text-secondary)', fontFamily: 'Plus Jakarta Sans', lineHeight: 1.6 }}>
+                <span style={{
+                  fontFamily: 'IBM Plex Mono', fontSize: '9px', fontWeight: 600,
+                  color: typeColor[ref.type] ?? 'var(--text-muted)', padding: '2px 7px', borderRadius: '4px',
+                  background: `color-mix(in srgb, ${typeColor[ref.type] ?? 'gray'} 12%, transparent)`,
+                  border: `1px solid color-mix(in srgb, ${typeColor[ref.type] ?? 'gray'} 25%, transparent)`,
+                }}>{ref.type.toUpperCase()}</span>
+                <p style={{ margin: '6px 0 6px', fontSize: '13px', color: 'var(--text-secondary)', fontFamily: 'Plus Jakarta Sans', lineHeight: 1.6 }}>
                   {ref.citation}
                 </p>
-                <a
-                  href={ref.doi}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  style={{
-                    display: 'inline-flex', alignItems: 'center', gap: '4px',
-                    fontFamily: 'IBM Plex Mono', fontSize: '10px', color: 'var(--accent-light)',
-                    textDecoration: 'none',
-                  }}
-                >
-                  <ExternalLink size={10} />
-                  {ref.doi}
+                <a href={ref.doi} target="_blank" rel="noopener noreferrer" style={{
+                  display: 'inline-flex', alignItems: 'center', gap: '4px',
+                  fontFamily: 'IBM Plex Mono', fontSize: '10px', color: 'var(--accent-light)', textDecoration: 'none',
+                }}>
+                  <ExternalLink size={10} />{ref.doi}
                 </a>
               </div>
             </div>
@@ -800,8 +493,8 @@ function ReferencesSection() {
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
           <Network size={14} color="var(--text-muted)" />
           <span style={{ fontSize: '12px', color: 'var(--text-muted)', fontFamily: 'Plus Jakarta Sans' }}>
-            Trang này được xây dựng phục vụ môn học <strong style={{ color: 'var(--text-secondary)' }}>CS315.F21.CN2 — Advanced Machine Learning</strong>.
-            Nội dung tổng hợp từ các nguồn học thuật peer-reviewed; hình ảnh và sơ đồ được thiết kế mới.
+            Code minh hoạ trích trực tiếp từ <strong style={{ color: 'var(--text-secondary)' }}>src/ml/</strong>{' '}
+            (model.py, preprocess.py, train_lstm.py, inference.py) — môn <strong style={{ color: 'var(--text-secondary)' }}>CS315.F21.CN2 — Advanced Machine Learning</strong>.
           </span>
         </div>
       </SectionCard>
@@ -809,35 +502,32 @@ function ReferencesSection() {
   );
 }
 
-/* ── Main page component ────────────────────────────────────────────────── */
+/* ── Main page component ────────────────────────────────────────────────────── */
 
 export default function LSTMResearchPage() {
-  const [activeTab, setActiveTab] = useState<Tab>('intro');
+  const [activeTab, setActiveTab] = useState<Tab>('overview');
 
   return (
     <div>
-      {/* Page header */}
       <div style={{ marginBottom: '26px' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap', marginBottom: '6px' }}>
-          <Brain size={19} color="var(--accent-light)" />
+          <Boxes size={19} color="var(--accent-light)" />
           <h1 className="font-display" style={{ margin: 0, fontSize: '22px', color: 'var(--text-primary)' }}>
-            LSTM Deep Dive
+            LSTM — Ứng dụng vào dự án
           </h1>
           <span style={{
             fontFamily: 'IBM Plex Mono', fontSize: '9px', fontWeight: 600,
             padding: '3px 8px', borderRadius: '5px',
-            background: 'var(--purple-subtle)', border: '1px solid rgba(167,139,250,0.2)',
-            color: 'var(--purple)',
+            background: 'var(--purple-subtle)', border: '1px solid rgba(167,139,250,0.2)', color: 'var(--purple)',
           }}>
-            RESEARCH
+            APPLIED
           </span>
         </div>
         <p style={{ margin: 0, fontSize: '13px', color: 'var(--text-secondary)', fontFamily: 'Plus Jakarta Sans' }}>
-          Long Short-Term Memory Networks · Hochreiter &amp; Schmidhuber, 1997 · CS315.F21.CN2
+          Cách dự án dùng LSTM để dự đoán giá BTC / DOGE · code thật từ src/ml/ · CS315.F21.CN2
         </p>
       </div>
 
-      {/* Tab navigation */}
       <div style={{ display: 'flex', gap: '4px', marginBottom: '22px', flexWrap: 'wrap' }}>
         {TABS.map(tab => (
           <button
@@ -852,7 +542,6 @@ export default function LSTMResearchPage() {
         ))}
       </div>
 
-      {/* Tab content */}
       <AnimatePresence mode="wait">
         <motion.div
           key={activeTab}
@@ -861,12 +550,13 @@ export default function LSTMResearchPage() {
           exit={{ opacity: 0, y: -4 }}
           transition={{ duration: 0.18 }}
         >
-          {activeTab === 'intro'        && <IntroSection />}
-          {activeTab === 'architecture' && <ArchitectureSection />}
-          {activeTab === 'math'         && <MathSection />}
-          {activeTab === 'variants'     && <VariantsSection />}
-          {activeTab === 'application'  && <ApplicationSection />}
-          {activeTab === 'references'   && <ReferencesSection />}
+          {activeTab === 'overview'   && <OverviewSection />}
+          {activeTab === 'data'       && <DataSection />}
+          {activeTab === 'model'      && <ModelSection />}
+          {activeTab === 'training'   && <TrainingSection />}
+          {activeTab === 'inference'  && <InferenceSection />}
+          {activeTab === 'results'    && <ResultsSection />}
+          {activeTab === 'references' && <ReferencesSection />}
         </motion.div>
       </AnimatePresence>
     </div>

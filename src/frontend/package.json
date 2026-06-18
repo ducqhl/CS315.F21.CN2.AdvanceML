@@ -11,10 +11,13 @@
   },
   "dependencies": {
     "@tanstack/react-query": "^5.100.14",
+    "@types/katex": "^0.16.8",
+    "@xyflow/react": "^12.11.0",
     "apexcharts": "^3.54.0",
     "axios": "^1.16.1",
     "framer-motion": "^12.40.0",
     "jwt-decode": "^4.0.0",
+    "katex": "^0.17.0",
     "lightweight-charts": "^4.2.2",
     "lucide-react": "^1.16.0",
     "react": "^19.2.6",

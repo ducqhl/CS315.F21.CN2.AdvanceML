@@ -119,7 +119,7 @@ export default function Sidebar({
           <button
             key={item.id}
             onClick={() => onSelectPage(item.id)}
-            className={`nav-item ${page === item.id ? 'active' : ''}`}
+            className={`nav-item ${page === item.id || (item.id === 'docs' && page.startsWith('doc-')) ? 'active' : ''}`}
             style={{ marginBottom: '1px' }}
           >
             {item.icon}
@@ -128,8 +128,8 @@ export default function Sidebar({
               <span style={{
                 padding: '1px 6px', borderRadius: '5px', fontSize: '9px',
                 fontFamily: 'IBM Plex Mono', fontWeight: 500,
-                background: page === item.id ? 'var(--accent-subtle)' : 'var(--bg-elevated)',
-                color: page === item.id ? 'var(--accent-light)' : 'var(--text-muted)',
+                background: (page === item.id || (item.id === 'docs' && page.startsWith('doc-'))) ? 'var(--accent-subtle)' : 'var(--bg-elevated)',
+                color: (page === item.id || (item.id === 'docs' && page.startsWith('doc-'))) ? 'var(--accent-light)' : 'var(--text-muted)',
               }}>
                 {item.badge}
               </span>

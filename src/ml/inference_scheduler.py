@@ -1,24 +1,35 @@
 """
-inference_scheduler.py — Periodic LSTM inference daemon with live CoinGecko fetch.
+inference_scheduler.py — Daily LSTM inference daemon with a 5-minute live-data loop.
 
-Each cycle (default every 5 minutes):
-  1. Fetch latest BTC + DOGE prices directly from CoinGecko (1 API call for both).
-  2. Persist each coin's price to MongoDB  live_prices  collection.
-  3. Run daily LSTM inference for BTC  (seed: live_prices → historical_sma → CSV).
-  4. Run daily LSTM inference for DOGE.
-  5. Sleep until next cycle.
+Two distinct cadences run in this one daemon:
 
-Note: 5-min intraday ML inference has been removed. The LSTM is trained on daily
-data and cannot reliably predict at 5-min resolution (scale mismatch). Live 5-min
-OHLCV candles from live_prices are still displayed on the dashboard.
+5-minute loop (run_cycle) — realtime data + API requests only, NO ML inference:
+  1. Service pending on-demand predict / retrain requests from the API.
+  2. Fetch latest BTC + DOGE prices from CoinGecko → MongoDB  live_prices .
+  3. Sleep until next cycle.
+  This cadence exists solely to keep  live_prices  fresh for the realtime
+  frontend / Streamlit dashboard.
+
+Daily cycle (run_daily_cycle) — fires once per UTC day at DAILY_INFERENCE_HOUR
+(and once at startup so predictions exist immediately on deploy):
+  1. Run LSTM inference for every coin × every horizon (H7 / H15 / H60).
+  2. Evaluate yesterday's predictions against actual prices (accuracy_tracker).
+
+Why inference is daily, not every 5 minutes
+-------------------------------------------
+The LSTM is trained on daily-resolution data and the forecast horizon is in days
+(H7 / H15 / H60).  Re-running it every 5 minutes produced near-identical output
+(daily_stats only changes once per day) and bloated the predictions collection.
+5-min OHLCV candles from live_prices are still shown on the dashboard as realtime
+data — that path does not involve the LSTM.
 
 Why the scheduler fetches CoinGecko directly
 ---------------------------------------------
-The Kafka producer polls CoinGecko every 5 minutes and writes to live_prices via
-the Lambda pipeline.  Both the producer and scheduler share the same 5-minute
-cadence, so each scheduler cycle gets fresh seed data.  By fetching one price snapshot
-per cycle, the scheduler guarantees fresh data for every inference run — independent
-of whether the full Kafka/Spark stack is operational.
+The Kafka producer polls CoinGecko every 10 minutes (POLL_INTERVAL_SECONDS=600)
+and writes to live_prices via the Lambda pipeline.  The scheduler runs its own
+5-minute loop (INFERENCE_INTERVAL_SECONDS=300) and fetches one price snapshot per
+cycle, so it guarantees fresh data for every inference run — independent of whether
+the full Kafka/Spark stack is operational.
 
 CoinGecko API budget (demo tier = 10 k calls / month)
 ------------------------------------------------------
@@ -356,84 +367,39 @@ def process_inference_requests() -> None:
 
 def run_cycle(consecutive_failures: int) -> int:
     """
-    Run one full cycle: process retrain requests → fetch prices → run inference for all coins.
+    Run one 5-minute cycle: service API requests → refresh live_prices.
 
-    Returns updated consecutive_failures count (resets to 0 on any success).
+    This cycle does NOT run scheduled LSTM inference — that happens once per day
+    in run_daily_cycle().  The 5-minute cadence exists only to keep  live_prices
+    fresh for the realtime frontend/dashboard and to service on-demand
+    predict/retrain requests submitted through the API.
+
+    Returns updated consecutive_failures count (resets to 0 on a successful fetch).
     """
-    # Step 0: process any pending retrain + on-demand predict requests from the API
+    # Step 0: process any pending retrain + on-demand predict requests from the API.
+    # On-demand predicts still run inference immediately — only the *scheduled*
+    # inference moved to a daily cadence.
     process_retrain_requests()
     process_inference_requests()
 
-    # Step 1: pull fresh price data into live_prices before seeding the model
+    # Step 1: pull fresh price data into live_prices for the realtime frontend.
+    fetch_ok = True
     if SCHEDULER_FETCH_COINGECKO:
         fetch_ok = fetch_and_persist_latest_prices()
         if not fetch_ok:
             logger.warning(
-                "CoinGecko fetch failed — inference will seed from existing live_prices "
-                "or historical_sma (may be stale)."
+                "CoinGecko fetch failed — live_prices may be stale until next cycle."
             )
     else:
         logger.debug("CoinGecko fetch disabled (SCHEDULER_FETCH_COINGECKO=false).")
 
-    # Step 2: run inference for ALL horizons (H7 / H15 / H60) for each coin
-    any_success = False
-    import pymongo as _pymongo
-    _status_client = _pymongo.MongoClient(MONGO_URI, serverSelectionTimeoutMS=3000)
-    _status_db = _status_client["crypto_db"]
-    for coin in COINS:
-        symbol = _COIN_SYMBOL_MAP.get(coin, coin.upper())
-        for h in HORIZONS:
-            status_key = f"{symbol}_h{h}"
-            try:
-                docs = run_inference(coin=coin, mongo_uri=MONGO_URI, horizon=h)
-                logger.info(
-                    "Inference OK for %s H%d — %d predictions written.", coin, h, len(docs)
-                )
-                any_success = True
-                _status_db.inference_status.update_one(
-                    {"coin": status_key},
-                    {"$set": {
-                        "coin": status_key, "symbol": symbol, "horizon": h,
-                        "status": "completed",
-                        "last_run": datetime.now(timezone.utc),
-                        "error": None,
-                    }},
-                    upsert=True,
-                )
-            except FileNotFoundError as exc:
-                logger.warning(
-                    "Model not trained for %s H%d (skipping): %s", coin, h, exc
-                )
-                _status_db.inference_status.update_one(
-                    {"coin": status_key},
-                    {"$set": {
-                        "coin": status_key, "symbol": symbol, "horizon": h,
-                        "status": "model_missing",
-                        "last_run": datetime.now(timezone.utc),
-                        "error": str(exc),
-                    }},
-                    upsert=True,
-                )
-            except Exception as exc:  # noqa: BLE001
-                logger.exception("Inference failed for %s H%d: %s", coin, h, exc)
-                _status_db.inference_status.update_one(
-                    {"coin": status_key},
-                    {"$set": {
-                        "coin": status_key, "symbol": symbol, "horizon": h,
-                        "status": "error",
-                        "last_run": datetime.now(timezone.utc),
-                        "error": str(exc),
-                    }},
-                    upsert=True,
-                )
-    _status_client.close()
-
-    if not any_success:
+    # Failure tracking only applies when this daemon owns price fetching.
+    if SCHEDULER_FETCH_COINGECKO and not fetch_ok:
         consecutive_failures += 1
         if consecutive_failures >= 3:
             logger.critical(
-                "Inference failed %d consecutive cycles. "
-                "Verify models are trained and MongoDB is reachable. "
+                "CoinGecko fetch failed %d consecutive cycles. "
+                "Verify network/API key and MongoDB reachability. "
                 "Exiting — container will restart automatically.",
                 consecutive_failures,
             )
@@ -464,19 +430,41 @@ def run_daily_cycle() -> None:
     )
 
     # Step 1: Daily forecast for ALL horizons (H7/H15/H60) for each coin
+    import pymongo as _pymongo
+    _status_client = _pymongo.MongoClient(MONGO_URI, serverSelectionTimeoutMS=3000)
+    _status_db = _status_client["crypto_db"]
     for coin in COINS:
+        symbol = _COIN_SYMBOL_MAP.get(coin, coin.upper())
         for h in HORIZONS:
+            status_key = f"{symbol}_h{h}"
             try:
                 docs = run_inference(coin=coin, mongo_uri=MONGO_URI, horizon=h)
                 logger.info(
                     "Daily inference OK for %s H%d — %d predictions written.", coin, h, len(docs)
                 )
+                _status = "completed"
+                _err = None
             except FileNotFoundError as exc:
                 logger.warning(
                     "Model not trained for %s H%d (skipping daily inference): %s", coin, h, exc
                 )
+                _status = "model_missing"
+                _err = str(exc)
             except Exception as exc:  # noqa: BLE001
                 logger.exception("Daily inference failed for %s H%d: %s", coin, h, exc)
+                _status = "error"
+                _err = str(exc)
+            _status_db.inference_status.update_one(
+                {"coin": status_key},
+                {"$set": {
+                    "coin": status_key, "symbol": symbol, "horizon": h,
+                    "status": _status,
+                    "last_run": datetime.now(timezone.utc),
+                    "error": _err,
+                }},
+                upsert=True,
+            )
+    _status_client.close()
 
     # Step 2: Accuracy evaluation — compare yesterday's predictions to actual prices
     try:
@@ -523,11 +511,14 @@ if __name__ == "__main__":
         consecutive_failures = run_cycle(consecutive_failures)
 
         # ── Daily trigger: fires once per UTC day at DAILY_INFERENCE_HOUR ──────
+        # Also fires once on startup (first_run) so predictions exist immediately
+        # on deploy instead of waiting until the next DAILY_INFERENCE_HOUR.
         now_utc       = datetime.now(timezone.utc)
         today_str     = now_utc.strftime("%Y-%m-%d")
         at_daily_hour = now_utc.hour == DAILY_INFERENCE_HOUR
+        first_run     = _last_daily_run_date == ""
 
-        if at_daily_hour and today_str != _last_daily_run_date:
+        if (first_run or at_daily_hour) and today_str != _last_daily_run_date:
             # ── Weekly retrain (runs before daily inference so new model is used) ─
             if RETRAIN_INTERVAL_DAYS > 0:
                 try:

@@ -949,6 +949,7 @@ def get_ml_models(
 
         for entry in catalog:
             reg = reg_docs.get(entry["horizon"], {})
+            is_newest = entry["is_newest"]
             models.append({
                 "coin":          symbol,
                 "coin_id":       coin_id,
@@ -957,11 +958,12 @@ def get_ml_models(
                 "version_label": entry["version_label"],
                 "model_id":      entry["model_id"],
                 "is_legacy":     entry["is_legacy"],
-                "is_newest":     entry["is_newest"],
+                "is_newest":     is_newest,
                 "model_exists":  entry["model_exists"],
-                "is_active":     entry["horizon"] == active_horizon and entry["is_newest"],
-                # Metrics only meaningful for the newest (last-trained) artifact
-                "metrics":       reg.get("metrics") if entry["is_newest"] else None,
+                "is_active":     entry["horizon"] == active_horizon and is_newest,
+                # Metrics + score_report only for newest artifact
+                "metrics":       reg.get("metrics") if is_newest else None,
+                "score_report":  reg.get("score_report") if is_newest else None,
             })
 
     serialized = [_serialize(m) for m in models]
@@ -1206,3 +1208,150 @@ def get_predict_status(
         query, {"_id": 0}, sort=[("created_at", -1)], limit=limit,
     ))
     return {"jobs": [_serialize(j) for j in jobs], "count": len(jobs)}
+
+
+@app.post("/api/ml/models/backfill-score-reports")
+def backfill_score_reports(_user: dict = Depends(get_current_user)) -> dict:
+    """
+    One-time backfill: read score_report JSON files from disk and upsert them
+    into the model_registry collection for models that lack a score_report field.
+
+    Safe to call multiple times — only updates docs where score_report is null/missing.
+    """
+    import json as _json
+
+    updated = 0
+    skipped = 0
+    errors = []
+
+    for coin_id in ("bitcoin", "dogecoin"):
+        symbol = COIN_SYMBOL_MAP[coin_id]
+        for horizon in sorted(_VALID_HORIZONS):
+            score_path = _MODEL_DIR / f"score_report_{coin_id}_h{horizon}.json"
+            if not score_path.exists():
+                skipped += 1
+                continue
+            try:
+                with open(score_path) as f:
+                    sr = _json.load(f)
+                result = db.model_registry.update_one(
+                    {"coin": symbol, "horizon": horizon},
+                    {"$set": {"score_report": sr}},
+                )
+                if result.matched_count:
+                    updated += 1
+                else:
+                    skipped += 1
+            except Exception as exc:
+                errors.append(f"{coin_id} H{horizon}: {exc}")
+
+    return {"updated": updated, "skipped": skipped, "errors": errors}
+
+
+# ── System Overview ───────────────────────────────────────────────────────────
+
+@app.get("/api/system/overview")
+def get_system_overview(_user: dict = Depends(get_current_user)) -> dict:
+    """
+    Aggregate system metrics in one call: health, collection stats, model catalog,
+    recent job summaries, and inference scheduler status. Powers the System Stats page.
+    """
+    # Health
+    try:
+        mongo_client.admin.command("ping")
+        mongo_ok = True
+    except Exception:
+        mongo_ok = False
+
+    # Collection document counts
+    col_names = [
+        "daily_stats", "historical_sma", "coin_correlation",
+        "realtime_prices", "live_prices", "predictions",
+        "prediction_accuracy", "training_jobs", "inference_jobs",
+    ]
+    col_counts: dict[str, int] = {}
+    for c in col_names:
+        try:
+            col_counts[c] = db[c].count_documents({})
+        except Exception:
+            col_counts[c] = 0
+
+    # Model catalog
+    all_models: list[dict] = []
+    for coin_id in ["bitcoin", "dogecoin"]:
+        symbol = COIN_SYMBOL_MAP[coin_id]
+        try:
+            catalog = _discover_model_files(coin_id)
+        except Exception:
+            catalog = []
+        active_doc = db.model_registry.find_one(
+            {"coin": symbol, "is_active": True}, {"_id": 0, "horizon": 1}
+        )
+        active_horizon = int(active_doc["horizon"]) if active_doc else 7
+        for entry in catalog:
+            reg = db.model_registry.find_one(
+                {"coin": symbol, "horizon": entry["horizon"]}, {"_id": 0}
+            ) or {}
+            all_models.append({
+                "coin": symbol,
+                "coin_id": coin_id,
+                "horizon": entry["horizon"],
+                "model_id": entry["model_id"],
+                "version_label": entry["version_label"],
+                "is_newest": entry["is_newest"],
+                "is_active": entry["horizon"] == active_horizon and entry["is_newest"],
+                "metrics": reg.get("metrics"),
+            })
+    all_models.sort(key=lambda m: (m["coin"], m["horizon"]))
+
+    # Job counts by status
+    def _job_counts(coll: str) -> dict[str, int]:
+        pipeline = [{"$group": {"_id": "$status", "n": {"$sum": 1}}}]
+        try:
+            return {d["_id"]: d["n"] for d in db[coll].aggregate(pipeline)}
+        except Exception:
+            return {}
+
+    def _recent_jobs(coll: str, n: int = 8) -> list[dict]:
+        try:
+            docs = list(db[coll].find({}, {"_id": 0}, sort=[("created_at", -1)], limit=n))
+            return [_serialize(d) for d in docs]
+        except Exception:
+            return []
+
+    # Inference scheduler status
+    sched: dict[str, dict] = {}
+    for symbol in ["BTC", "DOGE"]:
+        doc = db.inference_status.find_one({"coin": symbol}, {"_id": 0})
+        sched[symbol] = _serialize(doc) if doc else {"coin": symbol, "status": "unknown"}
+
+    # Latest prices
+    latest_prices: dict[str, dict] = {}
+    for coin_id, symbol in [("bitcoin", "BTC"), ("dogecoin", "DOGE")]:
+        doc = db.live_prices.find_one({"symbol": symbol}, sort=[("timestamp", -1)])
+        if doc:
+            ts = doc.get("timestamp")
+            latest_prices[symbol] = {
+                "price": doc.get("price_usd") or doc.get("close"),
+                "date": ts.isoformat() if isinstance(ts, datetime) else str(ts or ""),
+            }
+
+    return {
+        "health": {"api": "ok", "mongo": "connected" if mongo_ok else "error"},
+        "collections": col_counts,
+        "models": {
+            "entries": [_serialize(m) for m in all_models],
+            "total": len(all_models),
+            "by_coin": {
+                "BTC": sum(1 for m in all_models if m["coin"] == "BTC"),
+                "DOGE": sum(1 for m in all_models if m["coin"] == "DOGE"),
+            },
+        },
+        "jobs": {
+            "training": {"counts": _job_counts("training_jobs"), "recent": _recent_jobs("training_jobs")},
+            "inference": {"counts": _job_counts("inference_jobs"), "recent": _recent_jobs("inference_jobs")},
+        },
+        "scheduler": sched,
+        "latest_prices": latest_prices,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    }

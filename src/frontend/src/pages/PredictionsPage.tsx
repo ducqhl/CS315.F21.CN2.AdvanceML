@@ -182,12 +182,25 @@ export default function PredictionsPage({ coin }: Props) {
       forecast: null as number | null,
       isForecast: false,
     }));
-    const fcstPts = (predictions?.predictions ?? []).map(p => ({
-      date:       p.prediction_date.slice(0, 10),
-      actual:     null as number | null,
-      forecast:   p.predicted_price,
-      isForecast: true,
-    }));
+    // Dedupe forecast points by date. The API back-compat filter can return both
+    // the active model's doc and a stale legacy doc (no model_id) for the same
+    // date — two prices per day plotted in date order produce a sawtooth wave.
+    // Keep the active model's doc when present, else the first seen.
+    const activeId = predictions?.active_model_id ?? null;
+    const byDate = new Map<string, number>();
+    for (const p of predictions?.predictions ?? []) {
+      const day = p.prediction_date.slice(0, 10);
+      const isActive = activeId != null && p.model_id === activeId;
+      if (!byDate.has(day) || isActive) byDate.set(day, p.predicted_price);
+    }
+    const fcstPts = [...byDate.entries()]
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([date, price]) => ({
+        date,
+        actual:     null as number | null,
+        forecast:   price,
+        isForecast: true,
+      }));
     // Bridge: connect last history point to first forecast
     if (histPts.length && fcstPts.length) {
       fcstPts[0] = { ...fcstPts[0], actual: histPts[histPts.length - 1].actual };

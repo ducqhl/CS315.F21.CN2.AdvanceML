@@ -57,8 +57,8 @@ export default function PublicShell({ page, setPage, children }: PublicShellProp
           </button>
         </div>
 
-        {/* Back-to-docs breadcrumb when on lstm-research */}
-        {page === 'lstm-research' && (
+        {/* Back-to-docs breadcrumb when on any doc sub-page */}
+        {(page === 'lstm-research' || page.startsWith('doc-')) && (
           <button
             onClick={() => setPage('docs')}
             style={{

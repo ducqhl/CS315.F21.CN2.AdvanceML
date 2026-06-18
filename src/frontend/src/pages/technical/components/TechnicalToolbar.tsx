@@ -1,15 +1,17 @@
-import type { Timeframe, OverlayKey } from '../types';
+import type { Timeframe, OverlayKey, ChartType } from '../types';
 
 interface TechnicalToolbarProps {
   timeframe: Timeframe;
   overlays: Record<OverlayKey, boolean>;
+  chartType: ChartType;
   onTimeframeChange: (tf: Timeframe) => void;
   onToggleOverlay: (key: OverlayKey) => void;
+  onChartTypeChange: (t: ChartType) => void;
 }
 
-/** Timeframe selector + MA/BB overlay toggles for the Technical header. */
+/** Timeframe selector + line/candle switch + MA/BB overlay toggles. */
 export default function TechnicalToolbar({
-  timeframe, overlays, onTimeframeChange, onToggleOverlay,
+  timeframe, overlays, chartType, onTimeframeChange, onToggleOverlay, onChartTypeChange,
 }: TechnicalToolbarProps) {
   return (
     <div style={{ marginLeft: 'auto', display: 'flex', gap: '6px', alignItems: 'center', flexWrap: 'wrap' }}>
@@ -18,6 +20,14 @@ export default function TechnicalToolbar({
           className={`btn-ghost ${timeframe === tf ? 'active' : ''}`}
           style={{ padding: '5px 12px', fontSize: '11px' }}>
           {tf}
+        </button>
+      ))}
+      <div style={{ width: '1px', height: '20px', background: 'var(--border)' }} />
+      {(['line', 'candle'] as ChartType[]).map(t => (
+        <button key={t} onClick={() => onChartTypeChange(t)}
+          className={`btn-ghost ${chartType === t ? 'active' : ''}`}
+          style={{ padding: '5px 12px', fontSize: '11px', textTransform: 'capitalize' }}>
+          {t}
         </button>
       ))}
       <div style={{ width: '1px', height: '20px', background: 'var(--border)' }} />

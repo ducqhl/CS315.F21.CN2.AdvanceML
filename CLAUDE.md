@@ -19,7 +19,7 @@ Key env vars: `COINGECKO_API_KEY`, `KAFKA_BOOTSTRAP_SERVERS`, `MONGO_URI`, `SPAR
 ### Infrastructure
 
 ```bash
-make docker-up          # Start all 9 services
+make docker-up          # Start all 11 services
 make docker-down        # Stop all
 make docker-logs        # Follow logs
 
@@ -98,9 +98,11 @@ MongoDB
     → Streamlit Dashboard (port 8501)
     → React Frontend (port 3000)
 
-LSTM Inference Scheduler (5-min)
-    → Reads MongoDB/CSV history
-    → Writes 7-day predictions → MongoDB (predictions collection)
+LSTM Inference Scheduler
+    → Daily cadence (once/UTC day at DAILY_INFERENCE_HOUR + once at startup):
+        Reads MongoDB/CSV history → writes H7/H15/H60 predictions → MongoDB (predictions collection)
+    → 5-min loop: refresh live_prices for realtime frontend + service on-demand
+      API predict/retrain requests ONLY (no scheduled inference)
 ```
 
 ### MongoDB Collections
@@ -109,17 +111,19 @@ LSTM Inference Scheduler (5-min)
 - `daily_stats` — batch layer aggregation
 - `historical_sma` — batch SMA across time windows
 - `coin_correlation` — BTC/DOGE rolling correlation
-- `predictions` — LSTM 7-day forecasts
+- `predictions` — LSTM multi-horizon forecasts (H7/H15/H60); upsert key (coin, prediction_date, horizon, model_id)
 
 ### ML Model (`src/ml/`)
 
-- **Architecture**: 2-layer LSTM, 128 hidden units, dual-head output
-  - Regression head: next-day price (HuberLoss)
-  - Classification head: trend direction (CrossEntropyLoss)
+- **Architecture**: 2-layer LSTM, 128 hidden units, MIMO multi-output (one model per horizon)
+  - Price head: full horizon of log-returns in one forward pass (HuberLoss)
+  - Volatility head: per-step volatility, Softplus (> 0)
+  - Optional direction head: trend UP/FLAT/DOWN (CrossEntropyLoss)
 - **Sequence length**: 60 timesteps
-- **Training**: `train_lstm.py --coin bitcoin|dogecoin --epochs N`
-- **Artifacts**: `src/ml/model/lstm_{coin}_v2.pt`, `scaler_{coin}.pkl`
-- **Inference**: `inference.py` generates 7-day forecast → MongoDB; `intraday_inference.py` reads from Kafka for real-time
+- **Horizons**: H7 / H15 / H60 — separate model per horizon (`HORIZONS = [7, 15, 60]`)
+- **Training**: `train_lstm.py --coin bitcoin|dogecoin --horizon 7|15|60 --epochs N`
+- **Artifacts**: `src/ml/model/lstm_{coin}_h{horizon}_v3.pt`, `scaler_{coin}_h{horizon}_v3.pkl` (legacy `_v2`/`_v1` still loadable)
+- **Inference**: `inference.py` generates multi-horizon forecast → MongoDB; `intraday_inference.py` reads from Kafka for real-time
 
 ### Spark Jobs
 
@@ -131,7 +135,7 @@ LSTM Inference Scheduler (5-min)
 
 React 19 + TypeScript + Vite + Tailwind. Pages: Dashboard, Realtime, Technical, Predictions, Correlation. API client in `src/api/client.ts` uses Axios pointed at FastAPI backend.
 
-### Docker Compose Services (9 total)
+### Docker Compose Services (11 total)
 
 Zookeeper, Kafka, Kafka UI, MongoDB, Spark Master, Spark Worker, Producer, Dashboard (Streamlit), API (FastAPI), Frontend (React/Nginx), Inference Scheduler.
 
@@ -140,5 +144,6 @@ Zookeeper, Kafka, Kafka UI, MongoDB, Spark Master, Spark Worker, Producer, Dashb
 - **Rate limiting**: CoinGecko demo tier = 10k calls/month; producer polls every 600s (configurable via `POLL_INTERVAL_SECONDS`)
 - **Kafka producer**: `acks=all`, `retries=3`, `linger_ms=100`
 - **All MongoDB writes from Spark**: via `foreachBatch`, not direct streaming sinks
-- **Model versioning**: trained artifacts use `_v2` suffix; update scripts if retraining
+- **Model versioning**: current artifacts use horizon-typed `_h{horizon}_v3` suffix (e.g. `lstm_bitcoin_h7_v3.pt`); inference auto-discovers newest version per horizon, legacy `_v2`/`_v1` still loadable
+- **Inference cadence**: scheduled LSTM inference runs DAILY (not every 5 min); the scheduler's 5-min loop only refreshes `live_prices` and services on-demand API requests
 - **E2E tests**: require live infrastructure; marked with `@pytest.mark.e2e` and excluded from default `pytest` run (see `pytest.ini`)

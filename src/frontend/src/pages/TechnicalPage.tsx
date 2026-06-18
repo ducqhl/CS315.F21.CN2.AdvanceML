@@ -4,7 +4,7 @@ import { BarChart2 } from 'lucide-react';
 import { fetchTechnical } from '../api/client';
 import { coinSymbol, coinDecimals, type Coin } from '../lib/coin';
 import PageHeader from '../components/ui/PageHeader';
-import { TF_DAYS, type Timeframe, type OverlayKey, type TechnicalPoint } from './technical/types';
+import { TF_DAYS, type Timeframe, type OverlayKey, type ChartType, type TechnicalPoint } from './technical/types';
 import TechnicalToolbar from './technical/components/TechnicalToolbar';
 import RsiPill from './technical/components/RsiPill';
 import PriceChart from './technical/components/PriceChart';
@@ -17,6 +17,7 @@ interface Props { coin: Coin }
 export default function TechnicalPage({ coin }: Props) {
   const [timeframe, setTimeframe] = useState<Timeframe>('3M');
   const [overlays, setOverlays]   = useState<Record<OverlayKey, boolean>>({ ma20: true, ma50: true, bb: false });
+  const [chartType, setChartType] = useState<ChartType>('candle');
 
   const symbol   = coinSymbol(coin);
   const decimals = coinDecimals(coin);
@@ -27,10 +28,22 @@ export default function TechnicalPage({ coin }: Props) {
     staleTime: 300_000,
   });
 
-  const data = useMemo<TechnicalPoint[]>(() =>
-    rawData.map(d => ({
+  const data = useMemo<TechnicalPoint[]>(() => {
+    let prevClose: number | null = null;
+    return rawData.map(d => {
+      const close = d.avg_close;
+      const open  = prevClose ?? close;            // first bar opens flat
+      prevClose   = close;
+      // Prefer real daily range when it diverges; else synthesise from open/close.
+      const high  = Math.max(open, close, d.daily_high ?? -Infinity);
+      const low   = Math.min(open, close, d.daily_low ??  Infinity);
+      return {
       date:  d.date.split('T')[0],
-      close: d.avg_close,
+      close,
+      open,
+      high,
+      low,
+      range: [low, high] as [number, number],
       sma20: d.sma_20 ?? null,
       sma50: d.sma_50 ?? null,
       bbUp:  d.bb_upper ?? null,
@@ -41,9 +54,9 @@ export default function TechnicalPage({ coin }: Props) {
       sig:   d.macd_signal    ?? null,
       hist:  d.macd_histogram ?? null,
       vol:   d.avg_volume ?? null,
-    })),
-    [rawData]
-  );
+      };
+    });
+  }, [rawData]);
 
   const latestRsi = useMemo(() => {
     const pts = data.filter(d => d.rsi != null);
@@ -87,15 +100,17 @@ export default function TechnicalPage({ coin }: Props) {
           <TechnicalToolbar
             timeframe={timeframe}
             overlays={overlays}
+            chartType={chartType}
             onTimeframeChange={setTimeframe}
             onToggleOverlay={toggleOverlay}
+            onChartTypeChange={setChartType}
           />
         }
       />
 
       {latestRsi != null && <RsiPill rsi={latestRsi} />}
 
-      <PriceChart coin={coin} data={data} overlays={overlays} xInterval={xInterval} yWidth={yWidth} />
+      <PriceChart coin={coin} data={data} overlays={overlays} chartType={chartType} xInterval={xInterval} yWidth={yWidth} />
 
       <RsiChart data={data} xInterval={xInterval} />
 
