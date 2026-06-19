@@ -398,7 +398,7 @@ export default function InterviewQADoc() {
   return (
     <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.2 }}>
       <PageHeader
-        title="Câu hỏi Phản biện — Q&A"
+        title="Câu hỏi tự tư duy — Q&A"
         subtitle="25+ câu hỏi thường gặp trong buổi bảo vệ đồ án CS315.F21.CN2"
         badge="HOT"
         badgeColor="#F87171"
