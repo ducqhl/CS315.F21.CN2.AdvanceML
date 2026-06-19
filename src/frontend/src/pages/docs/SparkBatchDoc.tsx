@@ -2,6 +2,7 @@ import { motion } from 'framer-motion';
 import {
   PageHeader, SectionCard, SectionTitle, BodyText, Callout,
   CodeBlock, DataTable, Mono, SubTitle,
+  GlossarySection, type GlossaryTerm,
 } from './shared';
 
 export default function SparkBatchDoc() {
@@ -231,6 +232,23 @@ bash scripts/run_inference.sh`}</CodeBlock>
           ]}
         />
       </SectionCard>
+
+      <GlossarySection terms={BATCH_GLOSSARY} />
     </motion.div>
   );
 }
+
+const BATCH_GLOSSARY: GlossaryTerm[] = [
+  { term: 'Batch Layer', category: 'Spark', def: 'Tầng xử lý toàn bộ lịch sử trong Lambda Architecture. Spark Batch đọc 4.165 ngày CSV → tính các metrics phức tạp → ghi vào MongoDB. Chạy hàng ngày, ưu tiên correctness.' },
+  { term: 'Spark Batch', category: 'Spark', def: 'Spark chạy ở chế độ batch (không phải streaming). Đọc toàn bộ file CSV một lần, xử lý, ghi kết quả. Submit qua spark-submit hoặc scripts/run_batch.sh.' },
+  { term: 'daily_stats', category: 'Spark', def: 'MongoDB collection chứa thống kê hàng ngày: open, high, low, close, volume, daily_return, cumulative_return cho mỗi coin. Batch Layer tính và upsert mỗi ngày.' },
+  { term: 'historical_sma', category: 'Spark', def: 'MongoDB collection chứa SMA (Simple Moving Average) theo nhiều cửa sổ thời gian (SMA-7, SMA-30, SMA-90) trên toàn bộ lịch sử. Batch tính chính xác hơn streaming.' },
+  { term: 'coin_correlation', category: 'Spark', def: 'MongoDB collection chứa Pearson correlation giữa BTC và DOGE theo rolling window 30 ngày. Phát hiện giai đoạn hai coin đồng pha (r ≈ 0.5) hay tách biệt.' },
+  { term: 'SMA', category: 'Spark', def: 'Simple Moving Average — trung bình động đơn giản: mean của N ngày gần nhất. SMA-7 (tuần), SMA-30 (tháng), SMA-90 (quý). Làm mịn noise ngắn hạn để thấy trend dài hạn.' },
+  { term: 'Rolling correlation', category: 'Spark', def: 'Pearson correlation giữa BTC và DOGE tính trên cửa sổ 30 ngày trượt. Cho thấy mức độ đồng pha thay đổi theo thời gian — không phải một con số cố định.' },
+  { term: 'Pearson correlation', category: 'Spark', def: 'Đo mức độ tương quan tuyến tính giữa hai chuỗi, kết quả trong [-1, 1]. BTC-DOGE ≈ 0.528: tương quan dương vừa phải — cùng xu hướng chung nhưng DOGE có biến động riêng.' },
+  { term: 'local[*]', category: 'Spark', def: 'Chế độ Spark chạy trên một máy, dùng tất cả CPU cores. Phù hợp cho demo single-node. Khác với cluster mode (YARN, EMR) dùng nhiều máy.' },
+  { term: 'spark-submit', category: 'Spark', def: 'Lệnh submit Spark job lên cluster hoặc local mode. scripts/run_batch.sh wrap lệnh này với đầy đủ config (master, jars, Python dependencies).' },
+  { term: 'Upsert', category: 'Spark', def: 'Update nếu document đã tồn tại, Insert nếu chưa. Batch job dùng upsert để idempotent: chạy lại batch cho cùng ngày không tạo duplicate document.' },
+  { term: 'Checkpoint', category: 'Spark', def: 'Không dùng trong Batch (chỉ dùng trong Streaming). Batch job đọc toàn bộ CSV mỗi lần — không cần giữ state. Nếu batch fail, chạy lại từ đầu an toàn.' },
+];

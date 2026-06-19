@@ -443,5 +443,93 @@ export function InfoCard({
   );
 }
 
+/* ─── Glossary section ───────────────────────────────────────────────────── */
+
+export interface GlossaryTerm {
+  term: string;
+  def: string;
+  category?: string;
+}
+
+const CATEGORY_COLORS: Record<string, string> = {
+  'ML':        '#A78BFA',
+  'Kafka':     '#F97316',
+  'Spark':     '#818CF8',
+  'MongoDB':   '#22C55E',
+  'API':       '#6366F1',
+  'Docker':    '#22D3EE',
+  'Testing':   '#F59E0B',
+  'Frontend':  '#EC4899',
+  'Chỉ số':   '#5C8AFF',
+  'Kiến trúc': '#F87171',
+};
+
+export function GlossarySection({ terms }: { terms: GlossaryTerm[] }) {
+  return (
+    <div className="card" style={{ padding: '24px', marginBottom: '16px' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '16px' }}>
+        <div style={{ width: '3px', height: '18px', background: '#A78BFA', borderRadius: '2px', flexShrink: 0 }} />
+        <h2 style={{ margin: 0, fontSize: '15px', fontWeight: 700, color: 'var(--text-primary)', fontFamily: 'Plus Jakarta Sans' }}>
+          Giải thích Thuật ngữ
+        </h2>
+        <span style={{
+          fontFamily: 'IBM Plex Mono', fontSize: '9px', fontWeight: 700,
+          padding: '2px 7px', borderRadius: '4px',
+          background: 'color-mix(in srgb, #A78BFA 12%, transparent)',
+          border: '1px solid color-mix(in srgb, #A78BFA 25%, transparent)',
+          color: '#A78BFA', letterSpacing: '0.05em',
+        }}>
+          GLOSSARY
+        </span>
+      </div>
+      <div style={{
+        display: 'grid',
+        gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))',
+        gap: '8px',
+      }}>
+        {terms.map(({ term, def, category }) => {
+          const catColor = category ? (CATEGORY_COLORS[category] ?? '#A78BFA') : '#A78BFA';
+          return (
+            <div key={term} style={{
+              padding: '10px 14px',
+              background: 'var(--bg-elevated)',
+              border: '1px solid var(--border)',
+              borderLeft: `3px solid ${catColor}`,
+              borderRadius: '6px',
+            }}>
+              <div style={{
+                display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '5px', flexWrap: 'wrap',
+              }}>
+                <span style={{
+                  fontFamily: 'IBM Plex Mono', fontSize: '11.5px', fontWeight: 700, color: catColor,
+                }}>
+                  {term}
+                </span>
+                {category && (
+                  <span style={{
+                    fontFamily: 'IBM Plex Mono', fontSize: '8px', fontWeight: 600,
+                    padding: '1px 5px', borderRadius: '3px',
+                    background: `color-mix(in srgb, ${catColor} 12%, transparent)`,
+                    border: `1px solid color-mix(in srgb, ${catColor} 25%, transparent)`,
+                    color: catColor, letterSpacing: '0.04em',
+                  }}>
+                    {category}
+                  </span>
+                )}
+              </div>
+              <p style={{
+                margin: 0, fontSize: '12px', lineHeight: 1.65,
+                color: 'var(--text-secondary)', fontFamily: 'Plus Jakarta Sans',
+              }}>
+                {def}
+              </p>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 // Need React in scope for JSX
 import React from 'react';

@@ -2,6 +2,7 @@ import { motion } from 'framer-motion';
 import {
   PageHeader, SectionCard, SectionTitle, BodyText, Callout,
   CodeBlock, DataTable, FlowDiagram, MathBlock, EqBlock, TeX, Mono, SpecRow, SubTitle, Tag,
+  GlossarySection, type GlossaryTerm,
 } from './shared';
 
 /* ── Colah's blog image URLs (used with attribution) ────────────────────── */
@@ -722,6 +723,35 @@ H15 dùng window 1095 ngày, H60 dùng toàn bộ lịch sử`}</MathBlock>
           ))}
         </div>
       </SectionCard>
+
+      <GlossarySection terms={LSTM_GLOSSARY} />
     </motion.div>
   );
 }
+
+const LSTM_GLOSSARY: GlossaryTerm[] = [
+  { term: 'LSTM', category: 'ML', def: 'Long Short-Term Memory — kiến trúc mạng nơ-ron hồi quy với 3 cổng (forget, input, output) và cell state riêng biệt. Nhớ được phụ thuộc dài hạn trong chuỗi, khắc phục vấn đề vanishing gradient của RNN thường.' },
+  { term: 'Hidden state h_T', category: 'ML', def: 'Vector đầu ra của LSTM tại bước thời gian cuối cùng. Chứa thông tin tóm tắt của toàn bộ chuỗi 60 ngày đầu vào. Đây là input cho các đầu ra Price/Volatility/Direction.' },
+  { term: 'Cell state C_t', category: 'ML', def: 'Bộ nhớ dài hạn của LSTM, chạy xuyên suốt qua các bước thời gian. Được cập nhật có chọn lọc qua forget gate và input gate, ít bị gradient triệt tiêu hơn hidden state.' },
+  { term: 'Forget gate', category: 'ML', def: 'Cổng quyết định bao nhiêu thông tin từ cell state trước sẽ bị "quên". Output sigmoid trong [0,1]: 0 = quên hoàn toàn, 1 = giữ nguyên.' },
+  { term: 'MIMO', category: 'ML', def: 'Multiple Input Multiple Output — dự đoán toàn bộ H bước tương lai trong một lần forward pass duy nhất. Không tích lũy lỗi như autoregressive (dùng output làm input tiếp theo).' },
+  { term: 'Autoregressive', category: 'ML', def: 'Phương pháp dự đoán tuần tự: output ngày t+1 được dùng làm input để dự đoán t+2. Lỗi tích lũy qua mỗi bước — không phù hợp với crypto biến động mạnh.' },
+  { term: 'Horizon H7/H15/H60', category: 'ML', def: 'Ba mức dự báo độc lập: H7 (7 ngày tới), H15 (15 ngày tới), H60 (60 ngày tới). Mỗi horizon có một model LSTM riêng được train độc lập với seq_len khác nhau.' },
+  { term: 'Sequence length', category: 'ML', def: 'Số ngày lịch sử dùng làm input cho LSTM. H7: 60 ngày, H15: 90 ngày, H60: 120 ngày. Horizon dài hơn cần look-back dài hơn để nắm bắt pattern.' },
+  { term: 'log_return', category: 'ML', def: 'Biến đổi giá thành tỷ lệ thay đổi logarit. Làm chuỗi dừng (stationary), có thể cộng dồn để recover giá gốc, scale-invariant qua mọi mức giá.' },
+  { term: 'Stationary', category: 'ML', def: 'Chuỗi thời gian có đặc trưng thống kê (mean, variance) ổn định theo thời gian. Model học trên chuỗi dừng generalize tốt hơn sang period tương lai chưa thấy.' },
+  { term: 'StandardScaler', category: 'ML', def: 'Chuẩn hóa features về mean=0, std=1 dựa trên thống kê của training set. Fit chỉ trên train, transform val/test bằng cùng scaler — không có look-ahead bias.' },
+  { term: 'Walk-Forward CV', category: 'ML', def: 'Cross-validation tôn trọng thứ tự thời gian: luôn train trên quá khứ, validate trên tương lai liền kề. Phản ánh đúng điều kiện production, không có temporal leakage.' },
+  { term: 'Price head', category: 'ML', def: 'Đầu ra dự đoán chuỗi log_return cho H bước tới. Dùng HuberLoss với direction-weight ×3 khi sai chiều. Inverse-transform về giá USD bằng cumsum.' },
+  { term: 'Volatility head', category: 'ML', def: 'Đầu ra dự đoán độ biến động cho từng bước. Activation Softplus đảm bảo output luôn dương. Cung cấp confidence band cho dự báo giá.' },
+  { term: 'Direction head', category: 'ML', def: 'Đầu ra phân loại UP/DOWN cho từng bước (binary). Dùng CrossEntropyLoss. Accuracy đây là metric chính đánh giá model trong bảo vệ đồ án.' },
+  { term: 'HuberLoss', category: 'ML', def: 'Hàm mất mát lai giữa MSE và MAE: ít nhạy cảm với giá trị cực đoan hơn MSE. Phù hợp với DOGE kurtosis 77 — rất nhiều đột biến. Kết hợp với penalty ×3 khi sai chiều.' },
+  { term: 'Softplus', category: 'ML', def: 'Hàm kích hoạt luôn cho giá trị dương, trơn tru và gradient luôn khác 0. Dùng cho Volatility Head. Tốt hơn ReLU (dying neuron) và exp (overflow).' },
+  { term: 'Dropout', category: 'ML', def: 'Kỹ thuật regularization: ngẫu nhiên tắt một tỷ lệ neurons khi training. LSTM layers 20%, Heads 10%. Ngăn model học vẹt trên training data nhỏ.' },
+  { term: 'Early stopping', category: 'ML', def: 'Dừng training khi validation loss không cải thiện sau patience=7 epochs. Lưu checkpoint tốt nhất. Ngăn overfitting ở cuối quá trình training.' },
+  { term: 'Gradient clipping', category: 'ML', def: 'Giới hạn norm của gradient ≤ 1.0 khi backpropagation. Ngăn exploding gradient — vấn đề thường gặp khi train LSTM trên chuỗi dài.' },
+  { term: 'ADF Test', category: 'ML', def: 'Augmented Dickey-Fuller — kiểm định tính dừng của chuỗi thời gian. p-value nhỏ → chuỗi dừng. BTC log_return dừng mạnh, BTC price không dừng.' },
+  { term: 'Kurtosis', category: 'ML', def: 'Đo độ dày đuôi phân phối. DOGE kurtosis 77 — rất nhiều ngày biến động cực đoan. Giải thích tại sao chọn HuberLoss và StandardScaler thay vì MSE và MinMaxScaler.' },
+  { term: 'fear_greed placeholder', category: 'ML', def: 'Feature 8 (Fear & Greed) đang là hằng số 0.5 cho mọi ngày. Sau StandardScaler, std=0 → z-score=0 → model tự học weight ≈ 0. Cần tích hợp Alternative.me API.' },
+  { term: 'Directional accuracy', category: 'ML', def: 'Tỷ lệ dự đoán đúng chiều tăng/giảm. BTC H7 backtest: 61.1%, Walk-Forward: 49.4%. Random baseline là 50%. Metric chính đánh giá giá trị thực tế của model.' },
+];

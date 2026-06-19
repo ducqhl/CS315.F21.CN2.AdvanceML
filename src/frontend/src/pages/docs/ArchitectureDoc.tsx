@@ -1,7 +1,7 @@
 import { motion } from 'framer-motion';
 import {
   PageHeader, SectionCard, SectionTitle, BodyText, Callout,
-  DataTable, Mono, CardGrid, InfoCard,
+  DataTable, Mono, CardGrid, InfoCard, GlossarySection, type GlossaryTerm,
 } from './shared';
 
 const fadeUp = {
@@ -406,6 +406,26 @@ export default function ArchitectureDoc() {
           <Mono>spark-worker</Mono> và <Mono>inference_scheduler</Mono> không expose port ra host.
         </Callout>
       </SectionCard>
+
+      <GlossarySection terms={ARCH_GLOSSARY} />
     </motion.div>
   );
 }
+
+const ARCH_GLOSSARY: GlossaryTerm[] = [
+  { term: 'Lambda Architecture', category: 'Kiến trúc', def: 'Kiến trúc dữ liệu lớn gồm 3 tầng song song: Batch Layer xử lý lịch sử đầy đủ, Speed Layer xử lý realtime, Serving Layer phục vụ cả hai. Tách biệt correctness và latency.' },
+  { term: 'Batch Layer', category: 'Kiến trúc', def: 'Tầng xử lý toàn bộ lịch sử mỗi ngày. Spark Batch đọc 4.165 ngày CSV → daily_stats, historical_sma, coin_correlation vào MongoDB. Chậm nhưng chính xác.' },
+  { term: 'Speed Layer', category: 'Kiến trúc', def: 'Tầng xử lý realtime: Producer poll CoinGecko mỗi 10 phút → Kafka → Spark Streaming tính RSI/VWAP/Bollinger/ATR → MongoDB realtime_prices.' },
+  { term: 'Serving Layer', category: 'Kiến trúc', def: 'MongoDB là single serving store. Tất cả writers (Spark Batch, Spark Streaming, LSTM, Producer) ghi vào. FastAPI đọc từ đây và trả về cho Frontend.' },
+  { term: 'Kafka', category: 'Kiến trúc', def: 'Message broker phân tán. Topic crypto_raw nhận message từ Producer (acks=all), Spark Streaming đọc và xử lý theo trigger 30 giây.' },
+  { term: 'Spark Structured Streaming', category: 'Kiến trúc', def: 'Engine xử lý stream của Spark dưới dạng micro-batch. Hai query song song: Query A (window aggregation) và Query B (per-record indicators). Ghi vào MongoDB qua foreachBatch.' },
+  { term: 'foreachBatch', category: 'Kiến trúc', def: 'Pattern ghi Spark → MongoDB: hàm Python tùy chỉnh xử lý mỗi micro-batch. Idempotent — xóa theo batch_id rồi insert lại, không bao giờ duplicate khi Spark retry.' },
+  { term: 'Watermark', category: 'Kiến trúc', def: 'Thời gian tối đa Spark chờ data trễ (10 phút = 1 poll cycle). Không có watermark → state tăng vô hạn → OutOfMemory. Bằng poll interval để không bỏ sót data hợp lệ.' },
+  { term: 'LSTM Inference', category: 'Kiến trúc', def: 'Inference Scheduler chạy LSTM một lần mỗi ngày (daily cadence): đọc MongoDB/CSV → train → ghi H7/H15/H60 predictions vào collection predictions.' },
+  { term: 'FastAPI', category: 'Kiến trúc', def: 'Backend Python với JWT authentication. Đọc MongoDB và trả về REST API cho React Frontend (port 3000) và Streamlit Dashboard (port 8501).' },
+  { term: 'Docker Compose', category: 'Kiến trúc', def: '11 service được định nghĩa và orchestrate trong một file YAML. health_check + depends_on đảm bảo startup theo đúng thứ tự dependency.' },
+  { term: 'ISR', category: 'Kiến trúc', def: 'In-Sync Replicas — các Kafka broker đang đồng bộ với leader. acks=all yêu cầu toàn bộ ISR xác nhận → không mất message dù leader crash.' },
+  { term: 'Idempotent', category: 'Kiến trúc', def: 'Thuộc tính: chạy nhiều lần với cùng input cho cùng kết quả. Áp dụng cho foreachBatch (batch retry) và MongoDB upsert (inference re-run).' },
+  { term: 'JWT', category: 'Kiến trúc', def: 'JSON Web Token — token stateless. Không cần server lưu session, scale horizontally dễ dàng. TTL 24 giờ.' },
+  { term: 'pycoingecko', category: 'Kiến trúc', def: 'Python client cho CoinGecko API. Dùng demo tier: 10.000 calls/tháng. Producer poll mỗi 600 giây để không vượt quota.' },
+];

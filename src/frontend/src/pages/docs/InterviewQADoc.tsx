@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { ChevronDown } from 'lucide-react';
-import { PageHeader, SectionCard, SectionTitle, Callout } from './shared';
+import { PageHeader, SectionCard, SectionTitle, Callout, GlossarySection, FlowDiagram, type GlossaryTerm } from './shared';
 
 interface QA {
   q: string;
@@ -404,6 +404,92 @@ export default function InterviewQADoc() {
         badgeColor="#F87171"
       />
 
+      {/* ── Cơ chế hệ thống tổng quan ─────────────────────────────────────── */}
+      <SectionCard>
+        <SectionTitle accent="#5C8AFF">Cơ chế Hệ thống — End-to-End Flow</SectionTitle>
+
+        {/* Data flow diagram */}
+        <div style={{ marginBottom: '20px' }}>
+          <p style={{ margin: '0 0 10px', fontSize: '12px', fontFamily: 'IBM Plex Mono', color: 'var(--text-muted)', letterSpacing: '0.04em', textTransform: 'uppercase' }}>
+            Luồng dữ liệu đầy đủ
+          </p>
+          <FlowDiagram nodes={[
+            { label: 'CoinGecko', sub: 'pycoingecko · 10 min', variant: 'default' },
+            { label: 'Kafka', sub: 'crypto_raw · acks=all', variant: 'kafka' },
+            { label: 'Spark Stream', sub: 'RSI/BB/VWAP · 30s trigger', variant: 'spark' },
+            { label: 'MongoDB', sub: 'realtime_prices', variant: 'mongo' },
+            { label: 'FastAPI', sub: 'JWT · port 8000', variant: 'api' },
+            { label: 'React / Streamlit', sub: 'port 3000 / 8501', variant: 'ui' },
+          ]} />
+          <FlowDiagram nodes={[
+            { label: 'CSV / MongoDB', sub: '4165 ngày lịch sử', variant: 'default' },
+            { label: 'Spark Batch', sub: 'daily_stats · SMA · corr', variant: 'spark' },
+            { label: 'MongoDB', sub: 'batch collections', variant: 'mongo' },
+            { label: 'LSTM Infer', sub: 'H7/H15/H60 · daily', variant: 'lstm' },
+            { label: 'MongoDB', sub: 'predictions', variant: 'mongo' },
+          ]} />
+        </div>
+
+        {/* Cadence table */}
+        <p style={{ margin: '0 0 10px', fontSize: '12px', fontFamily: 'IBM Plex Mono', color: 'var(--text-muted)', letterSpacing: '0.04em', textTransform: 'uppercase' }}>
+          4 Cadence độc lập — không phải cùng một việc
+        </p>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: '8px', marginBottom: '20px' }}>
+          {[
+            { interval: '600s (10 min)', role: 'Producer poll CoinGecko', why: 'Giới hạn demo tier 10k calls/tháng', color: '#F97316' },
+            { interval: '30 min (×3 polls)', role: 'OHLC fetch riêng', why: 'OHLC tốn quota hơn — lấy thưa hơn', color: '#F59E0B' },
+            { interval: '300s (5 min)', role: 'Scheduler loop nội bộ', why: 'Phục vụ on-demand + refresh live_prices', color: '#818CF8' },
+            { interval: '1 lần / ngày', role: 'LSTM Inference', why: 'Model train trên daily data — H7/H15/H60', color: '#A78BFA' },
+          ].map(c => (
+            <div key={c.role} style={{
+              padding: '12px 14px',
+              background: `color-mix(in srgb, ${c.color} 6%, var(--bg-elevated))`,
+              border: `1px solid color-mix(in srgb, ${c.color} 22%, var(--border))`,
+              borderTop: `3px solid ${c.color}`,
+              borderRadius: '8px',
+            }}>
+              <div style={{ fontFamily: 'IBM Plex Mono', fontSize: '13px', fontWeight: 700, color: c.color, marginBottom: '4px' }}>
+                {c.interval}
+              </div>
+              <div style={{ fontFamily: 'Plus Jakarta Sans', fontSize: '12.5px', fontWeight: 700, color: 'var(--text-primary)', marginBottom: '4px' }}>
+                {c.role}
+              </div>
+              <div style={{ fontFamily: 'Plus Jakarta Sans', fontSize: '11.5px', color: 'var(--text-muted)', lineHeight: 1.55 }}>
+                {c.why}
+              </div>
+            </div>
+          ))}
+        </div>
+
+        {/* Key guarantees */}
+        <p style={{ margin: '0 0 10px', fontSize: '12px', fontFamily: 'IBM Plex Mono', color: 'var(--text-muted)', letterSpacing: '0.04em', textTransform: 'uppercase' }}>
+          Guarantees cốt lõi — phải thuộc trước phản biện
+        </p>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+          {[
+            { label: 'Kafka acks=all + ISR', detail: 'Mọi ISR xác nhận → message không mất dù leader crash. max_in_flight=1 → ordering đảm bảo khi retry.', color: '#F97316' },
+            { label: 'foreachBatch idempotent', detail: 'delete_many(batch_id) → insert_many. Spark retry cùng batch_id → kết quả y hệt. Không bao giờ duplicate.', color: '#818CF8' },
+            { label: 'MongoDB upsert key', detail: '(coin, prediction_date, horizon, model_id) — tối đa 1 document/forecast point dù inference chạy bao nhiêu lần.', color: '#22C55E' },
+            { label: 'Walk-Forward — không có data leakage', detail: 'Fold k luôn train [t0, tk), validate [tk, tk+Δ). Không shuffle, không overlap → reflects production exactly.', color: '#A78BFA' },
+            { label: 'StandardScaler fit chỉ trên train', detail: 'Val và test dùng scaler của train partition → không có look-ahead bias từ future statistics.', color: '#6366F1' },
+          ].map(g => (
+            <div key={g.label} style={{
+              display: 'flex', gap: '12px', alignItems: 'flex-start',
+              padding: '10px 14px',
+              background: 'var(--bg-elevated)', border: '1px solid var(--border)',
+              borderLeft: `3px solid ${g.color}`, borderRadius: '6px',
+            }}>
+              <div style={{ minWidth: '200px', fontFamily: 'IBM Plex Mono', fontSize: '11px', fontWeight: 700, color: g.color, lineHeight: 1.5 }}>
+                {g.label}
+              </div>
+              <div style={{ fontFamily: 'Plus Jakarta Sans', fontSize: '12.5px', color: 'var(--text-secondary)', lineHeight: 1.65, flex: 1 }}>
+                {g.detail}
+              </div>
+            </div>
+          ))}
+        </div>
+      </SectionCard>
+
       <Callout variant="warning">
         <strong>Cách dùng trang này:</strong> Đọc câu hỏi và thử trả lời trong đầu trước khi mở đáp án. Mỗi câu trả lời có 3–4 điểm chính — chỉ cần nhớ điểm chính, không cần thuộc lòng từng chữ. Số liệu quan trọng nhất cần nhớ: <strong>4.165 ngày</strong>, <strong>9 features</strong>, <strong>seq_len=60</strong>, <strong>multi-horizon H7/H15/H60</strong>, <strong>inference daily</strong>, <strong>61.1% dir acc (BTC backtest H7)</strong>, <strong>730-ngày rolling window</strong>.
       </Callout>
@@ -440,6 +526,48 @@ export default function InterviewQADoc() {
       <Callout variant="success">
         <strong>Tip cuối cho buổi phản biện:</strong> Nếu không nhớ con số chính xác, hãy mô tả trend và pattern thay vì im lặng. Ví dụ: "Walk-forward fold trên trending market cho accuracy cao hơn sideway khoảng 5-15 điểm %" là câu trả lời tốt. Phong cách trả lời tự tin, thừa nhận limitations thẳng thắn, và đề xuất hướng cải tiến cụ thể luôn được đánh giá cao hơn trả lời vòng vo.
       </Callout>
+
+      <GlossarySection terms={QA_GLOSSARY} />
     </motion.div>
   );
 }
+
+const QA_GLOSSARY: GlossaryTerm[] = [
+  { term: 'Lambda Architecture', category: 'Kiến trúc', def: 'Kiến trúc 3 tầng: Batch Layer (lịch sử, correctness) + Speed Layer (realtime, latency thấp) + Serving Layer (MongoDB phục vụ cả hai). Giải quyết hai SLA đối nghịch trong một hệ thống.' },
+  { term: 'Kappa Architecture', category: 'Kiến trúc', def: 'Biến thể Lambda chỉ dùng Speed Layer. Không phù hợp khi LSTM cần scaler cố định fit trên rolling 730 ngày — scaler incremental thay đổi liên tục làm sai inference.' },
+  { term: 'Batch Layer', category: 'Kiến trúc', def: 'Tầng xử lý toàn bộ lịch sử. Spark Batch chạy hàng ngày trên 4.165 ngày CSV → daily_stats, historical_sma, coin_correlation. Ưu tiên correctness, không cần latency thấp.' },
+  { term: 'Speed Layer', category: 'Kiến trúc', def: 'Tầng xử lý realtime: Kafka + Spark Streaming → realtime_prices với RSI/VWAP/Bollinger/ATR. Ưu tiên latency thấp, chấp nhận approximate.' },
+  { term: 'Serving Layer', category: 'Kiến trúc', def: 'MongoDB — single source of truth. Tất cả writers (Spark, LSTM, Producer) ghi vào, FastAPI đọc từ đây. Không cache trung gian, không cache invalidation.' },
+  { term: 'LSTM', category: 'ML', def: 'Long Short-Term Memory — mạng nơ-ron hồi quy với 3 cổng (forget/input/output) và cell state riêng. Nhớ được phụ thuộc dài hạn trong chuỗi thời gian tốt hơn RNN thường.' },
+  { term: 'MIMO', category: 'ML', def: 'Multiple Input Multiple Output — dự đoán tất cả H bước trong 1 forward pass từ hidden state cuối. Không có lỗi tích lũy như autoregressive (dùng output t+1 làm input t+2).' },
+  { term: 'Autoregressive', category: 'ML', def: 'Dự đoán tuần tự: output t+1 dùng làm input cho t+2. Lỗi tích lũy — sai 2% ở t+1 phóng đại rất nhanh sau 7 bước với crypto volatile.' },
+  { term: 'Walk-Forward CV', category: 'ML', def: 'Cross-validation tôn trọng thứ tự thời gian: luôn train trên quá khứ, validate trên tương lai liền kề. Không shuffle. Phản ánh đúng điều kiện production.' },
+  { term: 'K-Fold CV', category: 'ML', def: 'Cross-validation shuffle ngẫu nhiên dữ liệu. Gây temporal leakage khi dùng với time series — model nhìn thấy "tương lai" trong training. Accuracy ảo.' },
+  { term: 'log_return', category: 'ML', def: 'Biến đổi giá thành tỷ lệ thay đổi dạng logarit. Làm cho chuỗi dừng (stationary), có thể cộng dồn để recover giá gốc, scale-invariant qua các mức giá khác nhau.' },
+  { term: 'Stationary', category: 'ML', def: 'Chuỗi thời gian có mean, variance, autocovariance không thay đổi theo thời gian. Mô hình học trên chuỗi dừng generalize tốt hơn sang period mới.' },
+  { term: 'ADF Test', category: 'ML', def: 'Augmented Dickey-Fuller — kiểm định tính dừng. p-value < 0.05 → reject unit root → chuỗi dừng. BTC price: không dừng (p=0.68); BTC log_return: dừng mạnh.' },
+  { term: 'StandardScaler', category: 'ML', def: 'Chuẩn hóa về mean=0, std=1. Fit chỉ trên training data. Robust với outlier — giá trị ngoài training range vẫn có z-score hợp lý, LSTM vẫn hiểu được.' },
+  { term: 'MinMaxScaler', category: 'ML', def: 'Chuẩn hóa về [0,1] dựa trên min/max training. Khi BTC phá đỉnh mới — vượt max training — feature ra ngoài range, LSTM không nhận ra pattern này.' },
+  { term: 'HuberLoss', category: 'ML', def: 'Hàm mất mát kết hợp: ít nhạy cảm hơn MSE với extreme values. Phù hợp với DOGE kurtosis 77 — rất nhiều đột biến cực đoan. Kết hợp với weight phạt ×3 khi sai chiều.' },
+  { term: 'Softplus', category: 'ML', def: 'Hàm kích hoạt luôn cho giá trị dương, trơn, gradient luôn khác 0 (không dying neuron). Dùng cho Volatility Head vì độ biến động không thể âm.' },
+  { term: 'Dropout', category: 'ML', def: 'Ngẫu nhiên tắt một phần neurons trong training để model không học vẹt. LSTM layers 20%, Heads 10%. Giảm overfitting khi dataset nhỏ (~3.000 samples).' },
+  { term: 'Early Stopping', category: 'ML', def: 'Tự động dừng training khi validation loss không cải thiện sau N epoch (patience=7). Lưu lại checkpoint tốt nhất để tránh overfitting ở epoch cuối.' },
+  { term: 'Kurtosis', category: 'ML', def: 'Đo độ dày đuôi phân phối. DOGE kurtosis = 77 (rất cao) — tức là rất nhiều ngày biến động cực đoan. Lý do chọn HuberLoss thay vì MSE.' },
+  { term: 'Drawdown', category: 'ML', def: 'Mức giảm từ đỉnh xuống đáy tính theo %. BTC max drawdown -83.64%, DOGE -92.21%. Đo rủi ro downside thực tế của từng tài sản.' },
+  { term: 'foreachBatch', category: 'Spark', def: 'Pattern ghi từ Spark Streaming vào MongoDB qua hàm Python tùy chỉnh trên mỗi micro-batch. Đảm bảo idempotent: xóa theo batch_id rồi insert lại — không bao giờ duplicate.' },
+  { term: 'Watermark', category: 'Spark', def: 'Ngưỡng thời gian Spark chờ data trễ. Data đến trễ hơn watermark bị bỏ qua hoàn toàn. Không có watermark → Spark giữ state vô hạn → OutOfMemory.' },
+  { term: 'outputMode append', category: 'Spark', def: 'Mỗi kết quả window chỉ được emit một lần duy nhất sau khi window đóng. Phù hợp với windowed aggregation có watermark.' },
+  { term: 'Micro-batch', category: 'Spark', def: 'Spark Streaming xử lý dữ liệu theo từng batch nhỏ theo trigger interval 30 giây. Không phải true streaming — mỗi batch được xử lý như một Spark job nhỏ.' },
+  { term: 'Checkpoint', category: 'Spark', def: 'Spark lưu trạng thái query (offset Kafka đã đọc + aggregation state) xuống disk. Cho phép resume chính xác sau khi container restart, không đọc lại từ đầu.' },
+  { term: 'acks=all', category: 'Kafka', def: 'Kafka producer yêu cầu tất cả replica đang đồng bộ (ISR) xác nhận trước khi ack. Đảm bảo không mất message dù leader broker crash ngay sau khi nhận.' },
+  { term: 'ISR', category: 'Kafka', def: 'In-Sync Replicas — tập hợp các Kafka broker replica đang đồng bộ với leader. acks=all yêu cầu toàn bộ ISR xác nhận mới trả về success cho producer.' },
+  { term: 'Idempotent', category: 'Kafka', def: 'Thuộc tính: chạy nhiều lần với cùng input cho cùng kết quả. Producer Kafka: retry không tạo duplicate message. Inference upsert: chạy lại không tạo document mới.' },
+  { term: 'JWT', category: 'API', def: 'JSON Web Token — token stateless chứa thông tin user, được ký bằng secret key. Server không cần lưu session. TTL 24 giờ — hết hạn tự động.' },
+  { term: 'RSI', category: 'Chỉ số', def: 'Relative Strength Index — oscillator đo sức mạnh xu hướng trong khoảng 0–100. Trên 70: overbought (có thể giảm). Dưới 30: oversold (có thể tăng). Dùng 14 kỳ.' },
+  { term: 'MACD', category: 'Chỉ số', def: 'Moving Average Convergence Divergence — đo chênh lệch giữa hai đường trung bình động EMA ngắn hạn và dài hạn. Dương: momentum tăng. Âm: momentum giảm.' },
+  { term: 'Bollinger Bands', category: 'Chỉ số', def: 'Dải băng gồm đường trung bình SMA20 và hai dải trên/dưới cách nhau 2 độ lệch chuẩn. %B đo vị trí giá trong dải: 0 = tại đáy, 1 = tại đỉnh.' },
+  { term: 'VWAP', category: 'Chỉ số', def: 'Volume-Weighted Average Price — giá trung bình có trọng số theo khối lượng giao dịch. Phản ánh giá giao dịch thực tế tốt hơn SMA đơn giản.' },
+  { term: 'ATR', category: 'Chỉ số', def: 'Average True Range — đo biên độ biến động trung bình. Cần high/low để tính chính xác. Trong project dùng proxy là giá trị tuyệt đối của log_return hàng ngày.' },
+  { term: 'Fear & Greed Index', category: 'Chỉ số', def: 'Chỉ số tâm lý thị trường từ alternative.me (0–100). 0 = sợ hãi cực độ, 100 = tham lam cực độ. Hiện là placeholder 0.5 — không đóng góp thông tin thực vào model.' },
+  { term: 'testcontainers', category: 'Testing', def: 'Thư viện tự động tạo Docker container thật (Kafka, MongoDB) trong quá trình test. Đảm bảo E2E test chạy với infrastructure giống production.' },
+];

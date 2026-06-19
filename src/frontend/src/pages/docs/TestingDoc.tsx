@@ -2,6 +2,7 @@ import { motion } from 'framer-motion';
 import {
   PageHeader, SectionCard, SectionTitle, BodyText, Callout,
   CodeBlock, DataTable, Mono, CardGrid, InfoCard,
+  GlossarySection, type GlossaryTerm,
 } from './shared';
 
 export default function TestingDoc() {
@@ -197,6 +198,23 @@ python_functions = test_*`}</CodeBlock>
           <strong>Design rationale:</strong> E2E tests dùng real Kafka/MongoDB containers (testcontainers) bởi vì mock không đủ. Mock Kafka chỉ verify rằng <Mono>producer.send()</Mono> được gọi với đúng arguments — không verify message thực sự được delivered và consumer có thể đọc lại. Schema mismatch và serialization bugs chỉ xuất hiện với real infrastructure, không xuất hiện khi chạy với mock.
         </Callout>
       </SectionCard>
+
+      <GlossarySection terms={TESTING_GLOSSARY} />
     </motion.div>
   );
 }
+
+const TESTING_GLOSSARY: GlossaryTerm[] = [
+  { term: 'Unit test', category: 'Testing', def: 'Test một function/class riêng lẻ trong môi trường cô lập. Dùng mock/stub để loại bỏ dependencies bên ngoài. Chạy nhanh, không cần infrastructure.' },
+  { term: 'Integration test', category: 'Testing', def: 'Test sự phối hợp giữa nhiều component. E2E tests trong project là integration tests dùng real Kafka + MongoDB containers để verify toàn bộ pipeline.' },
+  { term: 'E2E test', category: 'Testing', def: 'End-to-End test: kiểm tra toàn bộ luồng dữ liệu từ đầu đến cuối. Layer 1: Producer→Kafka→Consumer. Layer 2: Spark Batch→MongoDB. Layer 3: LSTM→MongoDB.' },
+  { term: 'testcontainers', category: 'Testing', def: 'Thư viện Python tự động spin up Docker containers (Kafka, MongoDB) trong test, chạy test, rồi tear down. Real infrastructure, isolated, reproducible — mỗi test run sạch.' },
+  { term: 'Mock', category: 'Testing', def: 'Object giả lập dependency bên ngoài. CoinGecko API được mock trong tests để kiểm soát input data, tránh network dependency và quota giới hạn.' },
+  { term: 'Fixture', category: 'Testing', def: 'Pytest mechanism cung cấp dữ liệu hoặc object tái sử dụng cho nhiều tests. Kafka container, MongoDB client, sample message — định nghĩa một lần, inject vào mọi test cần.' },
+  { term: 'pytest.mark.e2e', category: 'Testing', def: 'Custom pytest marker đánh dấu E2E tests. Mặc định bị skip trong pytest (addopts = --ignore-glob=tests/e2e*) — chỉ chạy khi có infrastructure thật.' },
+  { term: 'Idempotency test', category: 'Testing', def: 'test_upsert_idempotency: chạy inference 2 lần → count documents giữ nguyên. Đảm bảo restart không tạo duplicate. Safety net quan trọng nhất của Layer 3.' },
+  { term: 'Schema test', category: 'Testing', def: 'test_message_schema_is_complete: verify tất cả REQUIRED_FIELDS có mặt trong Kafka message. Phát hiện ngay khi CoinGecko API thay đổi response format.' },
+  { term: 'Acceptance criteria', category: 'Testing', def: 'scripts/verify_acceptance.sh: chạy tất cả kiểm tra để verify hệ thống đáp ứng yêu cầu đồ án. Bao gồm: Kafka topics tồn tại, MongoDB có data, model artifacts có mặt.' },
+  { term: 'pytest.ini', category: 'Testing', def: 'File cấu hình pytest: đăng ký custom markers (e2e), cấu hình addopts để exclude E2E tests mặc định, testpaths để tìm tests.' },
+  { term: 'Coverage', category: 'Testing', def: 'Tỷ lệ % code được chạy bởi tests. Không phải mục tiêu tối thượng — 100% coverage không đảm bảo đúng behavior. Unit + integration tests quan trọng hơn con số coverage.' },
+];

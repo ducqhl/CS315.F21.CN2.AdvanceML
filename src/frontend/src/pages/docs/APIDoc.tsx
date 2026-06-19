@@ -2,6 +2,7 @@ import { motion } from 'framer-motion';
 import {
   PageHeader, SectionCard, SectionTitle, BodyText, Callout,
   CodeBlock, DataTable, Mono, StepList, Tag, CardGrid, InfoCard,
+  GlossarySection, type GlossaryTerm,
 } from './shared';
 
 export default function APIDoc() {
@@ -172,6 +173,23 @@ async def get_merged_prices(coin: str, days: int = 30, user = Depends(verify_jwt
           </InfoCard>
         </CardGrid>
       </SectionCard>
+
+      <GlossarySection terms={API_GLOSSARY} />
     </motion.div>
   );
 }
+
+const API_GLOSSARY: GlossaryTerm[] = [
+  { term: 'FastAPI', category: 'API', def: 'Python web framework hiệu năng cao, tự động generate OpenAPI docs. Dùng async/await để xử lý concurrent requests. Chạy ở port 8000.' },
+  { term: 'JWT', category: 'API', def: 'JSON Web Token — chuỗi token mã hóa chứa thông tin user và thời hạn, được ký bằng SECRET_KEY. Stateless: server không cần lưu session, scale horizontally dễ dàng.' },
+  { term: 'Bearer token', category: 'API', def: 'Kiểu authentication qua HTTP header: Authorization: Bearer <token>. Client gửi JWT token trong mỗi request để FastAPI verify. Không cần cookie hay session.' },
+  { term: 'Stateless auth', category: 'API', def: 'Server không lưu session. Mọi thông tin cần thiết nằm trong JWT token. Không cần shared session store (Redis) khi scale. Trade-off: không thể revoke token ngay lập tức.' },
+  { term: 'TTL', category: 'API', def: 'Time To Live — thời gian sống của JWT token. ACCESS_TOKEN_EXPIRE=1440 phút (24 giờ). Token hết hạn → user phải login lại. Trade-off chấp nhận được cho use case này.' },
+  { term: 'OAuth2PasswordBearer', category: 'API', def: 'FastAPI dependency class chuẩn hóa việc extract Bearer token từ Authorization header và validate JWT. Dùng như Depends() trong route handler.' },
+  { term: 'Pydantic', category: 'API', def: 'Thư viện validation data với Python type hints. FastAPI dùng Pydantic models (BaseModel) để validate request body và serialize response tự động.' },
+  { term: 'CORS', category: 'API', def: 'Cross-Origin Resource Sharing — cơ chế browser cho phép frontend (port 3000) gọi API (port 8000) khác origin. CORSMiddleware config trong FastAPI cho phép các origin cụ thể.' },
+  { term: 'Dependency Injection', category: 'API', def: 'Pattern FastAPI dùng Depends() để inject shared logic (verify token, get DB connection). Route handler nhận user đã verified mà không cần viết lại auth code.' },
+  { term: 'REST endpoint', category: 'API', def: 'URL endpoint theo chuẩn REST: GET /api/prices/{coin} đọc giá, POST /api/predict/{coin} trigger inference on-demand. Verb HTTP phản ánh loại thao tác.' },
+  { term: 'Inference on-demand', category: 'API', def: 'POST /api/predict/{coin} trigger LSTM inference ngay lập tức qua API. Inference Scheduler phục vụ request này trong vòng lặp 5 phút — không phải daily cadence.' },
+  { term: 'Async/await', category: 'API', def: 'Python async programming: route handler có thể xử lý request khác trong khi chờ I/O (MongoDB query, file read). Tăng throughput mà không cần multi-threading phức tạp.' },
+];

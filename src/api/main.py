@@ -350,18 +350,27 @@ def get_realtime(coin: str, _user: dict = Depends(get_current_user)) -> dict:
     if doc:
         result = _serialize(doc)
         result["source"] = "realtime"
+        result.setdefault("daily_high", result.get("high"))
+        result.setdefault("daily_low",  result.get("low"))
+        result.setdefault("avg_volume", result.get("volume_24h"))
         return result
     doc = db.live_prices.find_one({"symbol": symbol}, sort=[("timestamp", -1)])
     if doc:
         result = _serialize(doc)
         result["source"] = "live_prices"
         result["price"] = doc.get("price_usd") or doc.get("close")
+        result.setdefault("daily_high", result.get("high"))
+        result.setdefault("daily_low",  result.get("low"))
+        result.setdefault("avg_volume", result.get("volume_24h"))
         return result
     doc = db.daily_stats.find_one({"symbol": symbol}, sort=[("date", -1)])
     if doc:
         result = _serialize(doc)
         result["source"] = "batch_fallback"
         result["price"] = doc.get("avg_close")
+        result.setdefault("daily_high", result.get("high") or result.get("avg_high"))
+        result.setdefault("daily_low",  result.get("low")  or result.get("avg_low"))
+        result.setdefault("avg_volume", result.get("volume_24h") or result.get("avg_volume"))
         return result
     raise HTTPException(status_code=404, detail=f"No data found for {symbol}")
 
@@ -830,10 +839,21 @@ def get_correlation(_user: dict = Depends(get_current_user)) -> dict:
 @app.get("/api/inference/status")
 def get_inference_status(_user: dict = Depends(get_current_user)) -> dict:
     jobs: dict = {}
+    import re as _re
     for symbol in ["BTC", "DOGE"]:
-        doc = db.inference_status.find_one({"coin": symbol}, {"_id": 0})
-        if doc:
-            jobs[symbol] = _serialize(doc)
+        # Scheduler writes docs with coin = "<SYMBOL>_h<N>" (e.g. "BTC_h7").
+        # Query all horizon docs for this symbol and pick the most recently run one.
+        docs = list(db.inference_status.find(
+            {"coin": _re.compile(f"^{symbol}(_|$)", _re.IGNORECASE)},
+            {"_id": 0},
+        ))
+        if docs:
+            latest = max(docs, key=lambda d: d.get("last_run") or d.get("last_run_at") or "")
+            result = _serialize(latest)
+            # Normalise field name: scheduler writes "last_run", frontend reads "last_run_at"
+            if "last_run_at" not in result and "last_run" in result:
+                result["last_run_at"] = result["last_run"]
+            jobs[symbol] = result
         else:
             jobs[symbol] = {"coin": symbol, "status": "unknown"}
     interval = int(os.environ.get("INFERENCE_INTERVAL_SECONDS", "300"))

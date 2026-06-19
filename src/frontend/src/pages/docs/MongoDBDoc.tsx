@@ -2,6 +2,7 @@ import { motion } from 'framer-motion';
 import {
   PageHeader, SectionCard, SectionTitle, BodyText, Callout,
   CodeBlock, DataTable, Mono, Tag,
+  GlossarySection, type GlossaryTerm,
 } from './shared';
 
 export default function MongoDBDoc() {
@@ -249,6 +250,24 @@ db = client["crypto_db"]`}</CodeBlock>
           ]}
         />
       </SectionCard>
+
+      <GlossarySection terms={MONGO_GLOSSARY} />
     </motion.div>
   );
 }
+
+const MONGO_GLOSSARY: GlossaryTerm[] = [
+  { term: 'Collection', category: 'MongoDB', def: 'Nhóm documents trong MongoDB — tương đương bảng trong SQL nhưng không có schema cứng. Mỗi collection (realtime_prices, predictions, daily_stats...) có cấu trúc document riêng.' },
+  { term: 'Document', category: 'MongoDB', def: 'Đơn vị lưu trữ cơ bản trong MongoDB, dạng JSON/BSON. Một document có thể có cấu trúc phức tạp, lồng nhau, không cần giống document khác trong cùng collection.' },
+  { term: 'Flexible schema', category: 'MongoDB', def: 'MongoDB không yêu cầu tất cả documents cùng collection phải có cùng fields. Không cần ALTER TABLE khi thêm field mới — lợi thế lớn khi schema thay đổi trong development.' },
+  { term: 'Upsert', category: 'MongoDB', def: 'Thao tác update_one/replace_one với upsert=True: insert nếu document chưa tồn tại, update nếu đã có. Đảm bảo idempotent — chạy lại không tạo duplicate.' },
+  { term: 'Compound index', category: 'MongoDB', def: 'Index trên nhiều fields kết hợp. predictions collection có unique compound index (coin, prediction_date, horizon, model_id) — đảm bảo tối đa 1 document mỗi forecast point.' },
+  { term: 'realtime_prices', category: 'MongoDB', def: 'Collection chứa output của Spark Streaming: giá realtime với RSI, VWAP, Bollinger, ATR. Được cập nhật mỗi 30 giây (trigger interval).' },
+  { term: 'predictions', category: 'MongoDB', def: 'Collection chứa LSTM forecast H7/H15/H60 cho BTC và DOGE. Upsert key: (coin, prediction_date, horizon, model_id). LSTM Scheduler ghi mỗi ngày một lần.' },
+  { term: 'daily_stats', category: 'MongoDB', def: 'Collection chứa thống kê daily (open, high, low, close, volume, return) từ Spark Batch. Cập nhật mỗi ngày khi batch job chạy.' },
+  { term: 'historical_sma', category: 'MongoDB', def: 'Collection chứa SMA nhiều cửa sổ (7/30/90 ngày) từ Batch Layer. Batch tính chính xác trên full history — khác với streaming SMA tính approximate trên window.' },
+  { term: 'coin_correlation', category: 'MongoDB', def: 'Collection chứa rolling Pearson correlation BTC-DOGE theo 30-ngày trượt. Batch Layer cập nhật hàng ngày. Frontend hiển thị trên trang Correlation.' },
+  { term: 'PyMongo', category: 'MongoDB', def: 'Python driver chính thức cho MongoDB. Dùng trong foreachBatch (Spark → MongoDB) và FastAPI (API → MongoDB). Cung cấp find(), insert_many(), update_one()...' },
+  { term: 'Single serving store', category: 'MongoDB', def: 'Một MongoDB instance phục vụ tất cả: Spark Batch ghi, Spark Streaming ghi, LSTM ghi, FastAPI đọc. Giảm operational complexity so với dùng nhiều databases.' },
+  { term: 'TTL index', category: 'MongoDB', def: 'Index tự động xóa documents sau một khoảng thời gian. Dùng cho alerts collection để giữ alerts tươi — không cần cleanup thủ công.' },
+];

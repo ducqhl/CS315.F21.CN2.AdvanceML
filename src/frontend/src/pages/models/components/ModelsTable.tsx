@@ -42,7 +42,7 @@ function FoldBar({ fold, max = 100 }: { fold: FoldMetric; max?: number }) {
         {fold.dir_acc.toFixed(1)}%
       </span>
       <span style={{ fontFamily: 'Plus Jakarta Sans', fontSize: 10, color: 'var(--text-muted)', width: 60 }}>
-        ${fmtMetricDollar(fold.rmse) ?? '—'}
+        {fmtMetricDollar(fold.rmse) ?? '—'}
       </span>
     </div>
   );
@@ -69,7 +69,7 @@ function ScoreDetail({ sr }: { sr: ScoreReport }) {
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginBottom: 14 }}>
             {[
               { label: 'Mean Dir Acc', value: wfDirAcc != null ? `${wfDirAcc.toFixed(1)}%` : '—', highlight: wfDirAcc != null },
-              { label: 'Mean RMSE',   value: wfRmse   != null ? `$${fmtMetricDollar(wfRmse)}` : '—', highlight: false },
+              { label: 'Mean RMSE',   value: wfRmse   != null ? fmtMetricDollar(wfRmse) : '—', highlight: false },
             ].map(({ label, value, highlight }) => (
               <div key={label} style={{
                 background: 'var(--bg-card)', border: '1px solid var(--border)',
@@ -234,7 +234,7 @@ export default function ModelsTable({
                   {/* RMSE */}
                   <td style={{ textAlign: 'right' }} onClick={e => e.stopPropagation()}>
                     <span style={{ fontFamily: 'IBM Plex Mono', fontSize: 12, color: 'var(--text-primary)' }}>
-                      {m.metrics?.rmse != null ? `$${fmtMetricDollar(m.metrics.rmse)}` : '—'}
+                      {m.metrics?.rmse != null ? fmtMetricDollar(m.metrics.rmse) : '—'}
                     </span>
                   </td>
 

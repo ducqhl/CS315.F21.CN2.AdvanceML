@@ -2,6 +2,7 @@ import { motion } from 'framer-motion';
 import {
   PageHeader, SectionCard, SectionTitle, BodyText,
   CodeBlock, DataTable, Mono,
+  GlossarySection, type GlossaryTerm,
 } from './shared';
 
 export default function FrontendDoc() {
@@ -163,6 +164,24 @@ CMD ["nginx", "-g", "daemon off;"]`}</CodeBlock>
           <Mono>nginx.conf</Mono> được cấu hình với hai chức năng chính: SPA routing (redirect mọi path không tìm thấy về <Mono>index.html</Mono> để React Router xử lý) và proxy các requests tới <Mono>/api/</Mono> đến FastAPI backend. Multi-stage build đảm bảo production image chỉ chứa static files và Nginx binary — kích thước image tối thiểu.
         </BodyText>
       </SectionCard>
+
+      <GlossarySection terms={FRONTEND_GLOSSARY} />
     </motion.div>
   );
 }
+
+const FRONTEND_GLOSSARY: GlossaryTerm[] = [
+  { term: 'React 19', category: 'Frontend', def: 'JavaScript library xây dựng UI theo mô hình component. Mỗi component là một function trả về JSX (HTML-like syntax). React quản lý DOM updates hiệu quả qua Virtual DOM.' },
+  { term: 'TypeScript', category: 'Frontend', def: 'JavaScript với type system tĩnh. Phát hiện lỗi type tại compile time thay vì runtime. Cải thiện DX với autocomplete và type safety khi gọi API.' },
+  { term: 'Vite', category: 'Frontend', def: 'Build tool hiện đại cho frontend. Dev server với HMR (Hot Module Replacement) cực nhanh. Build production dùng Rollup → output gồm JS/CSS bundle tối ưu.' },
+  { term: 'Tailwind CSS', category: 'Frontend', def: 'CSS utility-first framework. Viết style trực tiếp qua class names (flex, gap-4, text-sm...). Không cần viết CSS file riêng. Purge unused classes trong production build.' },
+  { term: 'SPA', category: 'Frontend', def: 'Single Page Application — toàn bộ app load một lần, điều hướng giữa các trang không reload. React Router xử lý URL changes, Nginx redirect về index.html.' },
+  { term: 'React Router', category: 'Frontend', def: 'Library điều hướng cho React SPA. /dashboard, /realtime, /technical, /predictions, /correlation — mỗi route map đến component page riêng.' },
+  { term: 'Axios', category: 'Frontend', def: 'HTTP client cho browser. API client (src/api/client.ts) dùng Axios để gọi FastAPI backend. Tự động attach Authorization header với JWT token.' },
+  { term: 'Component', category: 'Frontend', def: 'Đơn vị UI tái sử dụng trong React. Nhận props (input), trả về JSX. Ví dụ: PriceCard, RSIChart, PredictionTable — mỗi phần giao diện là một component.' },
+  { term: 'Hook', category: 'Frontend', def: 'Function đặc biệt của React (useState, useEffect, useMemo...). useState quản lý state component. useEffect gọi API khi component mount. useMemo cache tính toán nặng.' },
+  { term: 'Framer Motion', category: 'Frontend', def: 'Thư viện animation cho React. Dùng cho page transitions (fade in/up), accordion expand/collapse trong Q&A page, chart animations. API declarative qua props.' },
+  { term: 'Recharts', category: 'Frontend', def: 'Thư viện chart cho React dùng SVG. Vẽ line chart giá, area chart predictions, RSI chart với reference lines, correlation heatmap.' },
+  { term: 'Nginx reverse proxy', category: 'Frontend', def: 'Nginx nhận request từ browser, forward /api/* đến FastAPI (port 8000). Browser chỉ thấy một origin (port 3000) — tránh CORS issues và ẩn backend details.' },
+  { term: 'HMR', category: 'Frontend', def: 'Hot Module Replacement — Vite dev server cập nhật component trong browser ngay lập tức khi code thay đổi, không cần full reload. State component được giữ nguyên.' },
+];

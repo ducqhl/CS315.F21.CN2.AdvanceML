@@ -154,7 +154,7 @@ const DOCS: DocEntry[] = [
   {
     id: 'qa',
     num: '11',
-    title: 'Phản biện Q&A',
+    title: 'Q&A',
     emoji: '🎯',
     description: '28 câu hỏi phản biện với câu trả lời chi tiết cho buổi bảo vệ. Architectural decisions, ML limitations, production trade-offs. Accordion expand/collapse.',
     inApp: 'doc-qa',

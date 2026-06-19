@@ -2,6 +2,7 @@ import { motion } from 'framer-motion';
 import {
   PageHeader, SectionCard, SectionTitle, BodyText, Callout,
   CodeBlock, DataTable, Mono, StepList,
+  GlossarySection, type GlossaryTerm,
 } from './shared';
 
 export default function DeploymentDoc() {
@@ -207,6 +208,24 @@ make e2e-layer-3    # ML Pipeline → MongoDB only`}</CodeBlock>
           <strong>LSTM training trên CPU:</strong> Dataset chỉ khoảng 3.000 samples sau sliding window, model có khoảng 220K parameters. Thời gian training: 2 đến 5 phút cho mỗi coin trên CPU. GPU không cần thiết và không cải thiện đáng kể thời gian training cho dataset size này — GPU sẽ bắt đầu có lợi khi dataset lớn hơn 10 lần.
         </Callout>
       </SectionCard>
+
+      <GlossarySection terms={DEPLOY_GLOSSARY} />
     </motion.div>
   );
 }
+
+const DEPLOY_GLOSSARY: GlossaryTerm[] = [
+  { term: 'Docker', category: 'Docker', def: 'Nền tảng container hóa. Đóng gói ứng dụng + dependencies vào container cô lập. Chạy nhất quán trên mọi máy dù OS hay môi trường khác nhau.' },
+  { term: 'Docker Compose', category: 'Docker', def: 'Tool định nghĩa và chạy nhiều container cùng lúc qua file YAML. docker-compose.yml định nghĩa 11 services với network, volume, port, health check.' },
+  { term: 'Container', category: 'Docker', def: 'Môi trường chạy cô lập cho một service. Có filesystem, network, process namespace riêng. Nhẹ hơn VM vì dùng chung kernel host.' },
+  { term: 'Image', category: 'Docker', def: 'Template bất biến để tạo container. Được build từ Dockerfile, gồm nhiều layers. Mỗi service có image riêng (python:3.10, bitnami/kafka, nginx:alpine...).' },
+  { term: 'Volume', category: 'Docker', def: 'Cơ chế lưu data persistent ngoài container. mongodb_data, kafka_data, spark_checkpoint: mất container nhưng data vẫn còn. Không dùng volume → data mất khi restart.' },
+  { term: 'depends_on', category: 'Docker', def: 'Khai báo thứ tự khởi động: service này chỉ start sau khi service kia healthy. Ví dụ: producer depends_on kafka, spark depends_on mongodb.' },
+  { term: 'Health check', category: 'Docker', def: 'Lệnh Docker chạy định kỳ để kiểm tra service đang hoạt động. depends_on kết hợp condition: service_healthy để đảm bảo chờ đúng đến khi service thực sự sẵn sàng.' },
+  { term: 'Nginx', category: 'Docker', def: 'Web server kiêm reverse proxy cho React Frontend. Phục vụ static files (JS/CSS), cấu hình SPA routing (redirect về index.html), proxy /api/ đến FastAPI.' },
+  { term: 'Multi-stage build', category: 'Docker', def: 'Dockerfile dùng nhiều stage: stage 1 build (Node.js + npm build), stage 2 serve (chỉ copy dist/ vào Nginx image). Image production nhỏ hơn nhiều — không có Node.js, source code.' },
+  { term: 'restart policy', category: 'Docker', def: 'unless-stopped: container tự khởi động lại sau crash hoặc machine reboot. Trừ khi bị stop thủ công (docker stop). Đảm bảo service luôn chạy trong production.' },
+  { term: '.env file', category: 'Docker', def: 'File chứa environment variables nhạy cảm (API keys, passwords). Không commit vào git. Docker Compose đọc từ .env và inject vào containers qua env_file:.' },
+  { term: 'Zookeeper', category: 'Docker', def: 'Service coordination cho Kafka (Kafka 2.x cần Zookeeper quản lý broker metadata và leader election). Kafka 3.x+ có KRaft mode không cần Zookeeper.' },
+  { term: 'Kafka UI', category: 'Docker', def: 'Web UI tại port 8080 để monitor Kafka topics, xem messages, consumer groups. Tiện lợi cho debug khi producer ghi hay streaming có vấn đề.' },
+];

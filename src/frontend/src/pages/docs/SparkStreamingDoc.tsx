@@ -2,6 +2,7 @@ import { motion } from 'framer-motion';
 import {
   PageHeader, SectionCard, SectionTitle, BodyText, Callout,
   CodeBlock, DataTable, FlowDiagram, Mono, SpecRow, SubTitle, Tag,
+  GlossarySection, type GlossaryTerm,
 } from './shared';
 
 export default function SparkStreamingDoc() {
@@ -334,6 +335,26 @@ if alerts.count() > 0:
           <strong>RSI warmup limitation:</strong> RSI-14 cần đủ 14 data points để cho kết quả chính xác. Trong streaming mode, các record đầu tiên của session (khi chưa đủ data trong window) RSI sẽ không chính xác. Đây là inherent limitation của streaming calculation — batch layer tính RSI chính xác trên full history, còn streaming RSI là approximate phục vụ realtime display.
         </Callout>
       </SectionCard>
+
+      <GlossarySection terms={STREAMING_GLOSSARY} />
     </motion.div>
   );
 }
+
+const STREAMING_GLOSSARY: GlossaryTerm[] = [
+  { term: 'Spark Structured Streaming', category: 'Spark', def: 'Engine xử lý stream của Spark, hoạt động theo mô hình micro-batch. Coi stream như một bảng vô hạn liên tục được append thêm hàng. Cho phép dùng Spark SQL API quen thuộc.' },
+  { term: 'Micro-batch', category: 'Spark', def: 'Mỗi trigger interval (30 giây), Spark đọc tất cả message mới từ Kafka và xử lý như một batch Spark job nhỏ. Không phải true streaming — có latency tối thiểu 30 giây.' },
+  { term: 'Trigger interval', category: 'Spark', def: 'Khoảng thời gian giữa các micro-batch. 30 giây — đủ để có data mới từ Producer (poll 10 phút) mà không quá nhiều batch trống. Giảm overhead so với 5 giây.' },
+  { term: 'foreachBatch', category: 'Spark', def: 'Ghi kết quả streaming vào MongoDB qua hàm Python tùy chỉnh nhận từng micro-batch. Idempotent: delete_many(batch_id) trước khi insert — Spark retry không tạo duplicate.' },
+  { term: 'Watermark', category: 'Spark', def: 'Thời gian tối đa Spark chờ data trễ (10 phút). Bằng poll interval của Producer. Data trễ hơn watermark bị bỏ qua. Giới hạn lượng state cần giữ trong memory.' },
+  { term: 'outputMode append', category: 'Spark', def: 'Mỗi window result chỉ emit một lần sau khi window đóng hoàn toàn (sau watermark delay). Phù hợp với window aggregation có watermark. Không re-emit khi có data mới.' },
+  { term: 'Checkpoint', category: 'Spark', def: 'Spark lưu offset Kafka đã xử lý và aggregation state xuống disk định kỳ. Cho phép resume chính xác sau container restart — không đọc lại từ đầu, không mất data.' },
+  { term: 'Query A — Window Aggregation', category: 'Spark', def: 'Query stateful: groupBy coin + sliding window 20 phút / slide 5 phút → OHLCV aggregation cho window_stats. Giữ window state trong memory đến khi watermark pass.' },
+  { term: 'Query B — Per-Record', category: 'Spark', def: 'Query stateless: tính RSI, Bollinger Bands, VWAP, ATR, SMA trên mỗi micro-batch dùng PySpark Window Functions. Không giữ state giữa các batch.' },
+  { term: 'Sliding window', category: 'Spark', def: 'Cửa sổ tập hợp: window 20 phút, slide mỗi 5 phút. Mỗi record thuộc về nhiều window chồng chéo nhau. Khác tumbling window (không chồng).' },
+  { term: 'RSI', category: 'Spark', def: 'Relative Strength Index — oscillator đo sức mạnh xu hướng trong khoảng 0–100 dựa trên tỷ lệ ngày tăng/giảm trong 14 kỳ gần nhất. Cần đủ 14 data points mới chính xác.' },
+  { term: 'Bollinger Bands', category: 'Spark', def: 'Dải băng giá: đường trung bình SMA20 ở giữa, hai dải trên/dưới cách nhau 2 độ lệch chuẩn. Giá chạm dải trên: overbought. Giá chạm dải dưới: oversold.' },
+  { term: 'VWAP', category: 'Spark', def: 'Volume-Weighted Average Price — giá trung bình được tính có trọng số theo khối lượng giao dịch. Phản ánh mức giá giao dịch thực tế tốt hơn SMA thông thường.' },
+  { term: 'ATR', category: 'Spark', def: 'Average True Range — đo biên độ biến động. Trong streaming dùng rolling std của price (proxy) vì CoinGecko daily không cung cấp high/low theo tick.' },
+  { term: 'rowsBetween', category: 'Spark', def: 'Định nghĩa window frame theo số hàng thay vì phạm vi thời gian (rangeBetween). Đảm bảo window luôn đúng N hàng dù có timestamp gap trong data.' },
+];

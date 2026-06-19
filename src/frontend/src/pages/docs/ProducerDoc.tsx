@@ -2,6 +2,7 @@ import { motion } from 'framer-motion';
 import {
   PageHeader, SectionCard, SectionTitle, BodyText, Callout,
   CodeBlock, DataTable, FlowDiagram, Mono, SpecRow, StepList,
+  GlossarySection, type GlossaryTerm,
 } from './shared';
 
 export default function ProducerDoc() {
@@ -268,6 +269,25 @@ else:
           ]}
         />
       </SectionCard>
+
+      <GlossarySection terms={PRODUCER_GLOSSARY} />
     </motion.div>
   );
 }
+
+const PRODUCER_GLOSSARY: GlossaryTerm[] = [
+  { term: 'CoinGecko API', category: 'Kafka', def: 'REST API cung cấp dữ liệu giá và volume cryptocurrency. Demo tier: 10.000 calls/tháng. Producer poll mỗi 600 giây (10 phút) để nằm trong ngân sách quota.' },
+  { term: 'pycoingecko', category: 'Kafka', def: 'Python client wrapper cho CoinGecko API. Cung cấp hàm get_price() và get_coin_ohlc_by_id() để lấy price, volume, market_cap và OHLC data.' },
+  { term: 'Kafka Producer', category: 'Kafka', def: 'Component gửi message vào Kafka topic. Cấu hình quan trọng: acks=all (không mất message), retries=3 (tự retry khi lỗi), linger_ms=100 (gom batch để giảm overhead).' },
+  { term: 'acks=all', category: 'Kafka', def: 'Producer chờ toàn bộ ISR (In-Sync Replicas) xác nhận trước khi trả về success. Đảm bảo message không mất kể cả khi leader broker crash ngay sau khi nhận.' },
+  { term: 'ISR', category: 'Kafka', def: 'In-Sync Replicas — tập hợp các Kafka broker replica đang đồng bộ với leader. acks=all cần toàn bộ ISR đồng ý → đảm bảo durability.' },
+  { term: 'linger_ms', category: 'Kafka', def: 'Thời gian producer chờ để gom thêm message vào một batch trước khi gửi. 100ms — giảm số lần network round-trip khi gửi nhiều message liên tiếp.' },
+  { term: 'max_in_flight', category: 'Kafka', def: 'Số request tối đa đang bay (chưa nhận ack) cùng lúc. max_in_flight=1 đảm bảo message ordering khi retry — nếu >1, retry có thể gây message đến sai thứ tự.' },
+  { term: 'Kafka Topic', category: 'Kafka', def: 'Kênh phân loại message trong Kafka. Topic crypto_raw nhận tất cả message từ Producer (BTC + DOGE). Partition giúp scale throughput và đảm bảo ordering trong partition.' },
+  { term: 'Poll interval', category: 'Kafka', def: 'Khoảng thời gian giữa các lần Producer gọi CoinGecko API. POLL_INTERVAL_SECONDS=600 (10 phút). Configurable qua env var.' },
+  { term: 'OHLC', category: 'Kafka', def: 'Open/High/Low/Close — giá mở/cao/thấp/đóng trong mỗi phiên. Chỉ fetch mỗi 30 phút (mỗi 3 poll cycle, OHLC_POLL_MULTIPLIER=3) vì tốn quota hơn price call.' },
+  { term: '429 Error', category: 'Kafka', def: 'HTTP status CoinGecko trả về khi vượt rate limit. Producer handle với exponential backoff và retry logic. Hết retry → log warning, bỏ qua poll cycle đó.' },
+  { term: 'Serialization', category: 'Kafka', def: 'Quá trình chuyển Python dict → JSON bytes để gửi qua Kafka. Spark deserialize lại khi đọc. Schema phải khớp giữa producer và consumer để parse đúng.' },
+  { term: 'Schema contract', category: 'Kafka', def: 'Tập hợp các field bắt buộc trong Kafka message (REQUIRED_FIELDS). test_message_schema_is_complete() verify contract. Schema change → test fail → cảnh báo developer.' },
+  { term: 'transform_to_record()', category: 'Kafka', def: 'Hàm chuyển CoinGecko API response thành Kafka message. Dùng .get(field, default) — graceful fallback thay vì crash khi API thay đổi response format.' },
+];
