@@ -156,7 +156,7 @@ const DOCS: DocEntry[] = [
     num: '11',
     title: 'Q&A',
     emoji: '🎯',
-    description: '28 câu hỏi phản biện với câu trả lời chi tiết cho buổi bảo vệ. Architectural decisions, ML limitations, production trade-offs. Accordion expand/collapse.',
+    description: '28 câu hỏi với câu trả lời chi tiết cho buổi bảo vệ. Architectural decisions, ML limitations, production trade-offs. Accordion expand/collapse.',
     inApp: 'doc-qa',
     category: 'Interview Prep',
     accent: '#f87171',
