@@ -433,10 +433,12 @@ def run_daily_cycle() -> None:
     import pymongo as _pymongo
     _status_client = _pymongo.MongoClient(MONGO_URI, serverSelectionTimeoutMS=3000)
     _status_db = _status_client["crypto_db"]
+    import time as _time
     for coin in COINS:
         symbol = _COIN_SYMBOL_MAP.get(coin, coin.upper())
         for h in HORIZONS:
             status_key = f"{symbol}_h{h}"
+            _t0 = _time.monotonic()
             try:
                 docs = run_inference(coin=coin, mongo_uri=MONGO_URI, horizon=h)
                 logger.info(
@@ -454,14 +456,19 @@ def run_daily_cycle() -> None:
                 logger.exception("Daily inference failed for %s H%d: %s", coin, h, exc)
                 _status = "error"
                 _err = str(exc)
+            _duration_ms = int((_time.monotonic() - _t0) * 1000)
             _status_db.inference_status.update_one(
                 {"coin": status_key},
-                {"$set": {
-                    "coin": status_key, "symbol": symbol, "horizon": h,
-                    "status": _status,
-                    "last_run": datetime.now(timezone.utc),
-                    "error": _err,
-                }},
+                {
+                    "$set": {
+                        "coin": status_key, "symbol": symbol, "horizon": h,
+                        "status": _status,
+                        "last_run": datetime.now(timezone.utc),
+                        "last_run_duration_ms": _duration_ms,
+                        "error": _err,
+                    },
+                    "$inc": {"run_count": 1},
+                },
                 upsert=True,
             )
     _status_client.close()
