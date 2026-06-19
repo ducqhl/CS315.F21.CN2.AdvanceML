@@ -1339,11 +1339,22 @@ def get_system_overview(_user: dict = Depends(get_current_user)) -> dict:
         except Exception:
             return []
 
-    # Inference scheduler status
+    # Inference scheduler status — use same regex logic as /api/inference/status
+    import re as _re_sys
     sched: dict[str, dict] = {}
     for symbol in ["BTC", "DOGE"]:
-        doc = db.inference_status.find_one({"coin": symbol}, {"_id": 0})
-        sched[symbol] = _serialize(doc) if doc else {"coin": symbol, "status": "unknown"}
+        docs = list(db.inference_status.find(
+            {"coin": _re_sys.compile(f"^{symbol}(_|$)", _re_sys.IGNORECASE)},
+            {"_id": 0},
+        ))
+        if docs:
+            latest = max(docs, key=lambda d: d.get("last_run") or d.get("last_run_at") or "")
+            result = _serialize(latest)
+            if "last_run_at" not in result and "last_run" in result:
+                result["last_run_at"] = result["last_run"]
+            sched[symbol] = result
+        else:
+            sched[symbol] = {"coin": symbol, "status": "unknown"}
 
     # Latest prices
     latest_prices: dict[str, dict] = {}
