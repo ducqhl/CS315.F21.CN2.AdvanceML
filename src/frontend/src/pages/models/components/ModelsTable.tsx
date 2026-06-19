@@ -181,7 +181,7 @@ export default function ModelsTable({
             {models.map(m => {
               const activating = isActivating(m);
               const retraining = isRetraining(m);
-              const rowKey     = `${m.coin_id}-${m.horizon}-${m.version}`;
+              const rowKey     = m.model_id;
               const isExpanded = expanded.has(rowKey);
               const sr         = m.score_report;
               const isBtc      = m.coin === 'BTC';
@@ -288,7 +288,7 @@ export default function ModelsTable({
               );
             }).reduce<React.ReactNode[]>((acc, row, i) => {
               const m = models[i];
-              const rowKey = `${m.coin_id}-${m.horizon}-${m.version}`;
+              const rowKey = m.model_id;
               const sr = m.score_report;
               acc.push(row);
               if (expanded.has(rowKey) && sr) {
