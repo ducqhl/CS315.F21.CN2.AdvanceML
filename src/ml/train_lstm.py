@@ -36,7 +36,7 @@ import torch.nn as nn
 from torch.utils.data import DataLoader, TensorDataset
 
 from preprocess import load_and_preprocess, HORIZON as _DEFAULT_HORIZON, SEQ_LEN as _SEQ_LEN, HORIZON_SEQ_LEN_MAP, HORIZON_WINDOW_DAYS_MAP
-from model import LSTMModel
+from model import LSTMModel, LSTMWithAttention, TemporalAttention
 
 logging.basicConfig(
     level=logging.INFO,
@@ -227,6 +227,7 @@ def train(
     gamma: float = 0.3,
     model_version: int = 3,
     horizon: int = _DEFAULT_HORIZON,
+    use_attention: bool = False,
 ) -> dict[str, float]:
     """
     Main training entry-point.
@@ -244,6 +245,7 @@ def train(
     window_days   : rolling training window (default 730, None = all data).
     gamma         : weight for volatility (MSE) loss (default 0.3).
     model_version : output file version number (default 3 → lstm_{coin}_v3.pt).
+    use_attention : if True, apply TemporalAttention pooling over LSTM states.
 
     Returns
     -------
@@ -307,14 +309,27 @@ def train(
 
     # ── 2. Model ──────────────────────────────────────────────────────────────
     n_features = X_train.shape[2]   # 9 for v3 pipeline
-    model = LSTMModel(
-        input_size=n_features,
-        hidden_size=128,
-        num_layers=2,
-        dropout=0.2,
-        output_size=horizon,
-        use_direction_head=False,
-        use_volatility_head=True,
+    model = (
+        LSTMWithAttention(
+            input_size=n_features,
+            hidden_size=128,
+            num_layers=2,
+            dropout=0.2,
+            output_size=horizon,
+            use_direction_head=False,
+            use_volatility_head=True,
+        )
+        if use_attention
+        else LSTMModel(
+            input_size=n_features,
+            hidden_size=128,
+            num_layers=2,
+            dropout=0.2,
+            output_size=horizon,
+            use_direction_head=False,
+            use_volatility_head=True,
+            use_attention=False,
+        )
     ).to(device)
 
     price_criterion = nn.HuberLoss(delta=1.0)
@@ -580,6 +595,10 @@ if __name__ == "__main__":
             "so the existing H7 artifact is not overwritten."
         ),
     )
+    parser.add_argument(
+        "--attention", action="store_true",
+        help="Use TemporalAttention pooling over LSTM output sequence",
+    )
     args = parser.parse_args()
 
     window = None if args.window_days == 0 else args.window_days
@@ -613,4 +632,5 @@ if __name__ == "__main__":
         gamma=args.gamma,
         model_version=args.model_version,
         horizon=args.horizon,
+        use_attention=args.attention,
     )

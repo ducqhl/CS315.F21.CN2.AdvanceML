@@ -86,8 +86,9 @@ CONFIDENCE = 0.8
 _DEFAULT_URI = "mongodb://admin:password123@localhost:27017/crypto_db?authSource=admin"
 _DEFAULT_DB = "crypto_db"
 
-# Direction class mapping (binary: 0=DOWN, 1=UP)
-_DIR_CLASSES = {0: "DOWN", 1: "UP"}
+# Direction class mapping: 3-class (0=DOWN, 1=FLAT, 2=UP) and binary (0=DOWN, 1=UP)
+_DIR_CLASSES = {0: "DOWN", 1: "FLAT", 2: "UP"}
+_DIR_CLASSES_BINARY = {0: "DOWN", 1: "UP"}
 
 # Coin id → symbol map
 _COIN_SYMBOL_MAP = {
@@ -455,10 +456,10 @@ def _mimo_predict_full(
         # Softmax for probabilities
         exp_logits = np.exp(dir_logits - dir_logits.max(axis=1, keepdims=True))
         dir_probs_arr = exp_logits / exp_logits.sum(axis=1, keepdims=True)   # (horizon, 3)
-        dir_classes   = np.argmax(dir_probs_arr, axis=1)                      # (horizon,)
-
-        directions = [_DIR_CLASSES[int(c)] for c in dir_classes]
-        dir_probs  = [float(dir_probs_arr[i, dir_classes[i]]) for i in range(horizon)]
+        dir_classes = np.argmax(dir_probs_arr, axis=1)  # (horizon,)
+        cls_map = _DIR_CLASSES_BINARY if dir_logits.shape[-1] == 2 else _DIR_CLASSES
+        directions = [cls_map.get(int(c), "FLAT") for c in dir_classes]
+        dir_probs = [float(dir_probs_arr[i, dir_classes[i]]) for i in range(horizon)]
 
         # Trend strength from probability margin (top1 − top2 probability)
         sorted_probs = np.sort(dir_probs_arr, axis=1)   # (horizon, 3) ascending

@@ -136,10 +136,62 @@ class VolatilityHead(nn.Module):
         return self.net(last_hidden)
 
 
+class TemporalAttention(nn.Module):
+    """
+    Temporal self-attention pooling over recurrent sequence representations.
+
+    Instead of relying solely on the final hidden state h_T, temporal attention
+    computes an alignment score e_t for every timestep t in 1..T, producing
+    attention weights alpha = softmax(e) and a context vector c = sum(alpha_t * h_t).
+    This preserves long-range momentum signals and avoids recency bias.
+
+    Academic Citations:
+    -------------------
+    - Bahdanau, D., Cho, K., & Bengio, Y. (2014). "Neural Machine Translation by
+      Jointly Learning to Align and Translate." ICLR 2015. arXiv:1409.0473.
+    - Luong, M. T., Pham, H., & Manning, C. D. (2015). "Effective Approaches to
+      Attention-based Neural Machine Translation." EMNLP 2015. arXiv:1508.04025.
+    - Qin, Y., Song, D., Chen, H., et al. (2017). "A Dual-Stage Attention-Based
+      Recurrent Neural Network for Time Series Prediction." IJCAI 2017.
+    """
+
+    def __init__(self, hidden_size: int = 128) -> None:
+        super().__init__()
+        self.attention = nn.Linear(hidden_size, 1)
+
+    def forward(
+        self,
+        lstm_out: torch.Tensor,
+        return_weights: bool = False,
+    ) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor]:
+        """
+        Parameters
+        ----------
+        lstm_out : Tensor, shape (batch, seq_len, hidden_size)
+        return_weights : bool, optional
+            If True, returns (context, attn_weights).
+
+        Returns
+        -------
+        context : Tensor, shape (batch, hidden_size)
+            Attention-weighted sum of hidden states across all timesteps.
+        attn_weights : Tensor, shape (batch, seq_len, 1), optional
+            Softmax-normalized attention distribution across timesteps.
+        """
+        attn_scores = self.attention(lstm_out)  # (batch, seq_len, 1)
+        attn_weights = torch.softmax(attn_scores, dim=1)  # (batch, seq_len, 1)
+        context = (lstm_out * attn_weights).sum(dim=1)  # (batch, hidden_size)
+
+        if return_weights:
+            return context, attn_weights
+        return context
+
+
 class LSTMModel(nn.Module):
     """
-    Two-layer LSTM with a two-layer fully-connected price head
-    and an optional direction classification head.
+    Two-layer LSTM with a two-layer fully-connected price head,
+    optional direction classification head, optional volatility head,
+    and optional temporal attention pooling.
 
     Parameters
     ----------
@@ -149,8 +201,9 @@ class LSTMModel(nn.Module):
     dropout             : float — dropout probability applied between LSTM layers.
     output_size         : int   — prediction horizon (7 for MIMO 7-day forecast).
     use_direction_head  : bool  — if True, attach DirectionHead and return dual output.
-    n_classes           : int   — number of direction classes (2: DOWN/UP).
+    n_classes           : int   — number of direction classes (2: DOWN/UP or 3: DOWN/FLAT/UP).
     use_volatility_head : bool  — if True, attach VolatilityHead (v3 model).
+    use_attention       : bool  — if True, apply TemporalAttention over sequence outputs.
     """
 
     def __init__(
@@ -163,6 +216,7 @@ class LSTMModel(nn.Module):
         use_direction_head: bool = True,
         n_classes: int = 2,
         use_volatility_head: bool = False,
+        use_attention: bool = False,
     ) -> None:
         super().__init__()
 
@@ -171,6 +225,7 @@ class LSTMModel(nn.Module):
         self.output_size = output_size
         self.use_direction_head = use_direction_head
         self.use_volatility_head = use_volatility_head
+        self.use_attention = use_attention
 
         # ── LSTM encoder ──────────────────────────────────────────────────────
         self.lstm = nn.LSTM(
@@ -180,6 +235,10 @@ class LSTMModel(nn.Module):
             batch_first=True,      # x shape: (batch, seq_len, input_size)
             dropout=dropout if num_layers > 1 else 0.0,
         )
+
+        # ── Attention pooling (optional) ──────────────────────────────────────
+        if use_attention:
+            self.attention = TemporalAttention(hidden_size=hidden_size)
 
         # ── Price head ────────────────────────────────────────────────────────
         self.fc = nn.Sequential(
@@ -206,41 +265,46 @@ class LSTMModel(nn.Module):
 
     # ── Forward pass ──────────────────────────────────────────────────────────
     def forward(
-        self, x: torch.Tensor
-    ) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor]:
+        self,
+        x: torch.Tensor,
+        return_attention: bool = False,
+    ) -> torch.Tensor | tuple[torch.Tensor, ...]:
         """
         Parameters
         ----------
         x : Tensor, shape (batch, seq_len, input_size)
+        return_attention : bool, optional
+            If True and use_attention=True, appends attn_weights to returned tuple.
 
         Returns
         -------
-        If use_direction_head=False:
+        If use_direction_head=False and use_volatility_head=False:
             Tensor, shape (batch, output_size)              — price predictions
-        If use_direction_head=True:
-            tuple (price_preds, dir_logits)
-                price_preds : shape (batch, output_size)
-                dir_logits  : shape (batch, output_size, n_classes)
+        Otherwise:
+            tuple of predictions according to configured heads.
         """
         # lstm_out: (batch, seq_len, hidden_size)
         lstm_out, _ = self.lstm(x)
-        # Take only the last time-step's hidden state.
-        last_hidden = lstm_out[:, -1, :]   # (batch, hidden_size)
+
+        if self.use_attention:
+            last_hidden, attn_weights = self.attention(lstm_out, return_weights=True)
+        else:
+            last_hidden = lstm_out[:, -1, :]
+            attn_weights = None
 
         price_preds = self.fc(last_hidden)   # (batch, output_size)
 
+        outputs: list[torch.Tensor] = [price_preds]
         if self.use_direction_head:
-            dir_logits = self.dir_head(last_hidden)   # (batch, output_size, n_classes)
-            if self.use_volatility_head:
-                vol_preds = self.vol_head(last_hidden)   # (batch, output_size)
-                return price_preds, dir_logits, vol_preds
-            return price_preds, dir_logits
-
+            outputs.append(self.dir_head(last_hidden))
         if self.use_volatility_head:
-            vol_preds = self.vol_head(last_hidden)   # (batch, output_size)
-            return price_preds, vol_preds
+            outputs.append(self.vol_head(last_hidden))
+        if return_attention and attn_weights is not None:
+            outputs.append(attn_weights)
 
-        return price_preds
+        if len(outputs) == 1:
+            return outputs[0]
+        return tuple(outputs)
 
     # ── Inference helper ──────────────────────────────────────────────────────
     @torch.no_grad()
@@ -280,3 +344,62 @@ class LSTMModel(nn.Module):
             return result[0].cpu().numpy(), result[1].cpu().numpy()
 
         return result.cpu().numpy()
+
+
+class LSTMWithAttention(LSTMModel):
+    """
+    LSTM architecture with temporal self-attention pooling over recurrent outputs.
+    Preserves multi-scale sequence dynamics and eliminates recency bias by attending
+    over all look-back timesteps.
+
+    Academic Citations:
+    -------------------
+    - Bahdanau, D., Cho, K., & Bengio, Y. (2014). "Neural Machine Translation by
+      Jointly Learning to Align and Translate." ICLR 2015. arXiv:1409.0473.
+    - Luong, M. T., Pham, H., & Manning, C. D. (2015). "Effective Approaches to
+      Attention-based Neural Machine Translation." EMNLP 2015. arXiv:1508.04025.
+    - Qin, Y., Song, D., Chen, H., et al. (2017). "A Dual-Stage Attention-Based
+      Recurrent Neural Network for Time Series Prediction." IJCAI 2017.
+    """
+
+    def __init__(
+        self,
+        input_size: int = 9,
+        hidden_size: int = 128,
+        num_layers: int = 2,
+        dropout: float = 0.2,
+        output_size: int = 7,
+        use_direction_head: bool = True,
+        n_classes: int = 2,
+        use_volatility_head: bool = False,
+    ) -> None:
+        super().__init__(
+            input_size=input_size,
+            hidden_size=hidden_size,
+            num_layers=num_layers,
+            dropout=dropout,
+            output_size=output_size,
+            use_direction_head=use_direction_head,
+            n_classes=n_classes,
+            use_volatility_head=use_volatility_head,
+            use_attention=True,
+        )
+
+    def get_attention_weights(self, x: torch.Tensor) -> torch.Tensor:
+        """
+        Extract temporal attention weights for sequence input x.
+
+        Parameters
+        ----------
+        x : Tensor, shape (batch, seq_len, input_size)
+
+        Returns
+        -------
+        weights : Tensor, shape (batch, seq_len, 1)
+            Attention probability distribution across timesteps.
+        """
+        self.eval()
+        with torch.no_grad():
+            lstm_out, _ = self.lstm(x)
+            _, weights = self.attention(lstm_out, return_weights=True)
+            return weights

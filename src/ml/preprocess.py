@@ -194,23 +194,32 @@ def _load_fear_greed(n_days: int) -> np.ndarray:
 
 def make_direction_labels(
     log_returns_1d: np.ndarray,
+    target_pct: float = 0.33,
 ) -> np.ndarray:
-    """Map log-returns to binary direction labels {0=DOWN, 1=UP}.
+    """Map log-returns to direction labels {0=DOWN, 1=FLAT, 2=UP}.
 
-    Splits at the median so each class receives ~50% of labels.
-    Removing the FLAT class eliminates the hardest-to-learn category and
-    converts the problem to binary classification (chance = 50%).
+    Uses quantile-based adaptive thresholds so each class receives approximately
+    *target_pct* of labels. This prevents the FLAT class from dominating (the
+    old 0.5-std threshold produced 50-70% FLAT on typical crypto data, causing
+    the direction head to learn to always predict FLAT).
 
     Parameters
     ----------
     log_returns_1d : 1-D array of raw (un-scaled) log return values.
+    target_pct     : fraction of samples to assign to UP and DOWN each.
+                     Default 0.33 → ~33% UP, ~33% DOWN, ~34% FLAT.
 
     Returns
     -------
-    int ndarray of shape (N,), dtype int64, values in {0, 1}.
+    int ndarray of shape (N,), dtype int64, values in {0, 1, 2}.
     """
-    threshold = float(np.median(log_returns_1d))
-    labels = (log_returns_1d > threshold).astype(np.int64)  # 1=UP, 0=DOWN
+    target_pct = float(np.clip(target_pct, 0.01, 0.49))
+    up_threshold = float(np.quantile(log_returns_1d, 1.0 - target_pct))
+    down_threshold = float(np.quantile(log_returns_1d, target_pct))
+
+    labels = np.ones(len(log_returns_1d), dtype=np.int64)  # default FLAT (1)
+    labels[log_returns_1d > up_threshold] = 2  # UP
+    labels[log_returns_1d < down_threshold] = 0  # DOWN
     return labels
 
 
